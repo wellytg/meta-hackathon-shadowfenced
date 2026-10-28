@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tripwire"
+version = "0.0.0"
+description = "Gate between an AI coding agent and every outbound action it may take."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai",
+    "pydantic",
+    "fastapi",
+    "uvicorn",
+    "pytest",
+]
+
+[project.scripts]
+tripwire = "tripwire.console:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
