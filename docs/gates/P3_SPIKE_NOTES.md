@@ -36,3 +36,11 @@
   httpx `verify` (verification stays on). Dependency: `truststore`.
 - `muse-spark-1.3` via `https://api.meta.ai/v1/chat/completions`: 200 in 0.7 s. With `max_tokens` 20 the content was
   empty because the model reasons first (275 reasoning tokens of 289). Do not cap `max_tokens` low; omit it or use ≥ 1024.
+
+## 2026-10-31 — Send-time screen calibration (held-out + in-house, 70 messages)
+- llama3.2:3b screen (CPU, schema-constrained): confidence 0.0 on nearly every case, labels near-random
+  (banana bread → secret), ~15 % timeouts. Not usable as a classifier. Full-pipeline held-out run with it:
+  leak 0, catch 1.0 but false escalation 0.5 and 57 % of messages to a human: caution, not understanding.
+- Decision: remove the 3B model from the decision path. Code decides when a model is needed (Tier 1 ambiguous or
+  sensitivity cue words); Muse Glimmer judges the whole message through the async HOLD review. Live 3B hints off
+  by default (experimental flag).
