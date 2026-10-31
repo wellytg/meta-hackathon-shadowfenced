@@ -23,6 +23,12 @@ _ENV_KEYS = (
     "META_MODEL",
     "SF_CANARY_SEED",
     "SF_LOG_PATH",
+    "SF_LIVE_MODEL",
+    "SF_JUDGE_MODEL",
+    "SF_JUDGE_TIMEOUT_S",
+    "SF_LIVE_TIMEOUT_S",
+    "SF_LIVE_NUM_GPU",
+    "SF_TIER2_MODE",
 )
 
 DEFAULT_LOG_PATH = "runs/decisions.jsonl"
@@ -73,6 +79,12 @@ class Settings(BaseModel):
     meta_model: str = ""
     canary_seed: str = "demo-seed"
     log_path: str = DEFAULT_LOG_PATH
+    live_model: str = "llama3.2:3b"
+    judge_model: str = "muse-glimmer:30b"
+    judge_timeout_s: float = 20.0
+    live_timeout_s: float = 4.0
+    live_num_gpu: int = 0
+    tier2_mode: str = "live"
 
     @property
     def meta_available(self) -> bool:
@@ -87,6 +99,25 @@ def _collect(env: dict[str, str] | None = None) -> dict[str, str]:
     merged = dict(file_values)
     merged.update(source)  # real environment always wins
     return {k: v for k, v in merged.items() if k in _ENV_KEYS}
+
+
+def _tier2_mode(raw: str | None) -> str:
+    mode = (raw or "live").strip().lower()
+    return mode if mode in ("live", "replay", "off") else "live"
+
+
+def _parse_float(raw: str | None, default: float) -> float:
+    try:
+        return float(raw) if raw not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_int(raw: str | None, default: int) -> int:
+    try:
+        return int(raw) if raw not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
 
 
 def get_settings(env: dict[str, str] | None = None) -> Settings:
@@ -111,6 +142,12 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
         meta_model=merged.get("META_MODEL", ""),
         canary_seed=merged.get("SF_CANARY_SEED", "demo-seed"),
         log_path=merged.get("SF_LOG_PATH", DEFAULT_LOG_PATH),
+        live_model=merged.get("SF_LIVE_MODEL", "llama3.2:3b"),
+        judge_model=merged.get("SF_JUDGE_MODEL", "muse-glimmer:30b"),
+        judge_timeout_s=_parse_float(merged.get("SF_JUDGE_TIMEOUT_S"), 20.0),
+        live_timeout_s=_parse_float(merged.get("SF_LIVE_TIMEOUT_S"), 4.0),
+        live_num_gpu=_parse_int(merged.get("SF_LIVE_NUM_GPU"), 0),
+        tier2_mode=_tier2_mode(merged.get("SF_TIER2_MODE")),
     )
 
 

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
@@ -19,14 +21,36 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import engine
+from . import judge as judge_module
 from .canary import CanaryRegistry
 from .config import get_settings
 from .policy import Policy, load_policy
 from .redact import load_mapping, rehydrate
-from .spans import Span
+from .spans import Span, span_from_cp_range
 from .upstream import UpstreamError, chat_sync
 
-app = FastAPI(title="shadowfenced")
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Warm both resident models in a background thread.
+
+    The thread is daemonic and every failure is swallowed, so startup
+    never blocks and never fails because of the models.
+    """
+    try:
+        import threading
+
+        thread = threading.Thread(
+            target=judge_module.warmup,
+            name="sf-judge-warmup",
+            daemon=True,
+        )
+        thread.start()
+    except Exception:
+        pass
+    yield
+
+
+app = FastAPI(title="shadowfenced", lifespan=lifespan)
 
 _POLICY: Policy | None = None
 _REGISTRY: CanaryRegistry | None = None
@@ -209,16 +233,74 @@ def health() -> dict[str, str]:
 
 @app.post("/api/scan")
 def scan(request: ScanRequest) -> dict[str, Any]:
-    """Run the Tier 1 scan and return spans plus latency."""
+    """Run the Tier 1 scan and return spans plus latency.
+
+    ``mode="live"`` additionally asks the live model about each
+    ambiguous span and attaches non-benign answers as extra Tier 2
+    ``suspicion`` spans. A judge failure leaves just the Tier 1 spans.
+    """
     from . import tier1
 
     started = time.perf_counter()
     spans = tier1.scan(request.text, get_policy(), get_registry())
-    elapsed_ms = (time.perf_counter() - started) * 1000
+    tier1_ms = (time.perf_counter() - started) * 1000
+    latency_ms: dict[str, float] = {"tier1": tier1_ms}
+    if request.mode == "live":
+        tier2_started = time.perf_counter()
+        spans = _with_live_suspicions(request.text, spans)
+        latency_ms["tier2"] = (time.perf_counter() - tier2_started) * 1000
+    latency_ms["total"] = (time.perf_counter() - started) * 1000
     return {
         "spans": [span_to_dict(s) for s in spans],
-        "latency_ms": {"tier1": elapsed_ms, "total": elapsed_ms},
+        "latency_ms": latency_ms,
     }
+
+
+def _with_live_suspicions(text: str, spans: list[Span]) -> list[Span]:
+    """Attach live-model suspicions for ambiguous spans (never raises)."""
+    try:
+        model = get_settings().live_model
+        extras: list[Span] = []
+        for span in spans:
+            if span.status != "ambiguous":
+                continue
+            try:
+                window = judge_module.make_window(
+                    text, span.cp_start, span.cp_end
+                )
+                judgement = judge_module.judge(window, model, live=True)
+            except Exception:
+                continue
+            if judgement is None or judgement.cls == "benign":
+                continue
+            if not judgement.span or judgement.span not in text:
+                continue
+            at = text.find(judgement.span)
+            extras.append(
+                span_from_cp_range(
+                    text,
+                    at,
+                    at + len(judgement.span),
+                    cls=judgement.cls,
+                    subclass="model_suspicion",
+                    tier=2,
+                    proof="model",
+                    status="suspicion",
+                    message=judgement.reason,
+                    why=(
+                        f"live model suspicion: {judgement.cls} "
+                        f"(confidence {judgement.confidence})"
+                    ),
+                    suggested_action="review",
+                    can_keep=True,
+                    confidence=judgement.confidence,
+                )
+            )
+        if extras:
+            return sorted(spans + extras, key=lambda s: (s.cp_start, s.cp_end))
+        return spans
+    except Exception:
+        return spans
 
 
 @app.post("/api/send")
@@ -228,6 +310,7 @@ def send(body: SendRequest) -> dict[str, Any]:
     decision = engine.gate(
         text, get_policy(), get_registry(),
         [c.model_dump() for c in body.choices],
+        mode="send",
     )
     if not clean:
         decision = _hold_for(decision, "non_text_content")
@@ -276,6 +359,11 @@ def _send_response(
     highlights: list[dict],
     unmatched: list[str],
 ) -> dict[str, Any]:
+    evidence: dict[str, Any] = {
+        "spans": [span_to_dict(s) for s in decision.spans],
+        "reasons": decision.reasons,
+    }
+    evidence.update(decision.evidence or {})
     return {
         "decision": decision.decision,
         "decision_id": decision.decision_id,
@@ -283,10 +371,7 @@ def _send_response(
         "answer": answer,
         "answer_highlights": highlights,
         "user_message": engine.user_message(decision),
-        "evidence": {
-            "spans": [span_to_dict(s) for s in decision.spans],
-            "reasons": decision.reasons,
-        },
+        "evidence": evidence,
         "resolved_tier": decision.resolved_tier,
         "latency_ms": decision.latency_ms,
         "unmatched_placeholders": unmatched,
@@ -298,11 +383,11 @@ def chat_completions(body: ChatRequest) -> Any:
     """OpenAI-compatible completions behind the Shadowfenced gate."""
     text, clean = extract_user_text(body.messages)
     if not clean:
-        decision = engine.gate(text, get_policy(), get_registry())
+        decision = engine.gate(text, get_policy(), get_registry(), mode="send")
         decision = _hold_for(decision, "non-text content parts need review")
         _log_decision(decision, text)
         return _hold_response(decision, "non-text content parts need review")
-    decision = engine.gate(text, get_policy(), get_registry())
+    decision = engine.gate(text, get_policy(), get_registry(), mode="send")
     _log_decision(decision, text)
     if decision.decision == "BLOCK":
         return JSONResponse(

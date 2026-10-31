@@ -86,19 +86,70 @@ def redact(text: str, spans: list[Span]) -> tuple[str, dict[str, str]]:
     return out, mapping
 
 
+def _bare_pattern(lookup: dict[str, str]) -> re.Pattern[str] | None:
+    """Match known placeholder names written without brackets.
+
+    Keys are canonical ``[LABEL_N]`` placeholders; the pattern matches
+    the bare ``LABEL_N`` form with word boundaries, longest first so
+    ``CODENAME_1`` never matches inside ``CODENAME_12``. Matching is
+    case-insensitive, mirroring the bracketed form.
+    """
+    names = sorted(
+        {key[1:-1].upper() for key in lookup},
+        key=len,
+        reverse=True,
+    )
+    if not names:
+        return None
+    return re.compile(r"\b(" + "|".join(re.escape(n) for n in names) + r")\b",
+                      re.IGNORECASE)
+
+
+def _restore_bare(
+    segment: str, lookup: dict[str, str], pattern: re.Pattern[str],
+    out_len: int,
+) -> tuple[str, list[dict], int]:
+    """Restore bare placeholder names inside one bracket-free segment."""
+    pieces: list[str] = []
+    highlights: list[dict] = []
+    cursor = 0
+    for match in pattern.finditer(segment):
+        canonical = f"[{match.group(1).upper()}]"
+        value = lookup.get(canonical)
+        if value is None:
+            continue
+        pieces.append(segment[cursor:match.start()])
+        start = out_len + match.start() - cursor
+        pieces.append(value)
+        highlights.append(
+            {"start": start, "end": start + len(value),
+             "placeholder": canonical}
+        )
+        out_len += match.end() - cursor - len(match.group(0)) + len(value)
+        cursor = match.end()
+    pieces.append(segment[cursor:])
+    out_len += len(segment) - cursor
+    return "".join(pieces), highlights, out_len
+
+
 def rehydrate(
     answer: str, mapping: dict[str, str]
 ) -> tuple[str, list[dict], list[str]]:
     """Swap placeholders in a model answer back to their values.
 
-    Matching is tolerant (case/spacing/``_``/``-``). Returns
-    ``(text, highlights, unmatched)`` where highlights are
-    ``{start, end, placeholder}`` code-point offsets into the returned
-    text and unmatched lists canonical placeholders with no mapping.
+    Matching is tolerant (case/spacing/``_``/``-``). A known
+    placeholder name written without brackets (``CODENAME_1``) is also
+    restored when it exactly matches a mapped name with word
+    boundaries. Returns ``(text, highlights, unmatched)`` where
+    highlights are ``{start, end, placeholder}`` code-point offsets
+    into the returned text and unmatched lists canonical placeholders
+    with no mapping. Bare names with no mapping are plain text: they
+    are left alone and never reported as unmatched.
     """
     if not mapping and PLACEHOLDER_RE.search(answer) is None:
         return answer, [], []
     lookup = {_canonical(*_split_key(k)): v for k, v in mapping.items()}
+    bare = _bare_pattern(lookup)
     highlights: list[dict] = []
     unmatched: list[str] = []
     parts: list[str] = []
@@ -106,8 +157,16 @@ def rehydrate(
     out_len = 0
     for match in PLACEHOLDER_RE.finditer(answer):
         canonical = _canonical(match.group(1), match.group(2))
-        parts.append(answer[cursor:match.start()])
-        out_len += match.start() - cursor
+        gap = answer[cursor:match.start()]
+        if bare is not None and gap:
+            restored, gap_marks, out_len = _restore_bare(
+                gap, lookup, bare, out_len
+            )
+            parts.append(restored)
+            highlights.extend(gap_marks)
+        else:
+            parts.append(gap)
+            out_len += len(gap)
         value = lookup.get(canonical)
         if value is None:
             parts.append(match.group(0))
@@ -125,7 +184,13 @@ def rehydrate(
             )
             out_len += len(value)
         cursor = match.end()
-    parts.append(answer[cursor:])
+    tail = answer[cursor:]
+    if bare is not None and tail:
+        restored, tail_marks, out_len = _restore_bare(tail, lookup, bare, out_len)
+        parts.append(restored)
+        highlights.extend(tail_marks)
+    else:
+        parts.append(tail)
     return "".join(parts), highlights, unmatched
 
 

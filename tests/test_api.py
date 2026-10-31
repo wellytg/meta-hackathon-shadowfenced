@@ -122,7 +122,8 @@ def test_scan_returns_spans_and_latency(mode):
     ):
         assert key in span
     assert isinstance(span["start"], int) and isinstance(span["end"], int)
-    assert set(body["latency_ms"]) == {"tier1", "total"}
+    expected = {"tier1", "total"} if mode == "tier1" else {"tier1", "tier2", "total"}
+    assert set(body["latency_ms"]) == expected
 
 
 def test_scan_clean_text():

@@ -128,6 +128,43 @@ def test_rehydrate_tolerant_variants():
         ]
 
 
+def test_rehydrate_bare_placeholder_names():
+    mapping = {
+        "[CODENAME_1]": "Bluefin Op",
+        "[PII_EMAIL_1]": "ada@corvanelabs.com",
+    }
+    text, highlights, unmatched = rehydrate(
+        "moved CODENAME_1 and PII_EMAIL_1 today", mapping
+    )
+    assert text == "moved Bluefin Op and ada@corvanelabs.com today"
+    assert unmatched == []
+    assert highlights == [
+        {"start": 6, "end": 6 + len("Bluefin Op"),
+         "placeholder": "[CODENAME_1]"},
+        {"start": 6 + len("Bluefin Op") + 5,
+         "end": 6 + len("Bluefin Op") + 5 + len("ada@corvanelabs.com"),
+         "placeholder": "[PII_EMAIL_1]"},
+    ]
+    assert text[highlights[0]["start"]:highlights[0]["end"]] == "Bluefin Op"
+
+
+def test_rehydrate_bare_names_need_word_boundaries():
+    mapping = {"[CODENAME_1]": "Bluefin Op"}
+    # Prefix/suffix word chars and longer numbers are not a match.
+    text, highlights, unmatched = rehydrate(
+        "XCODENAME_1 and CODENAME_1X and CODENAME_12 stay", mapping
+    )
+    assert text == "XCODENAME_1 and CODENAME_1X and CODENAME_12 stay"
+    assert highlights == []
+    assert unmatched == []
+    # Unknown bare names are plain text, never unmatched.
+    text, highlights, unmatched = rehydrate("saw FOO_1 here", mapping)
+    assert (text, highlights, unmatched) == ("saw FOO_1 here", [], [])
+    # Bare matching is case-insensitive, like the bracketed form.
+    text, _, _ = rehydrate("moved codename_1 today", mapping)
+    assert text == "moved Bluefin Op today"
+
+
 def test_rehydrate_reports_unmatched_and_keeps_token():
     text, highlights, unmatched = rehydrate("saw [SECRET_9] here", {})
     assert text == "saw [SECRET_9] here"
