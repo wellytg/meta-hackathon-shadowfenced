@@ -1,0 +1,697 @@
+{
+  "config": {
+    "judge": "glimmer",
+    "corpus": "final",
+    "judge_model": "muse-glimmer:30b",
+    "seed": "demo-seed",
+    "git_sha": "6f55368",
+    "date": "2026-10-31T08:52:11",
+    "keep_alive": "5m",
+    "wall_s": 240.2
+  },
+  "metrics": {
+    "n": 40,
+    "n_sensitive": 26,
+    "n_benign": 14,
+    "leak_rate": 0.1154,
+    "catch_rate": 1.0,
+    "false_escalation_rate": 0.2857,
+    "hold_rate": 0.45,
+    "human_rate": 0.375,
+    "resolved_by_tier": {
+      "1": 0.55,
+      "3": 0.075,
+      "4": 0.375
+    },
+    "latency_ms": {
+      "1": {
+        "n": 22,
+        "p50": 0.45,
+        "p95": 0.81,
+        "max": 4.12
+      },
+      "3": {
+        "n": 3,
+        "p50": 11822.09,
+        "p95": 13069.63,
+        "max": 13069.63
+      },
+      "4": {
+        "n": 15,
+        "p50": 10731.39,
+        "p95": 37833.29,
+        "max": 37833.29
+      }
+    }
+  },
+  "per_case": [
+    {
+      "id": "f-secrets-1",
+      "category": "secrets",
+      "expect": "BLOCK",
+      "acceptable": [
+        "BLOCK"
+      ],
+      "gate": "BLOCK",
+      "final": "BLOCK",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 4.12,
+      "review_ms": 0.0,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-secrets-2",
+      "category": "secrets",
+      "expect": "BLOCK",
+      "acceptable": [
+        "BLOCK"
+      ],
+      "gate": "BLOCK",
+      "final": "BLOCK",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.51,
+      "review_ms": 0.0,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-secrets-3",
+      "category": "secrets",
+      "expect": "BLOCK",
+      "acceptable": [
+        "BLOCK"
+      ],
+      "gate": "BLOCK",
+      "final": "BLOCK",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.46,
+      "review_ms": 0.0,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-secrets-4",
+      "category": "secrets",
+      "expect": "BLOCK",
+      "acceptable": [
+        "BLOCK"
+      ],
+      "gate": "BLOCK",
+      "final": "BLOCK",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.48,
+      "review_ms": 0.0,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-secrets-5",
+      "category": "secrets",
+      "expect": "BLOCK",
+      "acceptable": [
+        "BLOCK",
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.41,
+      "review_ms": 16342.63,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-secrets-6",
+      "category": "secrets",
+      "expect": "BLOCK",
+      "acceptable": [
+        "BLOCK",
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "REDACT",
+      "tier": 3,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.42,
+      "review_ms": 11822.09,
+      "outbound_chars": 135
+    },
+    {
+      "id": "f-secrets-7",
+      "category": "secrets",
+      "expect": "BLOCK",
+      "acceptable": [
+        "BLOCK",
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "REDACT",
+      "tier": 3,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.44,
+      "review_ms": 13069.63,
+      "outbound_chars": 269
+    },
+    {
+      "id": "f-secrets-8",
+      "category": "secrets",
+      "expect": "HOLD",
+      "acceptable": [
+        "HOLD"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.47,
+      "review_ms": 8888.08,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-pii-1",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.66,
+      "review_ms": 0.0,
+      "outbound_chars": 309
+    },
+    {
+      "id": "f-pii-2",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.39,
+      "review_ms": 8489.12,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-pii-3",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": true,
+      "gate_ms": 0.43,
+      "review_ms": 0.0,
+      "outbound_chars": 161
+    },
+    {
+      "id": "f-pii-4",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": true,
+      "gate_ms": 0.45,
+      "review_ms": 0.0,
+      "outbound_chars": 282
+    },
+    {
+      "id": "f-pii-5",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.37,
+      "review_ms": 5892.96,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-pii-6",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.39,
+      "review_ms": 10731.39,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-pii-7",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": true,
+      "gate_ms": 0.54,
+      "review_ms": 0.0,
+      "outbound_chars": 267
+    },
+    {
+      "id": "f-pii-8",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.45,
+      "review_ms": 0.0,
+      "outbound_chars": 279
+    },
+    {
+      "id": "f-business-1",
+      "category": "business",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.51,
+      "review_ms": 0.0,
+      "outbound_chars": 206
+    },
+    {
+      "id": "f-business-2",
+      "category": "business",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.41,
+      "review_ms": 4935.22,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-business-3",
+      "category": "business",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.45,
+      "review_ms": 0.0,
+      "outbound_chars": 209
+    },
+    {
+      "id": "f-business-4",
+      "category": "business",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.51,
+      "review_ms": 0.0,
+      "outbound_chars": 330
+    },
+    {
+      "id": "f-business-5",
+      "category": "business",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.37,
+      "review_ms": 0.0,
+      "outbound_chars": 197
+    },
+    {
+      "id": "f-beacon-1",
+      "category": "beacon",
+      "expect": "HOLD",
+      "acceptable": [
+        "HOLD",
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.33,
+      "review_ms": 15990.54,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-beacon-2",
+      "category": "beacon",
+      "expect": "HOLD",
+      "acceptable": [
+        "HOLD",
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.43,
+      "review_ms": 13028.88,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-beacon-3",
+      "category": "beacon",
+      "expect": "HOLD",
+      "acceptable": [
+        "HOLD",
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.34,
+      "review_ms": 9065.89,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-beacon-4",
+      "category": "beacon",
+      "expect": "HOLD",
+      "acceptable": [
+        "HOLD",
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.4,
+      "review_ms": 20473.26,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-beacon-5",
+      "category": "beacon",
+      "expect": "HOLD",
+      "acceptable": [
+        "HOLD",
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.41,
+      "review_ms": 7946.85,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-benign-1",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.51,
+      "review_ms": 17321.65,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-benign-2",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.44,
+      "review_ms": 0.0,
+      "outbound_chars": 116
+    },
+    {
+      "id": "f-benign-3",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.41,
+      "review_ms": 0.0,
+      "outbound_chars": 298
+    },
+    {
+      "id": "f-benign-4",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.21,
+      "review_ms": 0.0,
+      "outbound_chars": 115
+    },
+    {
+      "id": "f-benign-5",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.25,
+      "review_ms": 0.0,
+      "outbound_chars": 180
+    },
+    {
+      "id": "f-benign-6",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.47,
+      "review_ms": 22190.01,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-benign-7",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.39,
+      "review_ms": 37833.29,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-benign-8",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.29,
+      "review_ms": 0.0,
+      "outbound_chars": 128
+    },
+    {
+      "id": "f-benign-9",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "HOLD",
+      "final": "ALLOW",
+      "tier": 3,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.79,
+      "review_ms": 10696.4,
+      "outbound_chars": 79
+    },
+    {
+      "id": "f-benign-10",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.26,
+      "review_ms": 0.0,
+      "outbound_chars": 104
+    },
+    {
+      "id": "f-benign-11",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.81,
+      "review_ms": 0.0,
+      "outbound_chars": 697
+    },
+    {
+      "id": "f-benign-12",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.18,
+      "review_ms": 5415.73,
+      "outbound_chars": 0
+    },
+    {
+      "id": "f-benign-13",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.34,
+      "review_ms": 0.0,
+      "outbound_chars": 165
+    },
+    {
+      "id": "f-benign-14",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.26,
+      "review_ms": 0.0,
+      "outbound_chars": 193
+    }
+  ]
+}

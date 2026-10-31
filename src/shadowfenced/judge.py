@@ -80,11 +80,12 @@ class Judgement(BaseModel):
     @field_validator("span")
     @classmethod
     def _span_word_limit(cls, value: str) -> str:
-        """Reject spans longer than 8 words (the prompt asks for <= 8)."""
+        """Accept long spans: the prompt asks for <= 8 words, but a longer exact quote is still a usable claim.
+
+        Rejecting it threw away correct verdicts (found 2026-10-31). The verifier checks the span against the text.
+        """
         if not isinstance(value, str):
             raise ValueError("span must be a string")
-        if len(value.split()) > 8:
-            raise ValueError("span must be at most 8 words")
         return value
 
 

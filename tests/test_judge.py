@@ -82,7 +82,6 @@ def test_wrong_schema_returns_none(live_mode):
         {"sensitivity": 2.0},
         {"confidence": -0.1},
         {"cls": "nonsense"},
-        {"span": "one two three four five six seven eight nine"},
         {"is_beacon": "maybe"},
         {"sensitivity": "high"},
     ],
@@ -275,3 +274,10 @@ def test_startup_hook_registered():
     from shadowfenced.app import app, lifespan
 
     assert app.router.lifespan_context is lifespan
+
+
+def test_long_span_is_kept(live_mode):
+    span = "one two three four five six seven eight nine ten"
+    transport = _transport_for(json.dumps(_judgement_payload(span=span)))
+    result = judge.judge(WINDOW, "m", live=False, transport=transport)
+    assert result is not None and result.span == span
