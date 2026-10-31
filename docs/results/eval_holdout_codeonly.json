@@ -1,0 +1,534 @@
+{
+  "config": {
+    "judge": "none",
+    "corpus": "holdout",
+    "judge_model": null,
+    "seed": "demo-seed",
+    "git_sha": "unknown",
+    "date": "2026-10-31T08:25:26",
+    "keep_alive": "5m",
+    "wall_s": 0.1
+  },
+  "metrics": {
+    "n": 30,
+    "n_sensitive": 20,
+    "n_benign": 10,
+    "leak_rate": 0.1,
+    "catch_rate": 0.8,
+    "false_escalation_rate": 0.2,
+    "hold_rate": 0.1333,
+    "human_rate": 0.1333,
+    "resolved_by_tier": {
+      "1": 0.8667,
+      "3": 0.0,
+      "4": 0.1333
+    },
+    "latency_ms": {
+      "1": {
+        "n": 26,
+        "p50": 0.62,
+        "p95": 1.06,
+        "max": 2.25
+      },
+      "3": {
+        "n": 0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      },
+      "4": {
+        "n": 4,
+        "p50": 1.17,
+        "p95": 1.92,
+        "max": 1.92
+      }
+    }
+  },
+  "per_case": [
+    {
+      "id": "h-secrets-1",
+      "category": "secrets",
+      "expect": "BLOCK",
+      "acceptable": [
+        "BLOCK"
+      ],
+      "gate": "BLOCK",
+      "final": "BLOCK",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 2.25,
+      "review_ms": 0.0,
+      "outbound_chars": 0
+    },
+    {
+      "id": "h-secrets-2",
+      "category": "secrets",
+      "expect": "BLOCK",
+      "acceptable": [
+        "BLOCK"
+      ],
+      "gate": "BLOCK",
+      "final": "BLOCK",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.95,
+      "review_ms": 0.0,
+      "outbound_chars": 0
+    },
+    {
+      "id": "h-secrets-3",
+      "category": "secrets",
+      "expect": "BLOCK",
+      "acceptable": [
+        "BLOCK"
+      ],
+      "gate": "BLOCK",
+      "final": "BLOCK",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.5,
+      "review_ms": 0.0,
+      "outbound_chars": 0
+    },
+    {
+      "id": "h-secrets-4",
+      "category": "secrets",
+      "expect": "BLOCK",
+      "acceptable": [
+        "BLOCK"
+      ],
+      "gate": "BLOCK",
+      "final": "BLOCK",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.52,
+      "review_ms": 0.0,
+      "outbound_chars": 0
+    },
+    {
+      "id": "h-secrets-5",
+      "category": "secrets",
+      "expect": "BLOCK",
+      "acceptable": [
+        "BLOCK",
+        "REDACT"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.61,
+      "review_ms": 1.92,
+      "outbound_chars": 0
+    },
+    {
+      "id": "h-secrets-6",
+      "category": "secrets",
+      "expect": "HOLD",
+      "acceptable": [
+        "HOLD"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.66,
+      "review_ms": 0.87,
+      "outbound_chars": 0
+    },
+    {
+      "id": "h-pii-1",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.81,
+      "review_ms": 0.0,
+      "outbound_chars": 321
+    },
+    {
+      "id": "h-pii-2",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.69,
+      "review_ms": 0.0,
+      "outbound_chars": 363
+    },
+    {
+      "id": "h-pii-3",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 1.06,
+      "review_ms": 0.0,
+      "outbound_chars": 377
+    },
+    {
+      "id": "h-pii-4",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": true,
+      "gate_ms": 0.47,
+      "review_ms": 0.0,
+      "outbound_chars": 186
+    },
+    {
+      "id": "h-pii-5",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": true,
+      "gate_ms": 0.54,
+      "review_ms": 0.0,
+      "outbound_chars": 259
+    },
+    {
+      "id": "h-pii-6",
+      "category": "pii",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.66,
+      "review_ms": 0.0,
+      "outbound_chars": 237
+    },
+    {
+      "id": "h-business-1",
+      "category": "business",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.67,
+      "review_ms": 0.0,
+      "outbound_chars": 225
+    },
+    {
+      "id": "h-business-2",
+      "category": "business",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.55,
+      "review_ms": 0.0,
+      "outbound_chars": 220
+    },
+    {
+      "id": "h-business-3",
+      "category": "business",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.51,
+      "review_ms": 0.0,
+      "outbound_chars": 171
+    },
+    {
+      "id": "h-business-4",
+      "category": "business",
+      "expect": "REDACT",
+      "acceptable": [
+        "REDACT"
+      ],
+      "gate": "REDACT",
+      "final": "REDACT",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.62,
+      "review_ms": 0.0,
+      "outbound_chars": 258
+    },
+    {
+      "id": "h-beacon-1",
+      "category": "beacon",
+      "expect": "HOLD",
+      "acceptable": [
+        "HOLD",
+        "REDACT"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.63,
+      "review_ms": 0.0,
+      "outbound_chars": 364
+    },
+    {
+      "id": "h-beacon-2",
+      "category": "beacon",
+      "expect": "HOLD",
+      "acceptable": [
+        "HOLD",
+        "REDACT"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.62,
+      "review_ms": 0.0,
+      "outbound_chars": 374
+    },
+    {
+      "id": "h-beacon-3",
+      "category": "beacon",
+      "expect": "HOLD",
+      "acceptable": [
+        "HOLD",
+        "REDACT"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.59,
+      "review_ms": 0.0,
+      "outbound_chars": 310
+    },
+    {
+      "id": "h-beacon-4",
+      "category": "beacon",
+      "expect": "HOLD",
+      "acceptable": [
+        "HOLD",
+        "REDACT"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.54,
+      "review_ms": 0.0,
+      "outbound_chars": 303
+    },
+    {
+      "id": "h-benign-1",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.5,
+      "review_ms": 0.0,
+      "outbound_chars": 254
+    },
+    {
+      "id": "h-benign-2",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.55,
+      "review_ms": 0.0,
+      "outbound_chars": 267
+    },
+    {
+      "id": "h-benign-3",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.46,
+      "review_ms": 0.0,
+      "outbound_chars": 216
+    },
+    {
+      "id": "h-benign-4",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.62,
+      "review_ms": 0.0,
+      "outbound_chars": 366
+    },
+    {
+      "id": "h-benign-5",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.97,
+      "review_ms": 0.0,
+      "outbound_chars": 223
+    },
+    {
+      "id": "h-benign-6",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.46,
+      "review_ms": 0.0,
+      "outbound_chars": 191
+    },
+    {
+      "id": "h-benign-7",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.51,
+      "review_ms": 1.03,
+      "outbound_chars": 0
+    },
+    {
+      "id": "h-benign-8",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.47,
+      "review_ms": 0.0,
+      "outbound_chars": 142
+    },
+    {
+      "id": "h-benign-9",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "HOLD",
+      "final": "HOLD",
+      "tier": 4,
+      "meets_expect": false,
+      "leaked": false,
+      "gate_ms": 0.75,
+      "review_ms": 1.17,
+      "outbound_chars": 0
+    },
+    {
+      "id": "h-benign-10",
+      "category": "benign",
+      "expect": "ALLOW",
+      "acceptable": [
+        "ALLOW"
+      ],
+      "gate": "ALLOW",
+      "final": "ALLOW",
+      "tier": 1,
+      "meets_expect": true,
+      "leaked": false,
+      "gate_ms": 0.63,
+      "review_ms": 0.0,
+      "outbound_chars": 281
+    }
+  ]
+}

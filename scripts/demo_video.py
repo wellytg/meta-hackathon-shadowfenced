@@ -25,11 +25,28 @@ from shadowfenced.canary import encodings, make_canary  # noqa: E402
 
 URL = "http://127.0.0.1:8765/"
 # Playwright only captures frames when pixels change; a 1px animated dot keeps the video on wall-clock time.
-TICKER = ("<div style='position:fixed;right:0;bottom:0;width:2px;height:2px;"
-          "animation:sfTick 0.2s steps(2) infinite'></div>"
-          "<style>@keyframes sfTick{0%{background:#fff0}100%{background:#fff1}}</style>")
-TICKER_JS = ("document.addEventListener('DOMContentLoaded',()=>{document.body.insertAdjacentHTML('beforeend',"
-             + repr(TICKER) + ")})")
+TICKER = ""  # injected by TICKER_JS on every page, cards included
+TICKER_JS = """
+(() => {
+  const add = () => {
+    if (!document.body || document.getElementById('sf-tick')) return;
+    const d = document.createElement('div');
+    d.id = 'sf-tick';
+    d.style.cssText = 'position:fixed;right:0;bottom:0;width:6px;height:6px;z-index:2147483647;pointer-events:none';
+    document.body.appendChild(d);
+  };
+  let on = false;
+  setInterval(() => {
+    add();
+    const d = document.getElementById('sf-tick');
+    if (!d) return;
+    const bg = getComputedStyle(document.body).backgroundColor;
+    const dark = bg.includes('15, 23, 42');
+    on = !on;
+    d.style.background = dark ? (on ? '#0f172a' : '#10182b') : (on ? '#f3f4f6' : '#f2f3f5');
+  }, 80);
+})();
+"""
 OUT = ROOT / "runs" / "video"
 
 
@@ -98,8 +115,47 @@ def card(page, title: str, lines: list[str]) -> None:
         f"<div style='font-size:24px;color:#cbd5e1;text-align:center;line-height:1.5'>{body}</div>{TICKER}</body></html>")
 
 
-def run_scene(page, sc: dict, dur: float) -> None:
-    t0 = time.monotonic()
+class Rec:
+    """Screenshot recorder on the wall clock: every frame carries the time it was taken."""
+
+    def __init__(self, page, folder: Path):
+        self.page, self.folder, self.frames, self.t0 = page, folder, [], time.monotonic()
+
+    def now(self) -> float:
+        return time.monotonic() - self.t0
+
+    def snap(self) -> None:
+        f = self.folder / f"f{len(self.frames):05d}.jpg"
+        self.page.screenshot(path=str(f), type="jpeg", quality=85)
+        self.frames.append((f, self.now()))
+
+    def hold(self, seconds: float) -> None:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            self.snap()
+
+    def until(self, js: str, timeout: float = 180.0) -> None:
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            self.snap()
+            if self.page.evaluate(js):
+                return
+        raise TimeoutError(js)
+
+    def type(self, text: str) -> None:
+        for i, ch in enumerate(text):
+            self.page.keyboard.type(ch)
+            if i % 3 == 0:
+                self.snap()
+        self.snap()
+
+
+def n_answers() -> str:
+    return "document.querySelectorAll('[data-testid=answer]').length"
+
+
+def run_scene(rec: Rec, sc: dict, dur: float) -> None:
+    page, t0 = rec.page, time.monotonic()
     if sc["id"] == "title":
         card(page, "Shadowfenced", ["Nothing sensitive crosses the boundary.",
                                     "A local layer between people and any AI."])
@@ -111,49 +167,41 @@ def run_scene(page, sc: dict, dur: float) -> None:
     else:
         if not page.query_selector("[data-testid=composer]"):
             page.goto(URL)
-            page.wait_for_timeout(600)
+            rec.hold(0.6)
         if sc.get("file"):
             page.set_input_files("[data-testid=file-input]", sc["file"])
-            page.wait_for_timeout(1200)
+            rec.hold(1.2)
         page.get_by_test_id("composer").click()
-        page.keyboard.type(sc["type"], delay=28)
-        page.wait_for_timeout(900)
+        rec.type(sc["type"])
+        rec.hold(0.9)
         if sc.get("why"):
             btns = page.query_selector_all("[data-testid=btn-why]")
             if len(btns) > 1:
                 btns[1].click()
-                page.wait_for_timeout(1500)
-        if sc.get("send"):
-            page.locator("[data-testid=send]:enabled").click(timeout=120000)
-            if sc.get("hold"):
-                page.wait_for_selector("[data-testid=evidence-card]", timeout=30000)
-                page.wait_for_function("()=>!document.body.innerText.includes('is reviewing')", timeout=120000)
-            else:
-                page.wait_for_selector("[data-testid=banner]", timeout=120000)
-                page.wait_for_timeout(500)
-                if page.query_selector_all("[data-testid=banner]")[-1].get_attribute("data-decision") not in (
-                        "BLOCK", "HOLD"):
-                    page.wait_for_selector("[data-testid=answer] >> nth=-1", timeout=120000)
-            card_wait = sc.get("hold") or sc.get("approve")
-            if card_wait and page.query_selector("[data-testid=evidence-card]"):
-                page.wait_for_function("()=>!document.body.innerText.includes('is reviewing')", timeout=120000)
-                page.wait_for_timeout(1500)
-                if sc.get("approve") and page.query_selector("[data-testid=btn-approve]"):
-                    page.locator("[data-testid=btn-approve]:enabled").last.click(timeout=120000)
-                    page.wait_for_selector("[data-testid=answer] >> nth=-1", timeout=120000)
-                if sc.get("deny") and page.query_selector("[data-testid=btn-deny]"):
-                    page.wait_for_timeout(2500)
-                    page.locator("[data-testid=btn-deny]:enabled").last.click(timeout=120000)
-            if sc.get("ai_saw"):
-                t = page.query_selector_all("[data-testid=ai-saw-toggle]")
-                if t:
-                    t[-1].click()
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            for el in page.query_selector_all("main, .thread, #thread"):
-                el.evaluate("e=>e.scrollTop=e.scrollHeight")
+                rec.hold(1.5)
+        before = page.evaluate(n_answers())
+        page.locator("[data-testid=send]:enabled").click(timeout=60000)
+        rec.until("document.querySelectorAll('[data-testid=banner]').length>0 && !document.body.innerText.includes('checking')", 60)
+        decision = page.query_selector_all("[data-testid=banner]")[-1].get_attribute("data-decision")
+        if decision in ("ALLOW", "REDACT"):
+            rec.until(f"{n_answers()}>{before}")
+        if decision == "HOLD" and page.query_selector("[data-testid=evidence-card]"):
+            rec.until("!document.body.innerText.includes('is reviewing')")
+            rec.hold(1.5)
+            if sc.get("approve") and page.query_selector("[data-testid=btn-approve]"):
+                b2 = page.evaluate(n_answers())
+                page.locator("[data-testid=btn-approve]:enabled").last.click(timeout=60000)
+                rec.until(f"{n_answers()}>{b2}")
+            if sc.get("deny") and page.query_selector("[data-testid=btn-deny]"):
+                rec.hold(2.5)
+                page.locator("[data-testid=btn-deny]:enabled").last.click(timeout=60000)
+        if sc.get("ai_saw"):
+            t = page.query_selector_all("[data-testid=ai-saw-toggle]")
+            if t:
+                t[-1].click()
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     left = dur + 0.6 - (time.monotonic() - t0)
-    if left > 0:
-        page.wait_for_timeout(int(left * 1000))
+    rec.hold(max(left, 0.3))
 
 
 def main() -> None:
@@ -179,44 +227,38 @@ def main() -> None:
     durs = []
     for i, sc in enumerate(scs):
         durs.append(tts(sc["say"], a.voice, OUT / f"n{i:02d}.wav"))
+    frames_dir = OUT / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
     starts = []
     with sync_playwright() as p:
         b = p.chromium.launch()
-        ctx = b.new_context(viewport={"width": 1280, "height": 720},
-                            record_video_dir=str(OUT), record_video_size={"width": 1280, "height": 720})
-        ctx.add_init_script(TICKER_JS)
-        page = ctx.new_page()
+        page = b.new_page(viewport={"width": 1280, "height": 720})
         page.goto(URL)
         page.wait_for_timeout(800)
-        v0 = time.monotonic()
-        lead = 0.0
+        rec = Rec(page, frames_dir)
         for sc, d in zip(scs, durs):
-            starts.append(time.monotonic() - v0 + lead)
-            run_scene(page, sc, d)
-        video = page.video.path()
-        ctx.close()
+            starts.append(rec.now())
+            run_scene(rec, sc, d)
+        rec.snap()
         b.close()
-    # The recording also contains the initial page load before v0; measure that offset from the file length.
-    probe = subprocess.run([a.ffmpeg, "-i", video], capture_output=True, text=True).stderr
-    total_rec = 0.0
-    for line in probe.splitlines():
-        if "Duration:" in line:
-            h, m, s = line.split("Duration:")[1].split(",")[0].strip().split(":")
-            total_rec = int(h) * 3600 + int(m) * 60 + float(s)
-    script_len = starts[-1] + durs[-1] + 0.6
-    offset = max(0.0, total_rec - script_len)
+    lines = []
+    for (f, t), (_, t_next) in zip(rec.frames, rec.frames[1:] + [(None, rec.frames[-1][1] + 0.1)]):
+        lines += [f"file '{f.as_posix()}'", f"duration {max(t_next - t, 0.01):.3f}"]
+    lines.append(f"file '{rec.frames[-1][0].as_posix()}'")
+    (OUT / "frames.txt").write_text(chr(10).join(lines), encoding="utf-8")
     inputs, filt = [], []
-    for i, (st, _) in enumerate(zip(starts, durs)):
+    for i, st in enumerate(starts):
         inputs += ["-i", str(OUT / f"n{i:02d}.wav")]
-        ms = int((st + offset) * 1000)
+        ms = int(st * 1000)
         filt.append(f"[{i + 1}:a]adelay={ms}|{ms}[a{i}]")
     mix = "".join(f"[a{i}]" for i in range(len(starts)))
     filt.append(f"{mix}amix=inputs={len(starts)}:normalize=0[aout]")
     final = OUT / "shadowfenced_demo.mp4"
-    cmd = [a.ffmpeg, "-y", "-i", video, *inputs, "-filter_complex", ";".join(filt), "-map", "0:v", "-map", "[aout]",
-           "-ss", f"{offset:.2f}", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-b:a",
-           "160k", "-shortest", str(final)]
+    cmd = [a.ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(OUT / "frames.txt"), *inputs,
+           "-filter_complex", ";".join(filt), "-map", "0:v", "-map", "[aout]", "-fps_mode", "cfr", "-r", "25",
+           "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-c:a", "aac", "-b:a", "160k", str(final)]
     subprocess.run(cmd, check=True, capture_output=True)
+    print(f"frames {len(rec.frames)} over {rec.frames[-1][1]:.1f}s; scene starts {[round(x, 1) for x in starts]}")
     print(f"wrote {final}  narration {sum(durs):.1f}s  scenes {len(scs)}")
 
 

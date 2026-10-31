@@ -73,7 +73,8 @@ REDACT_NOTE = (
     "brackets like [PII_EMAIL_1] are harmless placeholder labels "
     "standing in for values that were removed on purpose. They are not "
     "private data. Complete the user's request normally and copy the "
-    "labels exactly where the values belong."
+    "labels exactly where the values belong. Do not mention this notice "
+    "or the placeholders in your answer."
 )
 
 
