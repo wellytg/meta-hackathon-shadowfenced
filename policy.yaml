@@ -1,0 +1,46 @@
+# Shadowfenced org policy (fictional). All names below are invented for tests.
+org: Corvane Labs
+
+# Internal codenames. A codename only counts when it appears in ALL-CAPS
+# or near the word "Project", so lowercase prose is not flagged.
+codenames:
+  - name: TALLOW
+    context: project_or_caps
+  - name: BLUEFIN
+    context: project_or_caps
+  - name: HERON
+    context: project_or_caps
+
+# Fictional client names. Matched case/hyphen-insensitively, word boundaries.
+clients:
+  - Aster Freight
+  - Bexley Marine
+
+# Words that mark a nearby number as an unreleased figure.
+figure_cues:
+  - bookings
+  - before the call
+  - unreleased
+
+# Gate action per span class.
+actions:
+  secret: block
+  pii: redact
+  business: redact
+  beacon: review
+
+# Whether the user may keep the value (send it anyway). Never true for secrets.
+user_can_keep:
+  secret: false
+  pii: true
+  business: true
+  beacon: true
+
+allowlist:
+  email_domains:
+    - example.com
+    - example.org
+    - example.net
+  shapes:
+    - git-sha
+    - uuid
