@@ -16,3 +16,8 @@
 - Output carries a trailing `<|eot|>` token after the JSON. Strip before parsing.
 - Decision: Glimmer only at send, only on spans Tier 1 marks ambiguous, with a timeout → HOLD. Keep the
   prompt short and `num_predict` ≤ 80. The UI shows a "checking with local Glimmer…" state.
+
+## 2026-10-31 — Co-residency (T0 remainder)
+- With both on the GPU, loading one model evicts the other (cold reload ~25 s for Glimmer).
+- Fix: live model on CPU only (`num_gpu: 0`): llama3.2:3b at **1.4-3.3 s** per decision, and both stay resident
+  (`keep_alive: -1`). Glimmer stays 6-12 s warm. Settings: `SF_LIVE_NUM_GPU=0`, `SF_LIVE_TIMEOUT_S=4`, `SF_JUDGE_TIMEOUT_S=20`.
