@@ -7,3 +7,12 @@
   output costs ~0.1 s extra. Live underline is feasible.
 - Judgement is weak: a name + DOB + account number was labelled `business`, sensitivity 0. Decision: Tier 1 code
   checks carry the live underline; the live model adds hints only; Glimmer decides at send.
+
+## 2026-10-31 — Send-time judge (muse-glimmer:30b, Q4, 17 GB, 47% CPU / 53% GPU, num_ctx 2048, think off)
+- Cold load ~25 s (do a warm-up call at server start). Warm: **6-12 s per decision** (~5 tok/s generation).
+- Judgement is clearly better than the 3B: caught the name + DOB + account as `personal` (0.7) and the
+  "removed the old database password from settings.py" message as a beacon. Banana bread → `none`.
+- Missed the fictional codename "Project Bluefin" (cls `none`). Codenames must come from the policy word list (Tier 1).
+- Output carries a trailing `<|eot|>` token after the JSON. Strip before parsing.
+- Decision: Glimmer only at send, only on spans Tier 1 marks ambiguous, with a timeout → HOLD. Keep the
+  prompt short and `num_predict` ≤ 80. The UI shows a "checking with local Glimmer…" state.
