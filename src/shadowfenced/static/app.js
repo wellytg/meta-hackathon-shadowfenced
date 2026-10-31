@@ -9,6 +9,61 @@
   var checking = document.getElementById("checking");
   var thread = document.getElementById("thread");
   var providerSel = document.getElementById("provider");
+  var headerPill = document.querySelector('[data-testid="header-pill"]');
+  var paperclip = document.getElementById("paperclip");
+  var fileInput = document.getElementById("file-input");
+  var fileChips = document.getElementById("file-chips");
+  var attachedFiles = []; // {file_id, name, kind, status, summary_text, spans}
+
+  var PROVIDER_LABELS = {
+    meta: "Meta Muse Spark (cloud)",
+    ollama: "Llama 3.2 3B via Ollama (local stand-in)"
+  };
+
+  function providerLabel(id) {
+    return PROVIDER_LABELS[id] || String(id);
+  }
+
+  function setPill(providerId) {
+    if (!headerPill) return;
+    headerPill.textContent = providerLabel(providerId);
+  }
+
+  function loadProviders() {
+    if (!providerSel) return;
+    fetch("/api/providers")
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        var list = body.providers || [];
+        providerSel.innerHTML = "";
+        list.forEach(function (p) {
+          var opt = document.createElement("option");
+          opt.value = p.id;
+          opt.textContent = p.available ? p.label : p.label + " (no API key)";
+          opt.disabled = !p.available;
+          providerSel.appendChild(opt);
+        });
+        if (body.default) providerSel.value = body.default;
+        // If the saved default is unavailable, fall back to ollama.
+        if (providerSel.selectedIndex < 0 ||
+            providerSel.options[providerSel.selectedIndex].disabled) {
+          var fallback = list.filter(function (p) { return p.available; })[0];
+          if (fallback) providerSel.value = fallback.id;
+        }
+        setPill(providerSel.value);
+      })
+      .catch(function () { /* static options stay as the fallback */ });
+  }
+
+  providerSel.addEventListener("change", function () {
+    fetch("/api/provider", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: providerSel.value })
+    })
+      .then(function () { setPill(providerSel.value); })
+      .catch(function () { /* default stays server-side */ });
+  });
 
   var scanSeq = 0;       // latest scan request id; stale responses are dropped
   var liveSeq = 0;       // latest live-scan id; stale responses are dropped
@@ -255,6 +310,92 @@
     return "Held for review: possible pointer to sensitive data.";
   }
 
+  var KIND_ICONS = { text: "T", markdown: "M", csv: "#", docx: "W", pdf: "P", unknown: "?" };
+
+  function renderChips() {
+    if (!fileChips) return;
+    fileChips.innerHTML = "";
+    attachedFiles.forEach(function (f, index) {
+      var chip = document.createElement("div");
+      chip.className = "file-chip";
+      chip.setAttribute("data-testid", "file-chip");
+      chip.setAttribute("data-status", f.status);
+      var icon = document.createElement("span");
+      icon.className = "chip-icon";
+      icon.textContent = KIND_ICONS[f.kind] || "•";
+      var name = document.createElement("button");
+      name.type = "button";
+      name.className = "chip-name";
+      name.textContent = f.name + " · " + (f.summary_text || f.status);
+      name.addEventListener("click", function () {
+        details.hidden = !details.hidden;
+      });
+      var remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "chip-x";
+      remove.setAttribute("aria-label", "Remove " + f.name);
+      remove.textContent = "x";
+      remove.addEventListener("click", function () {
+        attachedFiles.splice(index, 1);
+        renderChips();
+      });
+      var details = document.createElement("ul");
+      details.className = "chip-findings";
+      details.hidden = true;
+      (f.spans || []).forEach(function (s) {
+        var li = document.createElement("li");
+        li.textContent = (s.cls || "issue") + " / " + (s.subclass || "") +
+          " (" + (s.status || "") + ")";
+        details.appendChild(li);
+      });
+      if (!(f.spans || []).length) {
+        var empty = document.createElement("li");
+        empty.className = "ev-empty";
+        empty.textContent = "no findings";
+        details.appendChild(empty);
+      }
+      chip.appendChild(icon);
+      chip.appendChild(name);
+      chip.appendChild(remove);
+      chip.appendChild(details);
+      fileChips.appendChild(chip);
+    });
+  }
+
+  if (paperclip && fileInput) {
+    paperclip.addEventListener("click", function () { fileInput.click(); });
+    fileInput.addEventListener("change", function () {
+      var file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      var form = new FormData();
+      form.append("file", file, file.name);
+      fetch("/api/upload", { method: "POST", body: form })
+        .then(function (resp) {
+          return resp.json().then(function (body) {
+            return { ok: resp.ok, status: resp.status, body: body };
+          });
+        })
+        .then(function (res) {
+          if (res.ok) {
+            attachedFiles.push(res.body);
+            renderChips();
+          } else {
+            var err = document.createElement("div");
+            err.className = "banner";
+            err.setAttribute("data-testid", "banner");
+            err.setAttribute("data-decision", "HOLD");
+            err.textContent = "Could not attach " + file.name +
+              ": " + ((res.body && res.body.detail && res.body.detail.message) ||
+                ("unsupported file (" + res.status + ")"));
+            thread.appendChild(err);
+            updateEmptyHint();
+          }
+          fileInput.value = "";
+        })
+        .catch(function () { fileInput.value = ""; });
+    });
+  }
+
   function refreshStats() {
     fetch("/api/stats")
       .then(function (resp) { return resp.json(); })
@@ -291,6 +432,8 @@
           lastVal != null ? Number(lastVal).toFixed(1) + " ms" : "—";
         document.getElementById("stats-tier1").textContent = String(byTier["1"] || 0);
         document.getElementById("stats-holds").textContent = String(decisions.HOLD || 0);
+        document.getElementById("stats-held-resolved").textContent =
+          String(stats.held_then_resolved || 0);
       })
       .catch(function () { /* stats are advisory */ });
     fetch("/api/log/verify")
@@ -318,9 +461,14 @@
     syncScroll();
   }
 
+  function clearAttachments() {
+    attachedFiles = [];
+    renderChips();
+  }
+
   function sendNow() {
     var text = composer.value;
-    if (!text) return;
+    if (!text && !attachedFiles.length) return;
     // Only spans the user explicitly clicked Redact/Keep on are sent;
     // anything untouched redacts by default without a recorded choice.
     var choiceList = spans
@@ -343,11 +491,13 @@
       body: JSON.stringify({
         messages: [{ role: "user", content: text }],
         choices: choiceList,
+        file_ids: attachedFiles.map(function (f) { return f.file_id; }),
         provider: providerSel ? providerSel.value : "ollama"
       })
     })
       .then(function (resp) { return resp.json(); })
       .then(function (body) {
+        if (body.provider) setPill(body.provider);
         var decision = body.decision || "HOLD";
         var banner = document.createElement("div");
         banner.className = "banner";
@@ -370,7 +520,7 @@
         if (body.sent_text != null) {
           aiSaw.innerHTML = highlightPlaceholders(body.sent_text);
         } else {
-          aiSaw.textContent = "(nothing was sent upstream)";
+          aiSaw.textContent = "(nothing sent yet)";
         }
         toggle.addEventListener("click", function () {
           aiSaw.hidden = !aiSaw.hidden;
@@ -384,6 +534,10 @@
           answer.setAttribute("data-testid", "answer");
           answer.innerHTML = highlightRanges(body.answer, body.answer_highlights);
           thread.appendChild(answer);
+          var src = document.createElement("div");
+          src.className = "answer-src";
+          src.textContent = "via " + providerLabel(body.provider || (providerSel && providerSel.value));
+          thread.appendChild(src);
         }
         if (decision === "HOLD" && body.decision_id) {
           renderHoldCard(body.decision_id, banner);
@@ -402,6 +556,7 @@
       })
       .then(function () {
         clearComposer();
+        clearAttachments();
         checking.hidden = true;
         sendBtn.disabled = false;
       });
@@ -468,6 +623,27 @@
     var timer = setInterval(function () {
       elapsed.textContent = Math.floor((Date.now() - startedAt) / 1000) + "s";
     }, 1000);
+
+    // Redacted preview with suspicion spans in purple and proven
+    // spans in red/orange. Marks use UTF-16 offsets, exactly how JS
+    // strings index, so plain slice() aligns with the backend marks.
+    function renderPreview(el, text, marks) {
+      var ordered = (marks || []).slice().sort(function (a, b) {
+        return a.start - b.start;
+      });
+      el.innerHTML = "";
+      var cursor = 0;
+      ordered.forEach(function (m) {
+        if (m.start < cursor || m.start >= m.end) return;
+        el.appendChild(document.createTextNode(text.slice(cursor, m.start)));
+        var span = document.createElement("span");
+        span.className = m.kind === "suspicion" ? "pv-suspicion" : "pv-proven";
+        span.textContent = text.slice(m.start, m.end);
+        el.appendChild(span);
+        cursor = m.end;
+      });
+      el.appendChild(document.createTextNode(text.slice(cursor)));
+    }
 
     function fillList(ul, items) {
       ul.innerHTML = "";
@@ -546,7 +722,7 @@
       var approveBtn = document.createElement("button");
       approveBtn.type = "button";
       approveBtn.setAttribute("data-testid", "btn-approve");
-      approveBtn.textContent = "Send redacted";
+      approveBtn.textContent = "Send without flagged part";
       var denyBtn = document.createElement("button");
       denyBtn.type = "button";
       denyBtn.setAttribute("data-testid", "btn-deny");
@@ -572,8 +748,9 @@
           }));
           var suspicions = body.model_suspicion_only || [];
           fillList(suspList, suspicions.map(function (m) { return m.span || ""; }));
-          preview.textContent = body.redacted_preview || "";
+          renderPreview(preview, body.redacted_preview || "", body.preview_marks);
           var st = body.status;
+          if (body.title) label.textContent = body.title;
           if (st === "reviewing") {
             setTimeout(poll, 1000);
             return;
@@ -582,7 +759,7 @@
           if (st === "redacted_sent") {
             finishBanner("REDACT", body.user_message || "Sent with redactions.");
             if (body.answer != null) showHoldAnswer(body.answer);
-            label.textContent = body.user_message || "Sent with redactions.";
+            label.textContent = body.title || body.user_message || "Sent with redactions.";
           } else if (st === "released") {
             var sent = body.sent_text || "";
             finishBanner(
@@ -590,9 +767,9 @@
               body.user_message || "Sent."
             );
             if (body.answer != null) showHoldAnswer(body.answer);
-            label.textContent = body.user_message || "Sent.";
+            label.textContent = body.title || body.user_message || "Sent.";
           } else if (st === "needs_human") {
-            label.textContent = "Glimmer could not clear this \u2014 your call.";
+            label.textContent = body.title || "Glimmer could not clear this \u2014 your call.";
             suspicions.forEach(function (m) {
               var judgement = m.judgement || {};
               var line = document.createElement("div");
@@ -642,5 +819,6 @@
 
   renderBackdrop("", []);
   updateEmptyHint();
+  loadProviders();
   refreshStats();
 })();

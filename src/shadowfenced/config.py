@@ -19,6 +19,7 @@ _ENV_KEYS = (
     "SF_UPSTREAM",
     "SF_LOCAL_UPSTREAM_MODEL",
     "META_API_KEY",
+    "MODEL_API_KEY",
     "META_BASE_URL",
     "META_MODEL",
     "SF_CANARY_SEED",
@@ -75,8 +76,8 @@ class Settings(BaseModel):
     upstream: str = "ollama"
     local_model: str = "llama3.2:3b"
     meta_api_key: str = ""
-    meta_base_url: str = ""
-    meta_model: str = ""
+    meta_base_url: str = "https://api.meta.ai/v1"
+    meta_model: str = "muse-spark-1.3"
     canary_seed: str = "demo-seed"
     log_path: str = DEFAULT_LOG_PATH
     live_model: str = "llama3.2:3b"
@@ -128,7 +129,9 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
     """
     merged = _collect(env)
     file_or_env_upstream = merged.get("SF_UPSTREAM", "").strip().lower()
-    meta_key = merged.get("META_API_KEY", "")
+    # MODEL_API_KEY is an accepted alias for META_API_KEY; neither value
+    # is ever logged or printed by this module.
+    meta_key = merged.get("META_API_KEY", "") or merged.get("MODEL_API_KEY", "")
     if file_or_env_upstream in ("meta", "ollama"):
         upstream = file_or_env_upstream
     else:
@@ -138,8 +141,8 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
         upstream=upstream,
         local_model=merged.get("SF_LOCAL_UPSTREAM_MODEL", "llama3.2:3b"),
         meta_api_key=meta_key,
-        meta_base_url=merged.get("META_BASE_URL", ""),
-        meta_model=merged.get("META_MODEL", ""),
+        meta_base_url=merged.get("META_BASE_URL", "https://api.meta.ai/v1"),
+        meta_model=merged.get("META_MODEL", "muse-spark-1.3"),
         canary_seed=merged.get("SF_CANARY_SEED", "demo-seed"),
         log_path=merged.get("SF_LOG_PATH", DEFAULT_LOG_PATH),
         live_model=merged.get("SF_LIVE_MODEL", "llama3.2:3b"),

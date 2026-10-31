@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -25,9 +25,16 @@ from . import holds
 from . import judge as judge_module
 from .canary import CanaryRegistry
 from .config import get_settings
+from .extract import (
+    FileTooLarge,
+    Unscannable,
+    UnsupportedType,
+    extract_text,
+)
 from .policy import Policy, load_policy
 from .redact import load_mapping, rehydrate
 from .spans import Span, span_from_cp_range
+from .uploads import UPLOADS
 from .upstream import UpstreamError, chat_sync
 
 @asynccontextmanager
@@ -101,6 +108,51 @@ def reset_state() -> None:
     global _POLICY, _REGISTRY
     _POLICY = None
     _REGISTRY = None
+
+
+# In-memory default provider override set by POST /api/provider
+# (reset between tests via reset_provider_override()).
+_PROVIDER_OVERRIDE: str | None = None
+
+
+def reset_provider_override() -> None:
+    """Forget the POST /api/provider override (tests only)."""
+    global _PROVIDER_OVERRIDE
+    _PROVIDER_OVERRIDE = None
+
+
+def default_provider() -> str:
+    """Effective default provider: explicit override, else settings."""
+    if _PROVIDER_OVERRIDE in ("meta", "ollama"):
+        return _PROVIDER_OVERRIDE
+    return get_settings().upstream or "ollama"
+
+
+def resolve_provider(provider: str | None) -> str:
+    """Per-request provider: explicit choice, else the default."""
+    name = (provider or "").strip().lower()
+    if name in ("meta", "ollama"):
+        return name
+    return default_provider()
+
+
+PROVIDER_LABELS = {
+    "meta": "Meta Muse Spark (cloud)",
+    "ollama": "Llama 3.2 3B via Ollama (local stand-in)",
+}
+
+
+def provider_list() -> list[dict[str, Any]]:
+    """Serialise the provider catalogue for GET /api/providers."""
+    settings = get_settings()
+    return [
+        {
+            "id": "meta",
+            "label": PROVIDER_LABELS["meta"],
+            "available": settings.meta_available,
+        },
+        {"id": "ollama", "label": PROVIDER_LABELS["ollama"], "available": True},
+    ]
 
 
 def span_to_dict(span: Span) -> dict[str, Any]:
@@ -231,6 +283,10 @@ class RuleRequest(BaseModel):
     reason: str | None = None
 
 
+class ProviderRequest(BaseModel):
+    id: str = ""
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     """Liveness probe."""
@@ -315,7 +371,17 @@ def _with_live_suspicions(text: str, spans: list[Span]) -> list[Span]:
 @app.post("/api/send")
 def send(body: SendRequest) -> dict[str, Any]:
     """Gate the user text, forward it when allowed, re-hydrate the answer."""
+    provider = resolve_provider(body.provider)
     text, clean = extract_user_text(body.messages)
+    file_texts, file_error = _file_sections(body.file_ids)
+    if file_error is not None:
+        decision = engine.gate(text, get_policy(), get_registry(), mode="send")
+        decision = _hold_for(decision, file_error)
+        _log_decision(decision, text)
+        _register_hold(decision, text, body.messages, provider, why=file_error)
+        return _send_response(decision, None, [], [], provider)
+    if file_texts:
+        text = text + "".join(file_texts) if text else "".join(file_texts).lstrip("\n")
     decision = engine.gate(
         text, get_policy(), get_registry(),
         [c.model_dump() for c in body.choices],
@@ -325,21 +391,21 @@ def send(body: SendRequest) -> dict[str, Any]:
         decision = _hold_for(decision, "non_text_content")
         _log_decision(decision, text)
         _register_hold(
-            decision, text, body.messages, body.provider,
+            decision, text, body.messages, provider,
             why="non-text content parts need review",
         )
-        return _send_response(decision, None, [], [])
+        return _send_response(decision, None, [], [], provider)
     _log_decision(decision, text)
     if decision.decision in ("BLOCK", "HOLD"):
         if decision.decision == "HOLD":
-            _register_hold(decision, text, body.messages, body.provider)
-        return _send_response(decision, None, [], [])
+            _register_hold(decision, text, body.messages, provider)
+        return _send_response(decision, None, [], [], provider)
     try:
         answer = _send_upstream(
             _forward_messages(
                 body.messages, decision.sent_text, decision.decision
             ),
-            body.provider,
+            provider,
         )
     except UpstreamError as exc:
         raise HTTPException(
@@ -352,7 +418,26 @@ def send(body: SendRequest) -> dict[str, Any]:
         ) from exc
     mapping = load_mapping(decision.decision_id)
     rehydrated, highlights, unmatched = rehydrate(answer, mapping)
-    return _send_response(decision, rehydrated, highlights, unmatched)
+    return _send_response(decision, rehydrated, highlights, unmatched, provider)
+
+
+def _file_sections(file_ids: list[str]) -> tuple[list[str], str | None]:
+    """Build the send-time text sections for uploaded files.
+
+    Returns ``(sections, error)``: each section is
+    ``"\\nAttached file <name>:\\n<text>"`` so the gate redacts file
+    content with placeholders shared with the message. ``error`` names
+    an unscannable, unknown, or expired file, which HOLDs the send.
+    """
+    sections: list[str] = []
+    for file_id in file_ids:
+        record = UPLOADS.load(file_id)
+        if record is None:
+            return [], f"unknown or expired file {file_id}"
+        if record.status == "unscannable" or not record.text.strip():
+            return [], f"file {record.name} is unscannable and needs review"
+        sections.append(f"\nAttached file {record.name}:\n{record.text}")
+    return sections, None
 
 
 def _hold_for(decision: engine.Decision, reason: str) -> engine.Decision:
@@ -411,6 +496,7 @@ def _send_response(
     answer: str | None,
     highlights: list[dict],
     unmatched: list[str],
+    provider: str | None = None,
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "spans": [span_to_dict(s) for s in decision.spans],
@@ -428,6 +514,7 @@ def _send_response(
         "resolved_tier": decision.resolved_tier,
         "latency_ms": decision.latency_ms,
         "unmatched_placeholders": unmatched,
+        "provider": resolve_provider(provider),
     }
     if decision.decision == "HOLD":
         response["review_url"] = f"/api/holds/{decision.decision_id}"
@@ -610,7 +697,8 @@ def hold_rule(hold_id: str, body: RuleRequest) -> Any:
         status="complete",
     )
     return _send_response(
-        decision, result["answer"], result["highlights"], result["unmatched"]
+        decision, result["answer"], result["highlights"], result["unmatched"],
+        hold.provider,
     )
 
 
@@ -620,6 +708,99 @@ def stats() -> dict[str, Any]:
     from . import stats as stats_module
 
     return stats_module.snapshot(get_settings().log_path)
+
+
+def handle_upload(filename: str, data: bytes) -> dict[str, Any]:
+    """Validate, extract, scan, and store one uploaded file.
+
+    Returns the ``/api/upload`` payload. Raises ``HTTPException`` 415
+    for an unsupported suffix; oversized or unparseable input stores an
+    ``unscannable`` record (the send path HOLDs on those).
+    """
+    from . import tier1
+
+    try:
+        kind, text = extract_text(filename, data)
+    except UnsupportedType as exc:
+        raise HTTPException(
+            status_code=415,
+            detail={
+                "code": "shadowfenced_unsupported_file",
+                "type": "shadowfenced_unsupported_file",
+                "message": str(exc),
+            },
+        ) from exc
+    except (FileTooLarge, Unscannable) as exc:
+        record = UPLOADS.save(
+            filename, "unknown", "", status="unscannable",
+        )
+        return {
+            "file_id": record.file_id,
+            "name": filename,
+            "kind": "unknown",
+            "chars": 0,
+            "status": "unscannable",
+            "spans": [],
+            "summary": {},
+            "summary_text": "could not read file",
+            "error": str(exc),
+        }
+    spans = tier1.scan(text, get_policy(), get_registry())
+    status = "flagged" if spans else "clean"
+    record = UPLOADS.save(filename, kind, text, status=status)
+    summary: dict[str, int] = {}
+    for span in spans:
+        summary[span.cls] = summary.get(span.cls, 0) + 1
+    if spans:
+        from .redact import redact as _redact
+
+        _, mapping = _redact(text, [s for s in spans if s.status == "proven"])
+        summary_text = ", ".join(engine.describe_placeholders(mapping))
+        if not summary_text:
+            summary_text = f"{len(spans)} possible issue(s) need review"
+    else:
+        summary_text = "clean"
+    return {
+        "file_id": record.file_id,
+        "name": filename,
+        "kind": kind,
+        "chars": len(text),
+        "status": status,
+        "spans": [span_to_dict(s) for s in spans],
+        "summary": summary,
+        "summary_text": summary_text,
+    }
+
+
+@app.post("/api/upload")
+async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Accept one multipart file, extract its text, and scan it."""
+    data = await file.read()
+    return handle_upload(file.filename or "upload", data)
+
+
+@app.get("/api/providers")
+def providers() -> dict[str, Any]:
+    """List the upstream providers with availability and the default."""
+    return {"providers": provider_list(), "default": default_provider()}
+
+
+@app.post("/api/provider")
+def set_provider(body: ProviderRequest) -> dict[str, Any]:
+    """Set the default upstream provider (``meta`` or ``ollama``)."""
+    global _PROVIDER_OVERRIDE
+    name = (body.id or "").strip().lower()
+    if name not in ("meta", "ollama"):
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "shadowfenced_unknown_provider",
+                "type": "shadowfenced_unknown_provider",
+                "message": f"unknown provider {body.id!r}",
+            },
+        )
+    _PROVIDER_OVERRIDE = name
+    return {"default": name, "providers": provider_list()}
 
 
 @app.get("/api/log/verify")

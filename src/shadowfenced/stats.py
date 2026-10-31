@@ -69,8 +69,16 @@ def _event_latency(event: dict[str, Any]) -> float:
 
 
 def stats_from_log(log_path: str | None = None) -> dict[str, Any]:
-    """Build a stats snapshot from the JSONL decision log."""
-    collector = Stats()
+    """Build a stats snapshot from the JSONL decision log.
+
+    One decision per ``decision_id``: a HOLD that later resolves logs
+    its resolution under the same id, so the latest event wins instead
+    of counting the HOLD twice. ``held_then_resolved`` keeps the
+    "held first" count visible as a separate counter.
+    """
+    latest: dict[str, dict[str, Any]] = {}
+    first: dict[str, str] = {}
+    order: list[str] = []
     path = Path(resolve_path(log_path))
     if path.is_file():
         with path.open(encoding="utf-8") as handle:
@@ -83,15 +91,32 @@ def stats_from_log(log_path: str | None = None) -> dict[str, Any]:
                 except ValueError:
                     continue
                 decision = event.get("decision")
-                tier = event.get("tier", 1)
                 if not isinstance(decision, str):
                     continue
-                try:
-                    tier_int = int(tier)
-                except (TypeError, ValueError):
-                    tier_int = 1
-                collector.record(decision, tier_int, _event_latency(event))
-    return collector.snapshot()
+                key = event.get("decision_id")
+                if not isinstance(key, str) or not key:
+                    key = f"__noid_{len(order)}"
+                if key not in latest:
+                    order.append(key)
+                    first[key] = decision
+                latest[key] = event
+    collector = Stats()
+    for key in order:
+        event = latest[key]
+        tier = event.get("tier", 1)
+        try:
+            tier_int = int(tier)
+        except (TypeError, ValueError):
+            tier_int = 1
+        decision = event.get("decision")
+        assert isinstance(decision, str)
+        collector.record(decision, tier_int, _event_latency(event))
+    snap = collector.snapshot()
+    snap["held_then_resolved"] = sum(
+        1 for key in order
+        if first[key] == "HOLD" and latest[key].get("decision") != "HOLD"
+    )
+    return snap
 
 
 def snapshot(log_path: str | None = None) -> dict[str, Any]:

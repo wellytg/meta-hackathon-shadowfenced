@@ -32,8 +32,8 @@ from .canary import CanaryRegistry
 from .config import get_settings
 from .engine import Decision, _judgement_dump, describe_placeholders
 from .policy import Policy, load_policy
-from .redact import rehydrate, save_mapping
-from .spans import Span, merge_overlaps
+from .redact import PLACEHOLDER_RE, rehydrate, save_mapping
+from .spans import Span, merge_overlaps, span_from_cp_range
 
 REGISTRY_KINDS = ("db_password", "api_key")
 
@@ -131,9 +131,12 @@ def _log_decision(decision: Decision, text: str) -> None:
 def _hold_decision(
     hold: Hold, decision: str, resolved_tier: int, reasons: list[str]
 ) -> Decision:
+    # Reuse the hold id (== the original gate decision id) so the stats
+    # snapshot counts one decision per decision_id with the latest outcome
+    # winning, instead of counting the HOLD and its resolution twice.
     return Decision(
         decision=decision,
-        decision_id=uuid.uuid4().hex,
+        decision_id=hold.hold_id,
         spans=hold.spans,
         sent_text=hold.sent_text,
         placeholders={},
@@ -163,6 +166,7 @@ def create_hold(
             "cp_start": s.cp_start,
             "cp_end": s.cp_end,
             "text": text[s.cp_start:s.cp_end],
+            "cls": s.cls,
         }
         for s in ambiguous
     ]
@@ -217,11 +221,36 @@ def _benign_clear(judgement: Any) -> bool:
         return False
 
 
-def _suspicion(span_text: str, judgement: Any, why: str) -> dict[str, Any]:
+def _suspicion(
+    span_text: str,
+    judgement: Any,
+    why: str,
+    *,
+    cp_start: int | None = None,
+    cp_end: int | None = None,
+    cls: str | None = None,
+) -> dict[str, Any]:
+    """One model-suspicion entry for the evidence card.
+
+    Code-point offsets locate the span in ``hold.text`` so a human
+    approve can replace it with a placeholder; ``cls`` names the
+    suspected class for the placeholder label and the card title.
+    """
+    if isinstance(judgement, dict):
+        judged = judgement.get("cls")
+    else:
+        judged = getattr(judgement, "cls", None)
+    # The model's suspected class wins; the Tier 1 class is the fallback.
+    if not (isinstance(judged, str) and judged):
+        judged = cls
+    cls = judged
     return {
         "span": span_text,
         "judgement": _judgement_dump(judgement),
         "why_unverified": why,
+        "cp_start": cp_start,
+        "cp_end": cp_end,
+        "cls": cls if isinstance(cls, str) and cls else None,
     }
 
 
@@ -277,7 +306,11 @@ def run_review(
             judgement = None
         if judgement is None:
             suspicions.append(
-                _suspicion(span_text, None, "judge unavailable")
+                _suspicion(
+                    span_text, None, "judge unavailable",
+                    cp_start=item["cp_start"], cp_end=item["cp_end"],
+                    cls=item.get("cls"),
+                )
             )
             continue
         hold.judgements.append(_judgement_dump(judgement))
@@ -290,6 +323,8 @@ def run_review(
                 _suspicion(
                     span_text, judgement,
                     f"verification failed: {type(exc).__name__}",
+                    cp_start=item["cp_start"], cp_end=item["cp_end"],
+                    cls=item.get("cls"),
                 )
             )
             continue
@@ -301,6 +336,8 @@ def run_review(
                     _suspicion(
                         span_text, judgement,
                         "model-confirmed canary is never auto-sent",
+                        cp_start=item["cp_start"], cp_end=item["cp_end"],
+                        cls=item.get("cls"),
                     )
                 )
                 continue
@@ -310,7 +347,11 @@ def run_review(
             cleared += 1
             continue
         suspicions.append(
-            _suspicion(span_text, judgement, verdict.why)
+            _suspicion(
+                span_text, judgement, verdict.why,
+                cp_start=item["cp_start"], cp_end=item["cp_end"],
+                cls=item.get("cls"),
+            )
         )
 
     if suspicions:
@@ -456,6 +497,88 @@ def start_review(hold_id: str, **kwargs: Any) -> "threading.Thread":
     return thread
 
 
+def hold_title(hold: Hold) -> str:
+    """One user-facing card title for the hold's current outcome."""
+    if hold.status == "needs_human":
+        judged = [
+            e for e in hold.evidence.get("model_suspicion_only", [])
+            if e.get("judgement")
+        ]
+        if judged:
+            first = judged[0]
+            cls = (first.get("cls") or "issue") if isinstance(first, dict) else "issue"
+            confidence = (first.get("judgement") or {}).get("confidence")
+            try:
+                pct = f"{int(round(float(confidence) * 100))}%"
+            except (TypeError, ValueError):
+                pct = "unknown confidence"
+            return (
+                f"Glimmer flagged a possible {cls} ({pct}). "
+                "Code could not prove it, so it's your call."
+            )
+        return (
+            "Glimmer flagged a possible issue. "
+            "Code could not prove it, so it's your call."
+        )
+    if hold.status == "redacted_sent":
+        return "Glimmer found it and code confirmed it. Sent with the part removed."
+    if hold.status == "released":
+        return "Glimmer checked it: nothing sensitive. Sent."
+    if hold.status == "reviewing":
+        return "Glimmer is reviewing the flagged part."
+    if hold.status == "denied":
+        return "Denied: nothing was sent."
+    return hold.user_message or hold.status
+
+
+def _utf16_len(text: str) -> int:
+    """Length of text in UTF-16 code units (the /api/scan offset unit)."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def preview_marks(hold: Hold) -> list[dict[str, Any]]:
+    """UTF-16 ranges into ``hold.redacted_preview`` for highlighting.
+
+    Proven spans surface as their ``[LABEL_N]`` placeholders (kind
+    ``proven``); located model-suspicion spans surface as raw text
+    (kind ``suspicion``) so the UI can colour them differently.
+    Offsets are UTF-16 code units, matching the scan contract and plain
+    JS string slicing.
+    """
+    preview = hold.redacted_preview or ""
+    marks: list[dict[str, Any]] = []
+    for match in PLACEHOLDER_RE.finditer(preview):
+        marks.append(
+            {
+                "start": _utf16_len(preview[:match.start()]),
+                "end": _utf16_len(preview[:match.end()]),
+                "kind": "proven",
+            }
+        )
+    occupied = [(m["start"], m["end"]) for m in marks]
+    for entry in hold.evidence.get("model_suspicion_only", []):
+        text = entry.get("span") or ""
+        if not text:
+            continue
+        size = _utf16_len(text)
+        at = preview.find(text)
+        while at >= 0 and any(
+            _utf16_len(preview[:at]) < end
+            and start < _utf16_len(preview[:at]) + size
+            for start, end in occupied
+        ):
+            at = preview.find(text, at + 1)
+        if at < 0:
+            continue
+        start16 = _utf16_len(preview[:at])
+        marks.append(
+            {"start": start16, "end": start16 + size, "kind": "suspicion"}
+        )
+        occupied.append((start16, start16 + size))
+    marks.sort(key=lambda m: (m["start"], m["end"]))
+    return marks
+
+
 def hold_card(hold: Hold) -> dict[str, Any]:
     """Serialise one hold as the GET /api/holds/{id} evidence card."""
     proven_by_code = []
@@ -472,6 +595,7 @@ def hold_card(hold: Hold) -> dict[str, Any]:
     return {
         "hold_id": hold.hold_id,
         "status": hold.status,
+        "title": hold_title(hold),
         "proven_by_code": proven_by_code,
         "model_suspicion_only": list(
             hold.evidence.get("model_suspicion_only", [])
@@ -480,6 +604,7 @@ def hold_card(hold: Hold) -> dict[str, Any]:
         if hold.status == "reviewing"
         else [],
         "redacted_preview": hold.redacted_preview,
+        "preview_marks": preview_marks(hold),
         "answer": hold.answer,
         "sent_text": hold.sent_text,
         "user_message": hold.user_message,
@@ -500,20 +625,78 @@ def deny_hold(hold: Hold, reason: str | None = None) -> Hold | None:
     return hold
 
 
+def _suspicion_label(cls: str | None) -> tuple[str, str]:
+    """Placeholder (class, subclass) for one model-suspicion span.
+
+    Beacons label ``BEACON``; every other class labels per class so an
+    approve replaces the flagged part without implying proof.
+    """
+    name = (cls or "beacon").strip().lower()
+    if name == "secret":
+        return ("secret", "suspicion")
+    if name == "pii":
+        return ("pii", "")
+    if name == "business":
+        return ("business", "business")
+    if name == "beacon":
+        return ("beacon", "cue")
+    return (name, "suspicion")
+
+
+def _suspicion_spans(hold: Hold) -> list[Span]:
+    """Build redaction spans for each located model-suspicion entry."""
+    spans: list[Span] = []
+    for entry in hold.evidence.get("model_suspicion_only", []):
+        start = entry.get("cp_start")
+        end = entry.get("cp_end")
+        if (
+            not isinstance(start, int) or not isinstance(end, int)
+            or start < 0 or end > len(hold.text) or start >= end
+        ):
+            continue
+        cls, subclass = _suspicion_label(entry.get("cls"))
+        confidence = 0.5
+        judgement = entry.get("judgement") or {}
+        try:
+            confidence = float(judgement.get("confidence", 0.5))
+        except (TypeError, ValueError, AttributeError):
+            pass
+        spans.append(
+            span_from_cp_range(
+                hold.text, start, end,
+                cls=cls, subclass=subclass, tier=2, proof="model",
+                status="suspicion",
+                message=f"model suspicion: {cls}",
+                why=str(entry.get("why_unverified") or "model suspicion"),
+                suggested_action="review", can_keep=True,
+                confidence=confidence,
+            )
+        )
+    return spans
+
+
 def approve_hold(
     hold: Hold, *, sender: Sender,
 ) -> dict[str, Any] | None:
-    """Approve a hold: forward the redacted text only.
+    """Approve a hold: forward the text with the flagged part removed.
 
-    Proven and code-confirmed spans stay redacted; returns the pieces
-    the route needs to build the /api/send shape, or None when the
-    hold is already resolved.
+    Proven and code-confirmed spans stay redacted, and every located
+    model-suspicion span is replaced with a placeholder too
+    (``[BEACON_n]`` for beacons, per-class otherwise); returns the
+    pieces the route needs to build the /api/send shape, or None when
+    the hold is already resolved.
     """
     if hold.status not in ("reviewing", "needs_human"):
         return None
     from .redact import redact as _redact
 
-    combined = merge_overlaps(_proven_spans(hold) + list(hold.confirmed))
+    already = _proven_spans(hold) + list(hold.confirmed)
+    covered = [(s.cp_start, s.cp_end) for s in already]
+    extra = [
+        s for s in _suspicion_spans(hold)
+        if not any(s.cp_start < end and start < s.cp_end for start, end in covered)
+    ]
+    combined = merge_overlaps(already + extra)
     if combined:
         sent_text, mapping = _redact(hold.text, combined)
     else:

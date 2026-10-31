@@ -26,7 +26,10 @@
           rows="4" placeholder="Type a message — sensitive text gets underlined…"
           spellcheck="false"></textarea>
       </div>
+      <div id="file-chips" class="file-chips"></div>
       <div class="composer-row">
+        <button id="paperclip" class="paperclip-btn" type="button" title="Attach a file">Attach</button>
+        <input id="file-input" data-testid="file-input" type="file" hidden>
         <button id="send" data-testid="send" class="send-btn" type="button">Send</button>
         <span id="checking" class="checking" hidden>checking…</span>
       </div>
@@ -50,6 +53,7 @@
       <p class="latency">Last latency: <span id="last-latency">—</span></p>
       <p class="stat-line">Tier 1 resolved: <span data-testid="stats-tier1" id="stats-tier1">0</span></p>
       <p class="stat-line">Holds: <span data-testid="stats-holds" id="stats-holds">0</span></p>
+      <p class="stat-line">Held then resolved: <span data-testid="stats-held-resolved" id="stats-held-resolved">0</span></p>
     </div>
     <div class="card">
       <h2>Decision log</h2>

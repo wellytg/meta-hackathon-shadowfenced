@@ -70,7 +70,9 @@ def test_stats_from_log_counts_and_tiers(tmp_path, monkeypatch):
     assert set(snap) == {
         "total", "decisions", "by_tier",
         "last_latency_ms", "p50_latency_ms", "p95_latency_ms",
+        "held_then_resolved",
     }
+    assert snap["held_then_resolved"] == 0
 
 
 def test_stats_and_verify_routes_reflect_logged_sends(monkeypatch):

@@ -338,7 +338,7 @@ def test_evidence_card_and_live_underline_hooks():
         'data-testid", "evidence-card"',
         'data-testid", "btn-approve"',
         'data-testid", "btn-deny"',
-        '"Send redacted"',
+        '"Send without flagged part"',
         '"Don\'t send"',
         "Local Muse Glimmer (30B, on this PC) is reviewing",
         "Proven by code",
