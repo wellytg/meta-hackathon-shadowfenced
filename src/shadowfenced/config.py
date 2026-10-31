@@ -22,7 +22,10 @@ _ENV_KEYS = (
     "META_BASE_URL",
     "META_MODEL",
     "SF_CANARY_SEED",
+    "SF_LOG_PATH",
 )
+
+DEFAULT_LOG_PATH = "runs/decisions.jsonl"
 
 
 def _parse_dotenv(path: Path) -> dict[str, str]:
@@ -69,6 +72,7 @@ class Settings(BaseModel):
     meta_base_url: str = ""
     meta_model: str = ""
     canary_seed: str = "demo-seed"
+    log_path: str = DEFAULT_LOG_PATH
 
     @property
     def meta_available(self) -> bool:
@@ -106,6 +110,7 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
         meta_base_url=merged.get("META_BASE_URL", ""),
         meta_model=merged.get("META_MODEL", ""),
         canary_seed=merged.get("SF_CANARY_SEED", "demo-seed"),
+        log_path=merged.get("SF_LOG_PATH", DEFAULT_LOG_PATH),
     )
 
 

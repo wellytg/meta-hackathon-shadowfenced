@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shadowfenced</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>Shadowfenced</h1>
+  <p class="tagline">Nothing sensitive crosses the boundary.</p>
+</header>
+<main class="layout">
+  <section class="chat-col">
+    <div id="thread" class="thread" aria-live="polite"></div>
+    <div class="composer-block">
+      <div class="composer-wrap">
+        <div id="backdrop" class="composer-backdrop" aria-hidden="true"></div>
+        <textarea id="composer" data-testid="composer" class="composer"
+          rows="4" placeholder="Type a message — sensitive text gets underlined…"
+          spellcheck="false"></textarea>
+      </div>
+      <div class="composer-row">
+        <button id="send" data-testid="send" class="send-btn" type="button">Send</button>
+        <span id="checking" class="checking" hidden>checking…</span>
+      </div>
+      <div id="issues" class="issues"></div>
+    </div>
+  </section>
+  <aside class="side-col">
+    <div class="card">
+      <h2>Provider</h2>
+      <label class="provider-label" for="provider">Upstream AI</label>
+      <select id="provider" data-testid="provider-select" class="provider-select">
+        <option value="ollama" selected>Llama 3.2 3B via Ollama (local)</option>
+        <option value="meta" disabled>Meta Muse Spark (cloud) — no key</option>
+      </select>
+    </div>
+    <div class="card">
+      <h2>Decisions</h2>
+      <div id="decision-counts" class="counts"></div>
+      <h3>Resolved by tier</h3>
+      <div id="tier-bar" class="tier-bar"></div>
+      <p class="latency">Last latency: <span id="last-latency">—</span></p>
+      <p class="stat-line">Tier 1 resolved: <span data-testid="stats-tier1" id="stats-tier1">0</span></p>
+      <p class="stat-line">Holds: <span data-testid="stats-holds" id="stats-holds">0</span></p>
+    </div>
+    <div class="card">
+      <h2>Decision log</h2>
+      <p><span id="log-badge" data-testid="log-ok" class="log-badge">log chain verified · 0 events</span></p>
+    </div>
+  </aside>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

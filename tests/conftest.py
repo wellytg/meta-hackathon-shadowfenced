@@ -3,4 +3,12 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_decision_log(monkeypatch, tmp_path):
+    """Keep the hash-chained decision log hermetic: every test logs temp."""
+    monkeypatch.setenv("SF_LOG_PATH", str(tmp_path / "decisions.jsonl"))

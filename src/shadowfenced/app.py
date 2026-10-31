@@ -33,6 +33,25 @@ _REGISTRY: CanaryRegistry | None = None
 
 REGISTRY_KINDS = ("db_password", "api_key")
 
+# Prepended (as a system message) to upstream requests that carry redacted
+# text so the model treats placeholders as the real values.
+REDACT_NOTE = (
+    "Some values in the user's message were replaced by placeholders "
+    "such as [PII_EMAIL_1] or [CODENAME_1] for privacy. Treat each "
+    "placeholder as the real value, use it verbatim where needed, and "
+    "do not comment on it."
+)
+
+
+def _log_decision(decision: engine.Decision, text: str) -> None:
+    """Append one gate decision to the hash-chained log; never fail the gate."""
+    try:
+        from . import ecs_log
+
+        ecs_log.append_decision(get_settings().log_path, decision, text)
+    except Exception:
+        pass
+
 
 def get_policy() -> Policy:
     """Load the org policy once and reuse it."""
@@ -123,10 +142,18 @@ def _shadowfenced_field(decision: engine.Decision) -> dict[str, Any]:
 
 
 def _forward_messages(
-    messages: list[dict[str, Any]], sent_text: str | None
+    messages: list[dict[str, Any]],
+    sent_text: str | None,
+    decision: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Rebuild upstream messages with the gated user text only."""
+    """Rebuild upstream messages with the gated user text only.
+
+    On REDACT the redacted text goes upstream with a leading system note
+    explaining the placeholders; ALLOW forwards plain user text.
+    """
     kept = [m for m in messages if isinstance(m, dict) and m.get("role") != "user"]
+    if decision == "REDACT" and sent_text is not None:
+        kept.insert(0, {"role": "system", "content": REDACT_NOTE})
     if sent_text is not None:
         kept.append({"role": "user", "content": sent_text})
     return kept
@@ -201,17 +228,27 @@ def send(body: SendRequest) -> dict[str, Any]:
         [c.model_dump() for c in body.choices],
     )
     if not clean:
-        return _send_response(_hold_for(decision, "non_text_content"), None, [], [])
+        decision = _hold_for(decision, "non_text_content")
+        _log_decision(decision, text)
+        return _send_response(decision, None, [], [])
+    _log_decision(decision, text)
     if decision.decision in ("BLOCK", "HOLD"):
         return _send_response(decision, None, [], [])
     try:
         answer = _send_upstream(
-            _forward_messages(body.messages, decision.sent_text), body.provider
+            _forward_messages(
+                body.messages, decision.sent_text, decision.decision
+            ),
+            body.provider,
         )
     except UpstreamError as exc:
         raise HTTPException(
             status_code=502,
-            detail={"code": "shadowfenced_upstream", "message": str(exc)},
+            detail={
+                "code": "shadowfenced_upstream",
+                "type": "shadowfenced_upstream",
+                "message": str(exc),
+            },
         ) from exc
     mapping = load_mapping(decision.decision_id)
     rehydrated, highlights, unmatched = rehydrate(answer, mapping)
@@ -259,14 +296,18 @@ def chat_completions(body: ChatRequest) -> Any:
     text, clean = extract_user_text(body.messages)
     if not clean:
         decision = engine.gate(text, get_policy(), get_registry())
+        decision = _hold_for(decision, "non-text content parts need review")
+        _log_decision(decision, text)
         return _hold_response(decision, "non-text content parts need review")
     decision = engine.gate(text, get_policy(), get_registry())
+    _log_decision(decision, text)
     if decision.decision == "BLOCK":
         return JSONResponse(
             status_code=403,
             content={
                 "error": {
                     "code": "shadowfenced_block",
+                    "type": "shadowfenced_block",
                     "message": "blocked: proven secret would leak",
                 },
                 "shadowfenced": _shadowfenced_field(decision),
@@ -277,7 +318,10 @@ def chat_completions(body: ChatRequest) -> Any:
         return _hold_response(decision, "ambiguous spans need human review")
     try:
         answer = _send_upstream(
-            _forward_messages(body.messages, decision.sent_text), None
+            _forward_messages(
+                body.messages, decision.sent_text, decision.decision
+            ),
+            None,
         )
     except UpstreamError as exc:
         return JSONResponse(
@@ -285,6 +329,7 @@ def chat_completions(body: ChatRequest) -> Any:
             content={
                 "error": {
                     "code": "shadowfenced_upstream",
+                    "type": "shadowfenced_upstream",
                     "message": str(exc),
                 },
                 "shadowfenced": _shadowfenced_field(decision),
@@ -320,12 +365,33 @@ def _hold_response(decision: engine.Decision, message: str) -> JSONResponse:
     return JSONResponse(
         status_code=409,
         content={
-            "error": {"code": "shadowfenced_hold", "message": message},
+            "error": {
+                "code": "shadowfenced_hold",
+                "type": "shadowfenced_hold",
+                "message": message,
+            },
             "review_url": f"/api/holds/{decision.decision_id}",
             "shadowfenced": _shadowfenced_field(decision),
         },
         headers={"X-Shadowfenced-Decision": "HOLD"},
     )
+
+
+@app.get("/api/stats")
+def stats() -> dict[str, Any]:
+    """Decision counts and per-tier latency summaries from the decision log."""
+    from . import stats as stats_module
+
+    return stats_module.snapshot(get_settings().log_path)
+
+
+@app.get("/api/log/verify")
+def log_verify() -> dict[str, Any]:
+    """Verify the hash-chained decision log; return ``{ok, events}``."""
+    from . import ecs_log
+
+    ok, count = ecs_log.verify(get_settings().log_path)
+    return {"ok": ok, "events": count}
 
 
 def _stream_response(
@@ -369,3 +435,7 @@ def main() -> None:
     import uvicorn
 
     uvicorn.run(app, host="127.0.0.1", port=8765)
+
+
+if __name__ == "__main__":
+    main()
