@@ -31,8 +31,8 @@
   code-verified → auto-send redacted; confident benign → release; otherwise human. The UI never waits on Glimmer.
 
 ## 2026-10-31 — Meta Model API upstream
-- `api.meta.ai` failed TLS verification from Python: an HTTPS-scanning antivirus re-signs HTTPS for scanning,
-  and its root is in the Windows store, not in certifi. Fix: `truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)` as the
+- `api.meta.ai` failed TLS verification from Python: an HTTPS-scanning antivirus re-signs HTTPS for scanning, and its root is
+  in the Windows store, not in certifi. Fix: `truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)` as the
   httpx `verify` (verification stays on). Dependency: `truststore`.
 - `muse-spark-1.3` via `https://api.meta.ai/v1/chat/completions`: 200 in 0.7 s. With `max_tokens` 20 the content was
   empty because the model reasons first (275 reasoning tokens of 289). Do not cap `max_tokens` low; omit it or use ≥ 1024.
