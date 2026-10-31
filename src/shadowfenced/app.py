@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import engine
+from . import holds
 from . import judge as judge_module
 from .canary import CanaryRegistry
 from .config import get_settings
@@ -225,6 +226,11 @@ class ChatRequest(BaseModel):
     stream: bool = False
 
 
+class RuleRequest(BaseModel):
+    approve: bool = False
+    reason: str | None = None
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     """Liveness probe."""
@@ -286,7 +292,10 @@ def _with_live_suspicions(text: str, spans: list[Span]) -> list[Span]:
                     tier=2,
                     proof="model",
                     status="suspicion",
-                    message=judgement.reason,
+                    message=(
+                        f"model suspicion: {judgement.cls} "
+                        f"(confidence {judgement.confidence})"
+                    ),
                     why=(
                         f"live model suspicion: {judgement.cls} "
                         f"(confidence {judgement.confidence})"
@@ -315,9 +324,15 @@ def send(body: SendRequest) -> dict[str, Any]:
     if not clean:
         decision = _hold_for(decision, "non_text_content")
         _log_decision(decision, text)
+        _register_hold(
+            decision, text, body.messages, body.provider,
+            why="non-text content parts need review",
+        )
         return _send_response(decision, None, [], [])
     _log_decision(decision, text)
     if decision.decision in ("BLOCK", "HOLD"):
+        if decision.decision == "HOLD":
+            _register_hold(decision, text, body.messages, body.provider)
         return _send_response(decision, None, [], [])
     try:
         answer = _send_upstream(
@@ -350,7 +365,45 @@ def _hold_for(decision: engine.Decision, reason: str) -> engine.Decision:
         resolved_tier=decision.resolved_tier,
         latency_ms=decision.latency_ms,
         reasons=[*decision.reasons, reason],
+        status=decision.status,
     )
+
+
+def _review_sender(
+    messages: list[dict[str, Any]], provider: str | None
+) -> holds.Sender:
+    """Build the auto-send/approve sender for one hold's messages."""
+
+    def _send(sent_text: str) -> str:
+        return _send_upstream(
+            _forward_messages(messages, sent_text, "REDACT"), provider
+        )
+
+    return _send
+
+
+def _register_hold(
+    decision: engine.Decision,
+    text: str,
+    messages: list[Any],
+    provider: str | None,
+    *,
+    why: str | None = None,
+) -> None:
+    """Register a HOLD for background Glimmer review; never fail sends."""
+    try:
+        hold = holds.create_hold(
+            decision, text, messages, provider, needs_human_why=why,
+        )
+        if hold.status == "reviewing":
+            holds.start_review(
+                hold.hold_id,
+                sender=_review_sender(
+                    [m for m in messages if isinstance(m, dict)], provider
+                ),
+            )
+    except Exception:
+        pass
 
 
 def _send_response(
@@ -364,7 +417,7 @@ def _send_response(
         "reasons": decision.reasons,
     }
     evidence.update(decision.evidence or {})
-    return {
+    response: dict[str, Any] = {
         "decision": decision.decision,
         "decision_id": decision.decision_id,
         "sent_text": decision.sent_text,
@@ -376,6 +429,9 @@ def _send_response(
         "latency_ms": decision.latency_ms,
         "unmatched_placeholders": unmatched,
     }
+    if decision.decision == "HOLD":
+        response["review_url"] = f"/api/holds/{decision.decision_id}"
+    return response
 
 
 @app.post("/v1/chat/completions")
@@ -386,9 +442,15 @@ def chat_completions(body: ChatRequest) -> Any:
         decision = engine.gate(text, get_policy(), get_registry(), mode="send")
         decision = _hold_for(decision, "non-text content parts need review")
         _log_decision(decision, text)
+        _register_hold(
+            decision, text, body.messages, None,
+            why="non-text content parts need review",
+        )
         return _hold_response(decision, "non-text content parts need review")
     decision = engine.gate(text, get_policy(), get_registry(), mode="send")
     _log_decision(decision, text)
+    if decision.decision == "HOLD":
+        _register_hold(decision, text, body.messages, None)
     if decision.decision == "BLOCK":
         return JSONResponse(
             status_code=403,
@@ -462,6 +524,93 @@ def _hold_response(decision: engine.Decision, message: str) -> JSONResponse:
             "shadowfenced": _shadowfenced_field(decision),
         },
         headers={"X-Shadowfenced-Decision": "HOLD"},
+    )
+
+
+def _hold_not_found(hold_id: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={
+            "error": {
+                "code": "shadowfenced_unknown_hold",
+                "type": "shadowfenced_unknown_hold",
+                "message": f"unknown hold {hold_id}",
+            },
+        },
+    )
+
+
+@app.get("/api/holds/{hold_id}")
+def hold_status(hold_id: str) -> Any:
+    """Return one hold's evidence card."""
+    hold = holds.HOLDS.get(hold_id)
+    if hold is None:
+        return _hold_not_found(hold_id)
+    return holds.hold_card(hold)
+
+
+@app.post("/api/holds/{hold_id}/rule")
+def hold_rule(hold_id: str, body: RuleRequest) -> Any:
+    """Rule on a hold: approve forwards the redacted text only, deny
+    sends nothing. An approve returns the /api/send shape."""
+    hold = holds.HOLDS.get(hold_id)
+    if hold is None:
+        return _hold_not_found(hold_id)
+    if not body.approve:
+        denied = holds.deny_hold(hold, body.reason)
+        if denied is None:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": {
+                        "code": "shadowfenced_hold_resolved",
+                        "type": "shadowfenced_hold_resolved",
+                        "message": f"hold {hold_id} is already {hold.status}",
+                    },
+                },
+            )
+        return holds.hold_card(denied)
+    try:
+        result = holds.approve_hold(
+            hold,
+            sender=_review_sender(
+                [m for m in hold.messages if isinstance(m, dict)],
+                hold.provider,
+            ),
+        )
+    except UpstreamError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "shadowfenced_upstream",
+                "type": "shadowfenced_upstream",
+                "message": str(exc),
+            },
+        ) from exc
+    if result is None:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": {
+                    "code": "shadowfenced_hold_resolved",
+                    "type": "shadowfenced_hold_resolved",
+                    "message": f"hold {hold_id} is already {hold.status}",
+                },
+            },
+        )
+    decision = engine.Decision(
+        decision="REDACT" if result["placeholders"] else "ALLOW",
+        decision_id=result["mapping_id"],
+        spans=hold.spans,
+        sent_text=result["sent_text"],
+        placeholders=result["placeholders"],
+        resolved_tier=4,
+        latency_ms={},
+        reasons=["human approved redacted text -> send"],
+        status="complete",
+    )
+    return _send_response(
+        decision, result["answer"], result["highlights"], result["unmatched"]
     )
 
 

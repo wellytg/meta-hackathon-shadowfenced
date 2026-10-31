@@ -25,11 +25,10 @@ def live_mode(monkeypatch):
 def _judgement_payload(**overrides) -> dict:
     payload = {
         "cls": "secret",
-        "sensitivity": 0.8,
         "is_beacon": False,
-        "span": "aB3xK9qW2mZ7pL5sT8vN4yU6cE",
+        "sensitivity": 0.8,
         "confidence": 0.7,
-        "reason": "looks like a secret token",
+        "span": "aB3xK9qW2mZ7pL5sT8vN4yU6cE",
     }
     payload.update(overrides)
     return payload
@@ -83,8 +82,9 @@ def test_wrong_schema_returns_none(live_mode):
         {"sensitivity": 2.0},
         {"confidence": -0.1},
         {"cls": "nonsense"},
-        {"span": "x" * 201},
-        {"reason": "y" * 201},
+        {"span": "one two three four five six seven eight nine"},
+        {"is_beacon": "maybe"},
+        {"sensitivity": "high"},
     ],
 )
 def test_out_of_range_rejected(live_mode, override):
@@ -172,6 +172,51 @@ def test_off_mode_returns_none_without_request(monkeypatch):
     )
     assert judge.judge(WINDOW, "m", live=False, transport=transport) is None
     assert calls == []
+
+
+def test_schema_is_minimal_fully_required_and_range_free():
+    schema = Judgement.model_json_schema()
+    assert set(schema["properties"]) == {
+        "cls", "is_beacon", "sensitivity", "confidence", "span",
+    }
+    assert set(schema["required"]) == {
+        "cls", "is_beacon", "sensitivity", "confidence", "span",
+    }
+    assert schema["properties"]["cls"]["enum"] == [
+        "secret", "pii", "business", "beacon", "benign",
+    ]
+    text = json.dumps(schema)
+    for keyword in (
+        "minimum", "maximum", "minLength", "maxLength",
+        "exclusiveMinimum", "exclusiveMaximum",
+    ):
+        assert keyword not in text
+
+
+def test_system_prompt_is_minimal():
+    assert judge.SYSTEM_PROMPT == (
+        "Classify text a user is about to send to an outside AI. "
+        "beacon = reveals where secrets or personal data are stored "
+        "or were moved. "
+        "span = the shortest exact sensitive phrase copied from the text, "
+        "at most 8 words, or empty. JSON only."
+    )
+
+
+def test_send_judge_asks_for_80_tokens(live_mode):
+    calls: list[httpx.Request] = []
+    transport = _transport_for(
+        json.dumps(_judgement_payload()), calls=calls
+    )
+    assert judge.judge(WINDOW, "m", live=False, transport=transport) is not None
+    body = json.loads(calls[0].content.decode("utf-8"))
+    assert body["options"]["num_predict"] == 80
+
+
+def test_send_timeout_defaults_to_60_seconds():
+    from shadowfenced.config import get_settings
+
+    assert get_settings({}).judge_timeout_s == 60.0
 
 
 def test_replay_mode_reads_fixture(monkeypatch):

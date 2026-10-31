@@ -221,7 +221,8 @@ body {
   background: rgba(199, 119, 0, 0.12);
 }
 .composer-backdrop mark.mark-beacon,
-.composer-backdrop mark.mark-review {
+.composer-backdrop mark.mark-review,
+.composer-backdrop mark.mark-live {
   border-bottom: 2px dotted var(--mark-review);
   background: rgba(130, 80, 223, 0.10);
 }
@@ -324,3 +325,95 @@ body {
 }
 
 .log-badge.broken { background: #fdecea; color: var(--block); border-color: #f5c6cb; }
+
+.evidence-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ev-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.ev-elapsed {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border: 2px solid var(--line);
+  border-top-color: var(--mark-review);
+  border-radius: 50%;
+  animation: ev-spin 0.9s linear infinite;
+}
+
+@keyframes ev-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+}
+
+.ev-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.ev-col h4, .ev-preview h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.ev-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  overflow-wrap: break-word;
+}
+
+.ev-empty { list-style: none; color: var(--muted); }
+
+.ev-preview-text {
+  background: #f8f9fb;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.ev-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.ev-actions button {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ev-actions button:disabled { opacity: 0.45; cursor: default; }
+
+.ev-judgement {
+  width: 100%;
+  font-size: 13px;
+  font-family: ui-monospace, Consolas, monospace;
+  color: var(--ink);
+}

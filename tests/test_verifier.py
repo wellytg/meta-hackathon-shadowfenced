@@ -39,7 +39,6 @@ def _judge(cls, span, **overrides):
         "is_beacon": cls == "beacon",
         "span": span,
         "confidence": 0.7,
-        "reason": "test claim",
     }
     payload.update(overrides)
     return Judgement.model_validate(payload)

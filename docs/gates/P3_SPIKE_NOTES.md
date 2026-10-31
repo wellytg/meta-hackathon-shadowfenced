@@ -21,3 +21,11 @@
 - With both on the GPU, loading one model evicts the other (cold reload ~25 s for Glimmer).
 - Fix: live model on CPU only (`num_gpu: 0`): llama3.2:3b at **1.4-3.3 s** per decision, and both stay resident
   (`keep_alive: -1`). Glimmer stays 6-12 s warm. Settings: `SF_LIVE_NUM_GPU=0`, `SF_LIVE_TIMEOUT_S=4`, `SF_JUDGE_TIMEOUT_S=20`.
+
+## 2026-10-31 — Judge under real load (after T8-T9)
+- With the T8 schema (incl. a free-text `reason`), Glimmer wrote long reasons, ran past `num_predict` 120 and the
+  20 s timeout, and skipped `is_beacon`: every send-time judgement failed → HOLD (fail-closed worked).
+- Host CPU at 100 % from other desktop apps: Glimmer fell to ~2-3 tok/s (from ~5). Minimal schema
+  (cls, is_beacon, sensitivity, confidence, span ≤ 8 words; no reason) → 30-54 tokens, 13-24 s.
+- Decision: asynchronous review. Ambiguous → instant HOLD; Glimmer reviews in the background (60 s timeout);
+  code-verified → auto-send redacted; confident benign → release; otherwise human. The UI never waits on Glimmer.

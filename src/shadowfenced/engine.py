@@ -1,9 +1,11 @@
 """Tier-1-only gate: code findings in, a typed decision out.
 
 Severity ordering is BLOCK > HOLD > REDACT > ALLOW. A proven canary
-blocks; other proven spans redact; ambiguous spans hold for the Tier 2
-judge that lands later; clean text allows. Any internal failure holds
-(fail closed).
+blocks; other proven spans redact; ambiguous spans hold instantly for
+asynchronous Glimmer review (see ``holds``); clean text allows. Any
+internal failure holds (fail closed). The send path never calls the
+judge inline: it returns HOLD fast and review happens in the
+background.
 """
 
 from __future__ import annotations
@@ -13,14 +15,11 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import judge as judge_module
 from . import tier1
-from . import verifier as verifier_module
 from .canary import CanaryRegistry
-from .config import get_settings
 from .policy import Policy
 from .redact import redact, save_mapping
-from .spans import Span, merge_overlaps
+from .spans import Span
 
 DECISIONS = ("ALLOW", "REDACT", "BLOCK", "HOLD")
 
@@ -109,6 +108,7 @@ class Decision:
     latency_ms: dict[str, float] = field(default_factory=dict)
     reasons: list[str] = field(default_factory=list)
     evidence: dict[str, Any] = field(default_factory=dict)
+    status: str = "complete"  # complete | reviewing (async Glimmer review)
 
 
 def _hold(
@@ -153,19 +153,36 @@ def _gate_send(
     reasons: list[str],
     total_started: float,
 ) -> Decision:
-    """Send-time path: judge each ambiguous span, verify in code.
+    """Send-time path: never call the judge inline.
 
-    A confirmed span redacts (blocks when it resolves to a canary); a
-    model-benign span with confidence >= 0.8 and sensitivity < 0.3 is
-    allowed; anything else holds for a human at resolved tier 4. A
-    model answer can never downgrade a Tier 1 proven span.
+    Ambiguous spans HOLD instantly at resolved tier 4 (status
+    ``reviewing``) with ``evidence`` carrying ``proven_by_code`` span
+    ids and ``pending`` span texts; ``holds.start_review`` reviews
+    them in a background thread. Proven-only input redacts and clean
+    input allows, both with no model call.
     """
-    model = get_settings().judge_model
-    tier2_ms = 0.0
-    tier3_ms = 0.0
-    confirmed: list[Span] = []
-    canary_hit = False
-    suspicions: list[dict[str, Any]] = []
+    if ambiguous:
+        latency_ms["tier2"] = 0.0
+        latency_ms["tier3"] = 0.0
+        latency_ms["total"] = (time.perf_counter() - total_started) * 1000
+        reasons.append(
+            f"{len(ambiguous)} ambiguous span(s) need Glimmer review -> HOLD"
+        )
+        return Decision(
+            decision="HOLD",
+            decision_id=uuid.uuid4().hex,
+            spans=spans,
+            sent_text=None,
+            placeholders={},
+            resolved_tier=4,
+            latency_ms=latency_ms,
+            reasons=reasons,
+            evidence={
+                "proven_by_code": [s.span_id for s in proven],
+                "pending": [text[s.cp_start:s.cp_end] for s in ambiguous],
+            },
+            status="reviewing",
+        )
     if not ambiguous:
         latency_ms["tier2"] = 0.0
         latency_ms["tier3"] = 0.0
@@ -199,145 +216,6 @@ def _gate_send(
             latency_ms=latency_ms,
             reasons=reasons,
         )
-    for span in ambiguous:
-        window = judge_module.make_window(text, span.cp_start, span.cp_end)
-        judge_started = time.perf_counter()
-        try:
-            judgement = judge_module.judge(window, model, live=False)
-        except Exception:
-            judgement = None
-        tier2_ms += (time.perf_counter() - judge_started) * 1000
-        if judgement is None:
-            reasons.append(f"{span.span_id} judge unavailable -> HOLD")
-            suspicions.append(
-                {
-                    "span": text[span.cp_start:span.cp_end],
-                    "judgement": None,
-                    "why_unverified": "judge unavailable",
-                }
-            )
-            continue
-        verify_started = time.perf_counter()
-        try:
-            verdict = verifier_module.verify(
-                text, judgement, spans, policy, registry
-            )
-        except Exception as exc:
-            tier3_ms += (time.perf_counter() - verify_started) * 1000
-            reasons.append(
-                f"{span.span_id} verification failed "
-                f"({type(exc).__name__}) -> HOLD"
-            )
-            suspicions.append(
-                {
-                    "span": text[span.cp_start:span.cp_end],
-                    "judgement": _judgement_dump(judgement),
-                    "why_unverified": f"verification failed: {type(exc).__name__}",
-                }
-            )
-            continue
-        tier3_ms += (time.perf_counter() - verify_started) * 1000
-        if verdict.confirmed and verdict.span is not None:
-            if verdict.span.subclass == "canary":
-                canary_hit = True
-            confirmed.append(verdict.span)
-            reasons.append(
-                f"{span.span_id} tier3 confirmed ({verdict.cls}) -> "
-                f"{'BLOCK' if verdict.span.subclass == 'canary' else 'redact'}"
-            )
-            continue
-        sensitivity = getattr(judgement, "sensitivity", 1.0)
-        if isinstance(judgement, dict):
-            sensitivity = judgement.get("sensitivity", 1.0)
-        confidence = getattr(judgement, "confidence", 0.0)
-        if isinstance(judgement, dict):
-            confidence = judgement.get("confidence", 0.0)
-        try:
-            benign_clear = (
-                getattr(judgement, "cls", None)
-                if not isinstance(judgement, dict)
-                else judgement.get("cls")
-            ) == "benign" and float(confidence) >= 0.8 and float(sensitivity) < 0.3
-        except (TypeError, ValueError):
-            benign_clear = False
-        if benign_clear:
-            reasons.append(
-                f"{span.span_id} model benign "
-                f"(confidence {confidence}, sensitivity {sensitivity}) "
-                f"-> allow"
-            )
-            continue
-        reasons.append(f"{span.span_id} unverified ({verdict.why}) -> HOLD")
-        suspicions.append(
-            {
-                "span": text[span.cp_start:span.cp_end],
-                "judgement": _judgement_dump(judgement),
-                "why_unverified": verdict.why,
-            }
-        )
-    latency_ms["tier2"] = tier2_ms
-    latency_ms["tier3"] = tier3_ms
-    latency_ms["total"] = (time.perf_counter() - total_started) * 1000
-    if suspicions:
-        reasons.append(f"{len(suspicions)} span(s) need human review -> HOLD")
-        return Decision(
-            decision="HOLD",
-            decision_id=uuid.uuid4().hex,
-            spans=spans,
-            sent_text=None,
-            placeholders={},
-            resolved_tier=4,
-            latency_ms=latency_ms,
-            reasons=reasons,
-            evidence={
-                "proven_by_code": [s.span_id for s in proven],
-                "model_suspicion_only": suspicions,
-            },
-        )
-    if canary_hit:
-        reasons.append("model-confirmed span resolves to a canary -> BLOCK")
-        return Decision(
-            decision="BLOCK",
-            decision_id=uuid.uuid4().hex,
-            spans=spans,
-            sent_text=None,
-            placeholders={},
-            resolved_tier=3,
-            latency_ms=latency_ms,
-            reasons=reasons,
-        )
-    combined = merge_overlaps(proven + confirmed)
-    if combined:
-        sent_text, mapping = redact(text, combined)
-        decision_id = uuid.uuid4().hex
-        save_mapping(decision_id, mapping)
-        reasons.append(
-            f"{len(combined)} span(s) redacted "
-            f"({len(mapping)} placeholder(s)) -> REDACT"
-        )
-        return Decision(
-            decision="REDACT",
-            decision_id=decision_id,
-            spans=spans,
-            sent_text=sent_text,
-            placeholders=dict(mapping),
-            resolved_tier=3,
-            latency_ms=latency_ms,
-            reasons=reasons,
-        )
-    reasons.append("model cleared every ambiguous span -> ALLOW")
-    return Decision(
-        decision="ALLOW",
-        decision_id=uuid.uuid4().hex,
-        spans=spans,
-        sent_text=text,
-        placeholders={},
-        resolved_tier=3,
-        latency_ms=latency_ms,
-        reasons=reasons,
-    )
-
-
 def gate(
     text: str,
     policy: Policy,
@@ -352,10 +230,10 @@ def gate(
     allows keeping that span class, and never for secrets.
 
     ``mode="tier1"`` (default) resolves ambiguous spans to HOLD at
-    tier 1. ``mode="send"`` asks the Tier 2 judge about each ambiguous
-    span and verifies the answer in code (Tier 3): confirmed spans
-    redact (or block on a canary), model-cleared spans are allowed, and
-    anything else holds at resolved tier 4.
+    tier 1. ``mode="send"`` HOLDS instantly at resolved tier 4 (status
+    ``reviewing``) without calling the judge: ``holds.start_review``
+    judges each ambiguous span in a background thread and verifies the
+    answer in code. Proven-only input redacts and clean input allows.
     """
     total_started = time.perf_counter()
     try:

@@ -1,11 +1,17 @@
 """Tier 2 judge: a local model classifies an ambiguous span in context.
 
 ``judge`` sends one ambiguous span plus ~300 chars of context on each side
-(never the whole document) to Ollama's native ``/api/chat`` endpoint with a
-pydantic JSON schema as ``format``. Any failure — timeout, transport error,
-invalid JSON, schema violation — returns None so the gate fails closed.
-``SF_TIER2_MODE`` selects ``live`` (default), ``replay`` (fixture answers
-keyed by sha256 of the window, CI only), or ``off`` (always None).
+(never the whole document) to Ollama's native ``/api/chat`` endpoint with
+a minimal pydantic JSON schema as ``format``. Any failure — timeout,
+transport error, invalid JSON, schema violation — returns None so the
+gate fails closed. ``SF_TIER2_MODE`` selects ``live`` (default),
+``replay`` (fixture answers keyed by sha256 of the window, CI only), or
+``off`` (always None).
+
+The schema is deliberately minimal — ``{cls, is_beacon, sensitivity,
+confidence, span}``, all required, no ``reason`` and no min/max keywords
+— so Glimmer answers in ~30-50 tokens. Ranges are validated in pydantic
+after parsing (reject, never clamp).
 """
 
 from __future__ import annotations
@@ -16,21 +22,17 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, field_validator
 
 from .config import get_settings
 
 JudgementClass = Literal["secret", "pii", "business", "beacon", "benign"]
 
 SYSTEM_PROMPT = (
-    "You classify text a user is about to send to an outside AI. "
-    "Reply with JSON only, matching the schema. "
-    "Classes: secret (passwords, keys, tokens, encoded secrets), "
-    "pii (email, phone, SSN, IDs near a name, account numbers), "
-    "business (internal codenames, client names, unreleased figures), "
-    "beacon (text that reveals where sensitive data is or was stored "
-    "or removed), benign (nothing sensitive). "
-    "The span field must be copied exactly from the text. JSON only."
+    "Classify text a user is about to send to an outside AI. "
+    "beacon = reveals where secrets or personal data are stored or were moved. "
+    "span = the shortest exact sensitive phrase copied from the text, "
+    "at most 8 words, or empty. JSON only."
 )
 
 WINDOW_RADIUS = 300
@@ -42,14 +44,33 @@ _REPLAY_PATH = (
 
 
 class Judgement(BaseModel):
-    """One model verdict on an ambiguous span."""
+    """One model verdict on an ambiguous span (no free-text reason)."""
 
     cls: JudgementClass
-    sensitivity: float = Field(ge=0.0, le=1.0)
-    is_beacon: bool = False
-    span: str = Field(max_length=200)
-    confidence: float = Field(ge=0.0, le=1.0)
-    reason: str = Field(max_length=200)
+    is_beacon: bool
+    sensitivity: float
+    confidence: float
+    span: str
+
+    @field_validator("sensitivity", "confidence")
+    @classmethod
+    def _unit_range(cls, value: float) -> float:
+        """Reject out-of-range scores (never clamp)."""
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ValueError("score must be a number")
+        if not 0.0 <= float(value) <= 1.0:
+            raise ValueError("score must be within 0..1")
+        return float(value)
+
+    @field_validator("span")
+    @classmethod
+    def _span_word_limit(cls, value: str) -> str:
+        """Reject spans longer than 8 words (the prompt asks for <= 8)."""
+        if not isinstance(value, str):
+            raise ValueError("span must be a string")
+        if len(value.split()) > 8:
+            raise ValueError("span must be at most 8 words")
+        return value
 
 
 def tier2_mode() -> str:
@@ -83,7 +104,7 @@ def _request_body(window: str, model: str, *, live: bool) -> dict[str, Any]:
         "temperature": 0,
         "seed": 7,
         "num_ctx": 2048,
-        "num_predict": 120,
+        "num_predict": 80,
     }
     if live:
         options["num_gpu"] = get_settings().live_num_gpu

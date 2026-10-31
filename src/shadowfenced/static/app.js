@@ -11,9 +11,13 @@
   var providerSel = document.getElementById("provider");
 
   var scanSeq = 0;       // latest scan request id; stale responses are dropped
+  var liveSeq = 0;       // latest live-scan id; stale responses are dropped
   var spans = [];        // spans from the latest accepted scan
+  var liveSpans = [];    // tier-2 model suspicions from the latest live scan
   var choices = {};      // span_id -> "redact" | "keep", only spans the user clicked
   var scanTimer = null;
+  var liveTimer = null;
+  var LIVE_TOOLTIP = "Model suspicion (Llama 3.2, local) \u2014 checked again at send";
   var emptyHint = document.getElementById("empty-hint");
 
   function updateEmptyHint() {
@@ -29,8 +33,10 @@
   }
 
   // Underline class: red for secrets, orange for pii/business,
-  // purple dotted for beacons and anything ambiguous (needs review).
+  // purple dotted for beacons, anything ambiguous (needs review),
+  // and tier-2 live model suspicions.
   function markClass(span) {
+    if (span.tier === 2) return "mark-live";
     if (span.status === "ambiguous") return "mark-review";
     if (span.cls === "secret") return "mark-secret";
     if (span.cls === "pii") return "mark-pii";
@@ -51,9 +57,11 @@
     ordered.forEach(function (span) {
       if (span.start < cursor || span.start >= span.end) return;
       html += escapeHtml(text.slice(cursor, span.start));
+      var liveTip = span.tier === 2 ?
+        ' title="' + escapeHtml(LIVE_TOOLTIP) + '"' : "";
       html += '<mark data-testid="' + escapeHtml(testIdFor(span)) + '"' +
         ' data-span-id="' + escapeHtml(span.span_id) + '"' +
-        ' class="' + escapeHtml(markClass(span)) + '">' +
+        ' class="' + escapeHtml(markClass(span)) + '"' + liveTip + '>' +
         escapeHtml(text.slice(span.start, span.end)) + "</mark>";
       cursor = span.end;
     });
@@ -137,15 +145,37 @@
     });
   }
 
-  function scanNow() {
+  function scanNow(live) {
     var text = composer.value;
-    var mySeq = ++scanSeq;
     if (!text) {
-      spans = [];
-      renderBackdrop(text, spans);
-      renderIssues(spans, null);
+      if (!live) {
+        spans = [];
+        renderBackdrop(text, spans);
+        renderIssues(spans, null);
+      }
+      liveSpans = [];
       return;
     }
+    if (live) {
+      var myLive = ++liveSeq;
+      fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text, mode: "live" })
+      })
+        .then(function (resp) { return resp.json(); })
+        .then(function (body) {
+          if (myLive !== liveSeq) return; // stale response
+          if (composer.value !== text) return; // stale text
+          liveSpans = (body.spans || []).filter(function (s) {
+            return s.tier === 2;
+          });
+          renderBackdrop(composer.value, spans.concat(liveSpans));
+        })
+        .catch(function () { /* live hints are advisory */ });
+      return;
+    }
+    var mySeq = ++scanSeq;
     fetch("/api/scan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -154,7 +184,11 @@
       .then(function (resp) { return resp.json(); })
       .then(function (body) {
         if (mySeq !== scanSeq) return; // stale response
+        if (composer.value !== text) return; // stale text
         spans = body.spans || [];
+        // A fresh tier-1 pass invalidates older live hints; they come
+        // back on the next typing pause.
+        liveSpans = [];
         // No default choices: only spans the user explicitly clicks are
         // sent, so the gate never reports a choice the user never made.
         choices = {};
@@ -166,7 +200,10 @@
 
   function queueScan() {
     if (scanTimer) clearTimeout(scanTimer);
-    scanTimer = setTimeout(scanNow, 250);
+    scanTimer = setTimeout(function () { scanNow(false); }, 250);
+    // Live model hints arrive after a 1200 ms typing pause.
+    if (liveTimer) clearTimeout(liveTimer);
+    liveTimer = setTimeout(function () { scanNow(true); }, 1200);
   }
 
   function highlightPlaceholders(text) {
@@ -348,6 +385,9 @@
           answer.innerHTML = highlightRanges(body.answer, body.answer_highlights);
           thread.appendChild(answer);
         }
+        if (decision === "HOLD" && body.decision_id) {
+          renderHoldCard(body.decision_id, banner);
+        }
         updateEmptyHint();
         refreshStats();
       })
@@ -367,7 +407,230 @@
       });
   }
 
+  // Evidence card for one HOLD: two columns (proven vs suspicion),
+  // a reviewing spinner with elapsed seconds, then the final outcome.
+  function renderHoldCard(holdId, banner) {
+    var card = document.createElement("div");
+    card.className = "evidence-card";
+    card.setAttribute("data-testid", "evidence-card");
+
+    var status = document.createElement("div");
+    status.className = "ev-status";
+    var spinner = document.createElement("span");
+    spinner.className = "spinner";
+    var label = document.createElement("span");
+    label.className = "ev-label";
+    label.textContent = "Local Muse Glimmer (30B, on this PC) is reviewing\u2026 ";
+    var elapsed = document.createElement("span");
+    elapsed.className = "ev-elapsed";
+    elapsed.textContent = "0s";
+    status.appendChild(spinner);
+    status.appendChild(label);
+    status.appendChild(elapsed);
+    card.appendChild(status);
+
+    var cols = document.createElement("div");
+    cols.className = "ev-cols";
+    function makeCol(title) {
+      var col = document.createElement("div");
+      col.className = "ev-col";
+      var head = document.createElement("h4");
+      head.textContent = title;
+      var list = document.createElement("ul");
+      list.className = "ev-list";
+      col.appendChild(head);
+      col.appendChild(list);
+      cols.appendChild(col);
+      return list;
+    }
+    var provenList = makeCol("Proven by code");
+    var suspList = makeCol("Model suspicion only");
+    card.appendChild(cols);
+
+    var previewWrap = document.createElement("div");
+    previewWrap.className = "ev-preview";
+    var previewHead = document.createElement("h4");
+    previewHead.textContent = "Redacted preview";
+    var preview = document.createElement("div");
+    preview.className = "ev-preview-text";
+    previewWrap.appendChild(previewHead);
+    previewWrap.appendChild(preview);
+    card.appendChild(previewWrap);
+
+    var actions = document.createElement("div");
+    actions.className = "ev-actions";
+    card.appendChild(actions);
+
+    thread.appendChild(card);
+
+    var startedAt = Date.now();
+    var polls = 0;
+    var timer = setInterval(function () {
+      elapsed.textContent = Math.floor((Date.now() - startedAt) / 1000) + "s";
+    }, 1000);
+
+    function fillList(ul, items) {
+      ul.innerHTML = "";
+      items.forEach(function (item) {
+        var li = document.createElement("li");
+        li.textContent = item;
+        ul.appendChild(li);
+      });
+      if (!items.length) {
+        var empty = document.createElement("li");
+        empty.className = "ev-empty";
+        empty.textContent = "\u2014";
+        ul.appendChild(empty);
+      }
+    }
+
+    function stop() {
+      clearInterval(timer);
+      spinner.hidden = true;
+    }
+
+    function finishBanner(decision, text) {
+      banner.setAttribute("data-decision", decision);
+      banner.textContent = text;
+    }
+
+    function showHoldAnswer(answerText) {
+      var bubble = document.createElement("div");
+      bubble.className = "bubble answer";
+      bubble.setAttribute("data-testid", "answer");
+      bubble.innerHTML = highlightRanges(answerText, []);
+      thread.appendChild(bubble);
+    }
+
+    function rule(ok, approveBtn, denyBtn) {
+      approveBtn.disabled = true;
+      denyBtn.disabled = true;
+      fetch("/api/holds/" + encodeURIComponent(holdId) + "/rule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approve: ok })
+      })
+        .then(function (resp) {
+          return resp.json().then(function (body) {
+            return { ok: resp.ok, body: body };
+          });
+        })
+        .then(function (res) {
+          if (ok && res.ok) {
+            finishBanner(
+              res.body.decision || "REDACT",
+              res.body.user_message || "Sent with redactions."
+            );
+            if (res.body.answer != null) showHoldAnswer(res.body.answer);
+            label.textContent = "Approved: the redacted text was sent.";
+          } else if (!ok && res.body && res.body.user_message) {
+            finishBanner("HOLD", res.body.user_message);
+            label.textContent = res.body.user_message;
+          } else {
+            approveBtn.disabled = false;
+            denyBtn.disabled = false;
+            label.textContent = "Something went wrong; try again.";
+          }
+          stop();
+          updateEmptyHint();
+          refreshStats();
+        })
+        .catch(function () {
+          approveBtn.disabled = false;
+          denyBtn.disabled = false;
+          label.textContent = "Something went wrong; try again.";
+        });
+    }
+
+    function offerChoice() {
+      var approveBtn = document.createElement("button");
+      approveBtn.type = "button";
+      approveBtn.setAttribute("data-testid", "btn-approve");
+      approveBtn.textContent = "Send redacted";
+      var denyBtn = document.createElement("button");
+      denyBtn.type = "button";
+      denyBtn.setAttribute("data-testid", "btn-deny");
+      denyBtn.textContent = "Don't send";
+      approveBtn.addEventListener("click", function () { rule(true, approveBtn, denyBtn); });
+      denyBtn.addEventListener("click", function () { rule(false, approveBtn, denyBtn); });
+      actions.appendChild(approveBtn);
+      actions.appendChild(denyBtn);
+    }
+
+    function poll() {
+      if (polls++ > 180) {
+        stop();
+        label.textContent = "Review timed out. Decide below.";
+        offerChoice();
+        return;
+      }
+      fetch("/api/holds/" + encodeURIComponent(holdId))
+        .then(function (resp) { return resp.json(); })
+        .then(function (body) {
+          fillList(provenList, (body.proven_by_code || []).map(function (p) {
+            return p.text;
+          }));
+          var suspicions = body.model_suspicion_only || [];
+          fillList(suspList, suspicions.map(function (m) { return m.span || ""; }));
+          preview.textContent = body.redacted_preview || "";
+          var st = body.status;
+          if (st === "reviewing") {
+            setTimeout(poll, 1000);
+            return;
+          }
+          stop();
+          if (st === "redacted_sent") {
+            finishBanner("REDACT", body.user_message || "Sent with redactions.");
+            if (body.answer != null) showHoldAnswer(body.answer);
+            label.textContent = body.user_message || "Sent with redactions.";
+          } else if (st === "released") {
+            var sent = body.sent_text || "";
+            finishBanner(
+              sent.indexOf("[") >= 0 ? "REDACT" : "ALLOW",
+              body.user_message || "Sent."
+            );
+            if (body.answer != null) showHoldAnswer(body.answer);
+            label.textContent = body.user_message || "Sent.";
+          } else if (st === "needs_human") {
+            label.textContent = "Glimmer could not clear this \u2014 your call.";
+            suspicions.forEach(function (m) {
+              var judgement = m.judgement || {};
+              var line = document.createElement("div");
+              line.className = "ev-judgement";
+              line.textContent = (judgement.cls || "unknown") +
+                " \u00b7 confidence " +
+                (judgement.confidence != null ? judgement.confidence : "\u2014") +
+                " \u00b7 " + (m.span || "\u2014");
+              actions.appendChild(line);
+            });
+            offerChoice();
+          } else if (st === "denied") {
+            finishBanner("HOLD", body.user_message || "Denied: nothing was sent.");
+            label.textContent = body.user_message || "Denied: nothing was sent.";
+          } else if (st === "approved") {
+            var out = body.sent_text || "";
+            finishBanner(
+              out.indexOf("[") >= 0 ? "REDACT" : "ALLOW",
+              body.user_message || "Sent."
+            );
+            if (body.answer != null) showHoldAnswer(body.answer);
+            label.textContent = body.user_message || "Sent.";
+          }
+          updateEmptyHint();
+          refreshStats();
+        })
+        .catch(function () {
+          // A failed poll is retried; the spinner keeps the elapsed time.
+          setTimeout(poll, 1000);
+        });
+    }
+
+    poll();
+  }
+
   composer.addEventListener("input", function () {
+    liveSpans = [];
+    liveSeq++; // drop any in-flight live response
     renderBackdrop(composer.value, spans.filter(function () { return false; }));
     queueScan();
   });
