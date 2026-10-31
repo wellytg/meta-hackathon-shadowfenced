@@ -1,8 +1,9 @@
-"""Fail-closed tests (T9+T10): every tier raising holds; send never waits.
+"""Fail-closed tests (T9+T10+T16b): every tier raising holds; send never waits.
 
 ``engine.gate(mode="send")`` returns HOLD instantly for ambiguous
-spans without calling the judge (the judge runs later in
-``holds.start_review``). The model never overrules code.
+spans or sensitivity cue words without calling the judge (Glimmer
+reviews the whole message later in ``holds.start_review``). The
+model never overrules code.
 """
 
 from __future__ import annotations
@@ -58,16 +59,27 @@ def test_tier1_raising_holds_in_send_mode(policy, registry, monkeypatch):
     assert any("internal_error" in reason for reason in decision.reasons)
 
 
+def _pending_by_kind(decision):
+    return {
+        item["kind"]: item
+        for item in decision.evidence["pending"]
+        if isinstance(item, dict)
+    }
+
+
 def test_send_hold_fast_without_calling_judge(
     policy, registry, monkeypatch
 ):
     calls = _counting_judge(monkeypatch)
-    decision = gate(f"maybe {ENTROPY_TOKEN}", policy, registry, mode="send")
+    text = f"maybe {ENTROPY_TOKEN}"
+    decision = gate(text, policy, registry, mode="send")
     assert decision.decision == "HOLD"
     assert decision.sent_text is None
     assert decision.resolved_tier == 4
     assert decision.status == "reviewing"
-    assert decision.evidence["pending"] == [ENTROPY_TOKEN]
+    pending = _pending_by_kind(decision)
+    assert pending["message"]["text"] == text
+    assert pending["span"]["text"] == ENTROPY_TOKEN
     assert decision.evidence["proven_by_code"] == []
     assert calls == []
 
@@ -80,8 +92,39 @@ def test_send_hold_keeps_proven_ids_and_pending_texts(
     decision = gate(text, policy, registry, mode="send")
     assert decision.decision == "HOLD"
     assert decision.sent_text is None
-    assert decision.evidence["pending"] == [ENTROPY_TOKEN]
+    pending = _pending_by_kind(decision)
+    assert pending["message"]["text"] == text
+    assert pending["span"]["text"] == ENTROPY_TOKEN
     assert len(decision.evidence["proven_by_code"]) == 1
+    assert calls == []
+
+
+def test_send_cue_word_holds_with_pending_message_item(
+    policy, registry, monkeypatch
+):
+    calls = _counting_judge(monkeypatch)
+    text = "the vault audit is scheduled"
+    decision = gate(text, policy, registry, mode="send")
+    assert decision.decision == "HOLD"
+    assert decision.sent_text is None
+    assert decision.resolved_tier == 4
+    assert decision.status == "reviewing"
+    pending = _pending_by_kind(decision)
+    assert pending["message"]["text"] == text
+    assert "span" not in pending
+    assert decision.evidence["proven_by_code"] == []
+    assert calls == []
+
+
+def test_send_cue_word_hold_truncates_message_item(
+    policy, registry, monkeypatch
+):
+    calls = _counting_judge(monkeypatch)
+    text = "vault " + "x" * 3000
+    decision = gate(text, policy, registry, mode="send")
+    assert decision.decision == "HOLD"
+    pending = _pending_by_kind(decision)
+    assert pending["message"]["text"] == text[:2000]
     assert calls == []
 
 

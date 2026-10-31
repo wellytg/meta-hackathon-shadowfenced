@@ -1,4 +1,4 @@
-"""T16 tuning tests: whole-message screen plus general Tier 1 fixes.
+"""T16 tuning tests: send-time cue HOLD plus general Tier 1 fixes.
 
 Every example below is invented for this file (fresh names, streets,
 numbers); none is copied from any corpus file.
@@ -7,17 +7,14 @@ numbers); none is copied from any corpus file.
 from __future__ import annotations
 
 import base64
-import json
 import random
 from pathlib import Path
 
-import httpx
 import pytest
 
 from shadowfenced import engine, tier1
 from shadowfenced.canary import CanaryRegistry
 from shadowfenced.config import get_settings
-from shadowfenced.judge import Judgement
 from shadowfenced.policy import load_policy
 
 SEED = "test-seed-t16"
@@ -34,171 +31,40 @@ def registry():
     return CanaryRegistry(SEED, KINDS)
 
 
-def _screens(monkeypatch, verdict):
-    """Stub the whole-message screen with one canned verdict (or None)."""
+# --- live-hints flag ---------------------------------------------------------
+
+
+def test_live_hints_default_off():
+    assert get_settings({}).live_hints is False
+
+
+def test_live_hints_on_parsing():
+    assert get_settings({"SF_LIVE_HINTS": "on"}).live_hints is True
+    assert get_settings({"SF_LIVE_HINTS": "off"}).live_hints is False
+
+
+# --- engine send cue HOLD (no model call) ------------------------------------
+
+
+def test_cue_word_holds_without_model_call(policy, registry, monkeypatch):
     from shadowfenced import judge as judge_module
 
-    calls: list[str] = []
+    calls: list = []
 
-    def fake(message: str, *, transport=None):
-        calls.append(message)
-        return verdict
+    def fake(window, model, *, live, transport=None):
+        calls.append(window)
+        raise AssertionError("send path must not call the judge")
 
-    monkeypatch.setattr(judge_module, "screen", fake)
-    monkeypatch.setenv("SF_SCREEN", "on")
-    return calls
-
-
-def _verdict(cls, span, **overrides):
-    payload = {
-        "cls": cls,
-        "is_beacon": False,
-        "sensitivity": 0.7,
-        "confidence": 0.7,
-        "span": span,
-    }
-    payload.update(overrides)
-    return Judgement.model_validate(payload)
-
-
-# --- screen config -----------------------------------------------------------
-
-
-def test_screen_defaults_on_with_6s_timeout():
-    settings = get_settings({})
-    assert settings.screen_enabled is True
-    assert settings.screen_timeout_s == 6.0
-
-
-def test_screen_off_parsing():
-    assert get_settings({"SF_SCREEN": "off"}).screen_enabled is False
-    assert get_settings({"SF_SCREEN": "on"}).screen_enabled is True
-    assert get_settings(
-        {"SF_SCREEN_TIMEOUT_S": "2"}
-    ).screen_timeout_s == 2.0
-
-
-# --- judge.screen request shape ----------------------------------------------
-
-
-def test_screen_posts_live_model_cpu_and_1500_chars(monkeypatch):
-    from shadowfenced import judge as judge_module
-
-    seen: dict = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.update(json.loads(request.content.decode("utf-8")))
-        verdict = {
-            "cls": "benign",
-            "is_beacon": False,
-            "sensitivity": 0.1,
-            "confidence": 0.9,
-            "span": "",
-        }
-        return httpx.Response(
-            200, json={"message": {"content": json.dumps(verdict)}}
-        )
-
-    monkeypatch.setenv("SF_SCREEN", "on")
-    transport = httpx.MockTransport(handler)
-    text = "hello world. " * 200  # well over 1500 chars
-    verdict = judge_module.screen(text, transport=transport)
-    assert verdict is not None and verdict.cls == "benign"
-    assert seen["model"] == "llama3.2:3b"
-    assert seen["options"]["num_gpu"] == 0
-    assert seen["messages"][1]["content"] == text[:1500]
-
-
-def test_screen_transport_error_returns_none(monkeypatch):
-    from shadowfenced import judge as judge_module
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("down")
-
-    monkeypatch.setenv("SF_SCREEN", "on")
-    assert (
-        judge_module.screen("hello", transport=httpx.MockTransport(handler))
-        is None
-    )
-
-
-def test_screen_disabled_returns_none(monkeypatch):
-    from shadowfenced import judge as judge_module
-
-    assert judge_module.screen("hello") is None  # conftest leaves it off
-
-
-# --- engine send screen ------------------------------------------------------
-
-
-def test_screen_suspicion_holds_with_pending_span(policy, registry, monkeypatch):
-    text = "please contact Rafael Ortega tomorrow"
+    monkeypatch.setattr(judge_module, "judge", fake)
+    text = "the vault audit is scheduled"
     assert tier1.scan(text, policy, registry) == []
-    _screens(monkeypatch, _verdict("pii", "Rafael Ortega"))
     decision = engine.gate(text, policy, registry, mode="send")
     assert decision.decision == "HOLD"
     assert decision.resolved_tier == 4
     assert decision.status == "reviewing"
-    assert "Rafael Ortega" in decision.evidence["pending"]
-    assert decision.latency_ms["tier2s"] >= 0.0
-
-
-def test_screen_benign_follows_tier1(policy, registry, monkeypatch):
-    _screens(
-        monkeypatch,
-        _verdict("benign", "", sensitivity=0.1, confidence=0.95),
-    )
-    decision = engine.gate("hello world", policy, registry, mode="send")
-    assert decision.decision == "ALLOW"
-    assert "tier2s" in decision.latency_ms
-
-
-def test_screen_low_confidence_does_not_hold(policy, registry, monkeypatch):
-    _screens(monkeypatch, _verdict("pii", "world", confidence=0.4))
-    decision = engine.gate("hello world", policy, registry, mode="send")
-    assert decision.decision == "ALLOW"
-
-
-def test_screen_beacon_flag_holds_even_when_benign(
-    policy, registry, monkeypatch
-):
-    text = "we moved files out of the old drive last week"
-    _screens(
-        monkeypatch,
-        _verdict("benign", "moved files", is_beacon=True, confidence=0.4),
-    )
-    decision = engine.gate(text, policy, registry, mode="send")
-    assert decision.decision == "HOLD"
-    assert decision.resolved_tier == 4
-
-
-def test_screen_failure_clean_text_allows(policy, registry, monkeypatch):
-    _screens(monkeypatch, None)
-    decision = engine.gate("hello world", policy, registry, mode="send")
-    assert decision.decision == "ALLOW"
-
-
-def test_screen_failure_with_cue_words_holds(policy, registry, monkeypatch):
-    _screens(monkeypatch, None)
-    decision = engine.gate(
-        "the vault audit is scheduled", policy, registry, mode="send"
-    )
-    assert decision.decision == "HOLD"
-    assert decision.resolved_tier == 4
-
-
-def test_screen_failure_with_proven_spans_holds(policy, registry, monkeypatch):
-    _screens(monkeypatch, None)
-    decision = engine.gate(
-        "mail ada@corvanelabs.com now", policy, registry, mode="send"
-    )
-    assert decision.decision == "HOLD"
-
-
-def test_screen_off_records_no_tier2s(policy, registry):
-    decision = engine.gate("hello world", policy, registry, mode="send")
-    assert decision.decision == "ALLOW"
-    assert "tier2s" not in decision.latency_ms
+    pending = {item["kind"]: item for item in decision.evidence["pending"]}
+    assert pending["message"]["text"] == text
+    assert calls == []
 
 
 def test_sensitivity_cue_words():

@@ -1,17 +1,21 @@
 """Asynchronous Glimmer review for HOLDs (T10).
 
-``engine.gate(mode="send")`` runs the whole-message live screen inline, then HOLDS instantly for flagged spans:
+``engine.gate(mode="send")`` HOLDS instantly for flagged messages, then
 :func:`start_review` reviews them in a
-background thread. For each pending span the send-model judge is asked
-and the answer is verified in code (Tier 3):
+background thread. The pending whole-message item is judged once with
+Glimmer and each pending span is judged per-span; every answer is
+verified in code (Tier 3):
 
-- every pending span code-confirmed (and no canary anywhere) -> redact
-  those spans too and auto-send (``redacted_sent``);
-- every pending span model-benign with confidence >= 0.8 and
-  sensitivity < 0.3, with no Tier 1 proven secret -> send
-  (``released``; Tier 1 proven non-secrets stay redacted);
-- anything else, judge None, or any exception -> ``needs_human`` with
-  ``model_suspicion_only`` entries.
+- a Glimmer non-benign whole-message judgement with a span is
+  verified: confirmed -> redact that span too and auto-send
+  (``redacted_sent``); unconfirmed -> ``needs_human`` with evidence
+  showing Glimmer's class, confidence and span;
+- a Glimmer benign whole-message judgement with confidence >= 0.8
+  and sensitivity < 0.3 releases (send with Tier 1 redactions only);
+- judge None -> ``needs_human``;
+- ambiguous Tier 1 spans keep the per-span flow: confirmed spans
+  redact and auto-send, benign-confident spans clear, anything else
+  -> ``needs_human`` with ``model_suspicion_only`` entries.
 
 A canary value is never sent: any proven or confirmed canary forces
 ``needs_human`` instead of an auto-send. Every outcome is logged.
@@ -158,10 +162,30 @@ def create_hold(
     """Register one gate HOLD for background review; id == decision_id."""
     from .redact import redact as _redact
 
+    from .engine import MESSAGE_PENDING_CHARS, has_sensitivity_cue
+
     proven = [s for s in decision.spans if s.status == "proven"]
     ambiguous = [s for s in decision.spans if s.status == "ambiguous"]
-    pending = [
+    pending: list[dict[str, Any]] = []
+    message_text: str | None = None
+    evidence_pending = (decision.evidence or {}).get("pending")
+    if isinstance(evidence_pending, list):
+        for entry in evidence_pending:
+            if (
+                isinstance(entry, dict)
+                and entry.get("kind") == "message"
+                and isinstance(entry.get("text"), str)
+            ):
+                message_text = entry["text"][:MESSAGE_PENDING_CHARS]
+                break
+    if message_text is None and needs_human_why is None:
+        if ambiguous or has_sensitivity_cue(text):
+            message_text = text[:MESSAGE_PENDING_CHARS]
+    if message_text is not None:
+        pending.append({"kind": "message", "text": message_text})
+    pending.extend(
         {
+            "kind": "span",
             "span_id": s.span_id,
             "cp_start": s.cp_start,
             "cp_end": s.cp_end,
@@ -169,7 +193,7 @@ def create_hold(
             "cls": s.cls,
         }
         for s in ambiguous
-    ]
+    )
     if proven:
         preview, _ = _redact(text, proven)
     else:
@@ -254,6 +278,127 @@ def _suspicion(
     }
 
 
+def _judgement_summary(judgement: Any) -> tuple[str, float, str]:
+    """Return (cls, confidence, span) for a dict or Judgement verdict."""
+    if isinstance(judgement, dict):
+        cls = judgement.get("cls")
+        confidence = judgement.get("confidence", 0.0)
+        span_text = judgement.get("span", "") or ""
+    else:
+        cls = getattr(judgement, "cls", None)
+        confidence = getattr(judgement, "confidence", 0.0)
+        span_text = getattr(judgement, "span", "") or ""
+    try:
+        confidence_value = float(confidence)
+    except (TypeError, ValueError):
+        confidence_value = 0.0
+    if not isinstance(cls, str) or not cls:
+        cls = "unknown"
+    if not isinstance(span_text, str):
+        span_text = ""
+    return cls, confidence_value, span_text
+
+
+def _locate(text: str, span_text: str) -> tuple[int | None, int | None]:
+    """Code-point offsets of a span inside the text, if present."""
+    if span_text and span_text in text:
+        start = text.find(span_text)
+        return start, start + len(span_text)
+    return None, None
+
+
+def _review_message_item(
+    hold: Hold,
+    item: dict[str, Any],
+    text: str,
+    tier1_spans: list[Span],
+    model: str,
+    judge_transport: Any,
+    policy: Policy,
+    registry: CanaryRegistry | None,
+    suspicions: list[dict[str, Any]],
+    confirmed: list[Span],
+) -> None:
+    """Judge the whole message once; verify a non-benign span in code.
+
+    Benign with confidence >= 0.8 and sensitivity < 0.3 clears the
+    message. Non-benign with a span is verified as today: confirmed
+    redacts that span too on auto-send, unconfirmed needs a human
+    with evidence showing Glimmer's class, confidence and span.
+    Judge None (or anything else unprovable) needs a human.
+    """
+    message_text = item.get("text", "")
+    if not isinstance(message_text, str):
+        message_text = ""
+    try:
+        judgement = judge_module.judge(
+            message_text, model, live=False, transport=judge_transport
+        )
+    except Exception:
+        judgement = None
+    if judgement is None:
+        suspicions.append(
+            _suspicion("", None, "Glimmer unavailable")
+        )
+        return
+    hold.judgements.append(_judgement_dump(judgement))
+    if _benign_clear(judgement):
+        return
+    cls, confidence, span_text = _judgement_summary(judgement)
+    start, end = _locate(text, span_text)
+    # The evidence entry carries the flagged span (or "" when there is
+    # nothing to locate), never the whole message: the UI highlights
+    # the flagged part in the redacted preview.
+    flagged = span_text if start is not None else ""
+    if cls != "benign" and span_text:
+        try:
+            verdict = verifier_module.verify(
+                text, judgement, tier1_spans, policy, registry
+            )
+        except Exception as exc:
+            suspicions.append(
+                _suspicion(
+                    flagged, judgement,
+                    f"Glimmer flagged {cls} (confidence {confidence:.2f}, "
+                    f"span {span_text!r}) but verification failed: "
+                    f"{type(exc).__name__}",
+                    cp_start=start, cp_end=end,
+                )
+            )
+            return
+        if verdict.confirmed and verdict.span is not None:
+            if verdict.span.subclass == "canary":
+                # Recorded for redaction, never for auto-send.
+                confirmed.append(verdict.span)
+                suspicions.append(
+                    _suspicion(
+                        flagged, judgement,
+                        "model-confirmed canary is never auto-sent",
+                        cp_start=start, cp_end=end,
+                    )
+                )
+                return
+            confirmed.append(verdict.span)
+            return
+        suspicions.append(
+            _suspicion(
+                flagged, judgement,
+                f"Glimmer flagged {cls} (confidence {confidence:.2f}, "
+                f"span {span_text!r}): {verdict.why}",
+                cp_start=start, cp_end=end,
+            )
+        )
+        return
+    suspicions.append(
+        _suspicion(
+            flagged, judgement,
+            f"Glimmer flagged {cls} (confidence {confidence:.2f}) "
+            "without a verifiable span",
+            cp_start=start, cp_end=end,
+        )
+    )
+
+
 def run_review(
     hold_id: str,
     *,
@@ -262,7 +407,7 @@ def run_review(
     policy: Policy | None = None,
     registry: CanaryRegistry | None = None,
 ) -> Hold | None:
-    """Review one hold synchronously: judge + verify each pending span.
+    """Review one hold synchronously: judge the message once, verify spans.
 
     Thread-safe entry point used directly by tests (with a
     ``MockTransport`` judge and a stub sender) and via
@@ -294,6 +439,12 @@ def run_review(
     confirmed: list[Span] = []
     cleared = 0
     for item in list(hold.pending):
+        if item.get("kind", "span") == "message":
+            _review_message_item(
+                hold, item, text, tier1_spans, model, judge_transport,
+                policy, registry, suspicions, confirmed,
+            )
+            continue
         span_text = item["text"]
         window = judge_module.make_window(
             text, item["cp_start"], item["cp_end"]

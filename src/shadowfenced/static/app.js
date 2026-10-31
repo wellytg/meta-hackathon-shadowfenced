@@ -24,9 +24,24 @@
     return PROVIDER_LABELS[id] || String(id);
   }
 
-  function setPill(providerId) {
+  var HEADER_PILL = "Local check \u00b7 code + Muse Glimmer (30B, this PC)";
+
+  // Live model hints are experimental and off by default: the server
+  // says whether they are on (GET /api/health returns live_hints).
+  var liveHintsOn = false;
+
+  function setPill() {
     if (!headerPill) return;
-    headerPill.textContent = providerLabel(providerId);
+    headerPill.textContent = HEADER_PILL;
+  }
+
+  function loadLiveHintsFlag() {
+    fetch("/api/health")
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        liveHintsOn = !!(body && body.live_hints);
+      })
+      .catch(function () { /* hints stay off */ });
   }
 
   function loadProviders() {
@@ -50,7 +65,7 @@
           var fallback = list.filter(function (p) { return p.available; })[0];
           if (fallback) providerSel.value = fallback.id;
         }
-        setPill(providerSel.value);
+        setPill();
       })
       .catch(function () { /* static options stay as the fallback */ });
   }
@@ -61,7 +76,7 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: providerSel.value })
     })
-      .then(function () { setPill(providerSel.value); })
+      .then(function () { setPill(); })
       .catch(function () { /* default stays server-side */ });
   });
 
@@ -212,6 +227,11 @@
       return;
     }
     if (live) {
+      // No purple model hints unless the server says they are on.
+      if (!liveHintsOn) {
+        liveSpans = [];
+        return;
+      }
       var myLive = ++liveSeq;
       fetch("/api/scan", {
         method: "POST",
@@ -256,9 +276,12 @@
   function queueScan() {
     if (scanTimer) clearTimeout(scanTimer);
     scanTimer = setTimeout(function () { scanNow(false); }, 250);
-    // Live model hints arrive after a 1200 ms typing pause.
+    // Live model hints arrive after a 1200 ms typing pause, but only
+    // when the server says they are on (SF_LIVE_HINTS=on).
     if (liveTimer) clearTimeout(liveTimer);
-    liveTimer = setTimeout(function () { scanNow(true); }, 1200);
+    if (liveHintsOn) {
+      liveTimer = setTimeout(function () { scanNow(true); }, 1200);
+    }
   }
 
   function highlightPlaceholders(text) {
@@ -826,6 +849,8 @@
 
   renderBackdrop("", []);
   updateEmptyHint();
+  setPill();
+  loadLiveHintsFlag();
   loadProviders();
   refreshStats();
 })();

@@ -149,48 +149,6 @@ def _parse_content(content: Any) -> Judgement | None:
         return None
 
 
-SCREEN_CHARS = 1500
-
-
-def screen_enabled() -> bool:
-    """Whole-message screen switch: ``SF_SCREEN=on|off`` (default on)."""
-    return get_settings().screen_enabled
-
-
-def screen(
-    message: str,
-    *,
-    transport: httpx.BaseTransport | None = None,
-) -> Judgement | None:
-    """Screen a whole outbound message with the live CPU model.
-
-    Sends ``message[:1500]`` to ``SF_LIVE_MODEL`` with the same minimal
-    ``Judgement`` schema as :func:`judge`. Any failure — disabled,
-    timeout, transport error, invalid JSON, schema violation — returns
-    None so the gate decides fail-closed in code.
-    """
-    try:
-        settings = get_settings()
-        if not settings.screen_enabled or not message:
-            return None
-        window = message[:SCREEN_CHARS]
-        url = settings.ollama_url.rstrip("/") + "/api/chat"
-        body = _request_body(window, settings.live_model, live=True)
-        with httpx.Client(
-            transport=transport, timeout=settings.screen_timeout_s
-        ) as client:
-            response = client.post(url, json=body)
-        try:
-            payload = response.json()
-        except ValueError:
-            return None
-        msg = payload.get("message", {}) if isinstance(payload, dict) else {}
-        content = msg.get("content") if isinstance(msg, dict) else None
-        return _parse_content(content)
-    except Exception:
-        return None
-
-
 def judge(
     text_window: str,
     model: str,

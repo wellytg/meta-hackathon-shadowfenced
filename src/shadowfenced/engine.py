@@ -1,11 +1,11 @@
 """Tier-1-only gate: code findings in, a typed decision out.
 
 Severity ordering is BLOCK > HOLD > REDACT > ALLOW. A proven canary
-blocks; other proven spans redact; ambiguous spans hold instantly for
-asynchronous Glimmer review (see ``holds``); clean text allows. Any
-internal failure holds (fail closed). The send path runs a
-whole-message live-model screen when Tier 1 finds no BLOCK and returns
-HOLD fast; review happens in the background.
+blocks; ambiguous spans or sensitivity cue words hold instantly for
+asynchronous Glimmer whole-message review (see ``holds``); other
+proven spans redact and clean text allows. Any internal failure holds
+(fail closed). The send path never calls a model: it returns HOLD
+fast and review happens in the background.
 """
 
 from __future__ import annotations
@@ -18,10 +18,9 @@ from typing import Any
 
 from . import tier1
 from .canary import CanaryRegistry
-from .config import get_settings
 from .policy import Policy
 from .redact import redact, save_mapping
-from .spans import Span, span_from_cp_range
+from .spans import Span
 
 DECISIONS = ("ALLOW", "REDACT", "BLOCK", "HOLD")
 
@@ -130,9 +129,9 @@ def _hold(
     )
 
 
-# Sensitivity cue words for the send-time screen fail-closed rule.
-# A screen timeout or error allows only Tier-1-clean text with none of
-# these; anything else holds for a human.
+# Sensitivity cue words for the send-time hold rule. Tier-1-clean text
+# holding none of these (and no ambiguous spans) is decided from Tier 1
+# alone; anything else holds for asynchronous Glimmer review.
 _SCREEN_CUE_RE = re.compile(
     r"(?i)\b(password|passwd|creds|credentials?|secret|token|keys?|keystore"
     r"|vault|ssn|social\s+security|dob|date\s+of\s+birth|born|address"
@@ -141,7 +140,7 @@ _SCREEN_CUE_RE = re.compile(
 )
 _SCREEN_UNC_RE = re.compile(r"\\\\[A-Za-z0-9_.$-]+")
 
-SCREEN_SPAN_CHARS = 1500
+MESSAGE_PENDING_CHARS = 2000
 
 
 def has_sensitivity_cue(text: str) -> bool:
@@ -149,128 +148,6 @@ def has_sensitivity_cue(text: str) -> bool:
     return (
         _SCREEN_CUE_RE.search(text) is not None
         or _SCREEN_UNC_RE.search(text) is not None
-    )
-
-
-def _screen_cue_span(
-    text: str, policy: Policy,
-) -> Span:
-    """One ambiguous span scoping a screen fail-closed HOLD."""
-    cue = _SCREEN_CUE_RE.search(text) or _SCREEN_UNC_RE.search(text)
-    if cue is not None:
-        start = text.rfind("\n", 0, cue.start()) + 1
-        stop = text.find("\n", cue.end())
-        end = len(text) if stop < 0 else stop
-        end = min(end, start + SCREEN_SPAN_CHARS) or cue.end()
-    else:
-        start, end = 0, min(len(text), SCREEN_SPAN_CHARS)
-    return span_from_cp_range(
-        text,
-        start,
-        end,
-        cls="beacon",
-        subclass="screen_cue",
-        tier=2,
-        proof="code",
-        status="ambiguous",
-        message="Live screen unavailable and the text has sensitivity cues.",
-        why="screen timeout/error with cue words or Tier 1 spans present",
-        suggested_action="review",
-        can_keep=policy.keepable("beacon"),  # type: ignore[arg-type]
-        confidence=0.5,
-    )
-
-
-def _screen_suspicion_span(
-    text: str, policy: Policy, cls: str, span_text: str, confidence: float,
-) -> Span:
-    """One ambiguous span for a suspicious whole-message screen verdict."""
-    if span_text and span_text in text:
-        start = text.find(span_text)
-        end = start + len(span_text)
-    else:
-        start, end = 0, min(len(text), SCREEN_SPAN_CHARS)
-    try:
-        confidence_value = float(confidence)
-    except (TypeError, ValueError):
-        confidence_value = 0.5
-    return span_from_cp_range(
-        text,
-        start,
-        end,
-        cls=cls,
-        subclass="screen",
-        tier=2,
-        proof="model",
-        status="ambiguous",
-        message="Live screen flagged a possible sensitive span.",
-        why="whole-message screen verdict with confidence >= 0.5",
-        suggested_action="review",
-        can_keep=policy.keepable(cls),  # type: ignore[arg-type]
-        confidence=confidence_value,
-    )
-
-
-def _maybe_screen(
-    text: str,
-    policy: Policy,
-    spans: list[Span],
-    proven: list[Span],
-    ambiguous: list[Span],
-    latency_ms: dict[str, float],
-    reasons: list[str],
-    total_started: float,
-) -> Decision | None:
-    """Run the send-time whole-message screen; None means continue.
-
-    Returns a HOLD decision when the screen verdict is suspicious or
-    when the screen fails closed (timeout/error with Tier 1 spans or
-    sensitivity cues present), else None so the normal path continues.
-    """
-    from . import judge as judge_module
-
-    if not get_settings().screen_enabled:
-        return None
-    screen_started = time.perf_counter()
-    try:
-        judgement = judge_module.screen(text)
-    except Exception:
-        judgement = None
-    latency_ms["tier2s"] = (time.perf_counter() - screen_started) * 1000
-    if judgement is not None:
-        cls = getattr(judgement, "cls", "benign")
-        try:
-            confidence = float(getattr(judgement, "confidence", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            confidence = 0.0
-        is_beacon = bool(getattr(judgement, "is_beacon", False))
-        if (cls != "benign" and confidence >= 0.5) or is_beacon:
-            effective = cls if cls != "benign" else "beacon"
-            span_text = getattr(judgement, "span", "") or ""
-            screen_span = _screen_suspicion_span(
-                text, policy, effective, span_text, confidence
-            )
-            reasons.append(
-                f"live screen suspicious ({effective}, "
-                f"confidence {confidence:.2f}) -> HOLD"
-            )
-            return _gate_send(
-                text, policy, None, spans + [screen_span], proven,
-                ambiguous + [screen_span], latency_ms, reasons,
-                total_started,
-            )
-        reasons.append("live screen benign -> Tier 1 path")
-        return None
-    if not spans and not has_sensitivity_cue(text):
-        reasons.append("live screen unavailable but text clean -> Tier 1 path")
-        return None
-    reasons.append("live screen unavailable with sensitivity cues -> HOLD")
-    extra: list[Span] = []
-    if not ambiguous:
-        extra = [_screen_cue_span(text, policy)]
-    return _gate_send(
-        text, policy, None, spans + extra, proven, ambiguous + extra,
-        latency_ms, reasons, total_started,
     )
 
 
@@ -301,19 +178,36 @@ def _gate_send(
 ) -> Decision:
     """Send-time path: never call the judge inline.
 
-    Ambiguous spans HOLD instantly at resolved tier 4 (status
-    ``reviewing``) with ``evidence`` carrying ``proven_by_code`` span
-    ids and ``pending`` span texts; ``holds.start_review`` reviews
-    them in a background thread. Proven-only input redacts and clean
-    input allows, both with no model call.
+    Ambiguous spans or a sensitivity cue word HOLD instantly at
+    resolved tier 4 (status ``reviewing``) with ``evidence`` carrying
+    ``proven_by_code`` span ids and ``pending`` items: one
+    ``{kind: "message", text}`` whole-message item plus one
+    ``{kind: "span", ...}`` item per ambiguous span;
+    ``holds.start_review`` reviews them in a background thread.
+    Proven-only input redacts and clean input allows, both with no
+    model call.
     """
-    if ambiguous:
+    if ambiguous or has_sensitivity_cue(text):
         latency_ms["tier2"] = 0.0
         latency_ms["tier3"] = 0.0
         latency_ms["total"] = (time.perf_counter() - total_started) * 1000
-        reasons.append(
-            f"{len(ambiguous)} ambiguous span(s) need Glimmer review -> HOLD"
-        )
+        if ambiguous:
+            reasons.append(
+                f"{len(ambiguous)} ambiguous span(s) need Glimmer review -> HOLD"
+            )
+        else:
+            reasons.append("sensitivity cue word needs Glimmer review -> HOLD")
+        pending: list[dict[str, Any]] = [
+            {"kind": "message", "text": text[:MESSAGE_PENDING_CHARS]}
+        ]
+        for span in ambiguous:
+            pending.append(
+                {
+                    "kind": "span",
+                    "span_id": span.span_id,
+                    "text": text[span.cp_start:span.cp_end],
+                }
+            )
         return Decision(
             decision="HOLD",
             decision_id=uuid.uuid4().hex,
@@ -325,7 +219,7 @@ def _gate_send(
             reasons=reasons,
             evidence={
                 "proven_by_code": [s.span_id for s in proven],
-                "pending": [text[s.cp_start:s.cp_end] for s in ambiguous],
+                "pending": pending,
             },
             status="reviewing",
         )
@@ -376,11 +270,13 @@ def gate(
     allows keeping that span class, and never for secrets.
 
     ``mode="tier1"`` (default) resolves ambiguous spans to HOLD at
-    tier 1. ``mode="send"`` first runs the whole-message live screen
-    when Tier 1 finds no BLOCK, then HOLDS instantly at resolved tier 4
-    (status ``reviewing``): ``holds.start_review`` judges each
-    ambiguous span in a background thread and verifies the answer in
-    code. Proven-only input redacts and clean input allows.
+    tier 1. ``mode="send"`` HOLDS instantly at resolved tier 4
+    (status ``reviewing``) when Tier 1 finds ambiguous spans or the
+    message holds a sensitivity cue word: ``holds.start_review``
+    judges the whole message once with Glimmer plus each ambiguous
+    span in a background thread and verifies the answer in code.
+    Proven-only input redacts and clean input allows, with no model
+    call.
     """
     total_started = time.perf_counter()
     try:
@@ -435,12 +331,6 @@ def gate(
                 reasons=reasons,
             )
         if mode == "send":
-            screened = _maybe_screen(
-                text, policy, spans, proven, ambiguous,
-                latency_ms, reasons, total_started,
-            )
-            if screened is not None:
-                return screened
             return _gate_send(
                 text, policy, registry, spans, proven, ambiguous,
                 latency_ms, reasons, total_started,

@@ -108,7 +108,12 @@ def test_routes_registered():
 
 
 def test_health_ok():
-    assert health() == {"status": "ok"}
+    assert health() == {"status": "ok", "live_hints": False}
+
+
+def test_health_reports_live_hints_flag(monkeypatch):
+    monkeypatch.setenv("SF_LIVE_HINTS", "on")
+    assert health() == {"status": "ok", "live_hints": True}
 
 
 @pytest.mark.parametrize("mode", ["tier1", "live"])
@@ -122,8 +127,16 @@ def test_scan_returns_spans_and_latency(mode):
     ):
         assert key in span
     assert isinstance(span["start"], int) and isinstance(span["end"], int)
-    expected = {"tier1", "total"} if mode == "tier1" else {"tier1", "tier2", "total"}
-    assert set(body["latency_ms"]) == expected
+    # Live hints are off by default: live mode returns Tier 1 only.
+    assert set(body["latency_ms"]) == {"tier1", "total"}
+    assert all(s["tier"] == 1 for s in body["spans"])
+
+
+def test_scan_live_with_hints_on_reports_tier2(monkeypatch):
+    monkeypatch.setenv("SF_LIVE_HINTS", "on")
+    body = scan(ScanRequest(text="mail ada@corvanelabs.com now", mode="live"))
+    assert any(s["subclass"] == "email" for s in body["spans"])
+    assert set(body["latency_ms"]) == {"tier1", "tier2", "total"}
 
 
 def test_scan_clean_text():
@@ -455,7 +468,9 @@ def test_testclient_health_and_scan():
     from fastapi.testclient import TestClient
 
     client = TestClient(app)
-    assert client.get("/api/health").json() == {"status": "ok"}
+    assert client.get("/api/health").json() == {
+        "status": "ok", "live_hints": False,
+    }
     body = client.post("/api/scan", json={"text": "hello"}).json()
     assert body["spans"] == []
     assert app_module.health() is not None

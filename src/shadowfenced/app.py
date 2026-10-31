@@ -288,9 +288,9 @@ class ProviderRequest(BaseModel):
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    """Liveness probe."""
-    return {"status": "ok"}
+def health() -> dict[str, Any]:
+    """Liveness probe plus the live-hints flag for the UI."""
+    return {"status": "ok", "live_hints": get_settings().live_hints}
 
 
 @app.post("/api/scan")
@@ -299,7 +299,9 @@ def scan(request: ScanRequest) -> dict[str, Any]:
 
     ``mode="live"`` additionally asks the live model about each
     ambiguous span and attaches non-benign answers as extra Tier 2
-    ``suspicion`` spans. A judge failure leaves just the Tier 1 spans.
+    ``suspicion`` spans, but only when ``SF_LIVE_HINTS=on`` (off by
+    default: live mode returns Tier 1 only). A judge failure leaves
+    just the Tier 1 spans.
     """
     from . import tier1
 
@@ -307,7 +309,7 @@ def scan(request: ScanRequest) -> dict[str, Any]:
     spans = tier1.scan(request.text, get_policy(), get_registry())
     tier1_ms = (time.perf_counter() - started) * 1000
     latency_ms: dict[str, float] = {"tier1": tier1_ms}
-    if request.mode == "live":
+    if request.mode == "live" and get_settings().live_hints:
         tier2_started = time.perf_counter()
         spans = _with_live_suspicions(request.text, spans)
         latency_ms["tier2"] = (time.perf_counter() - tier2_started) * 1000

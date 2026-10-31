@@ -175,10 +175,13 @@ def test_judge_none_needs_human_and_sends_nothing(
     assert result.sent_text is None
     assert result.answer is None
     assert send.calls == []
-    suspicion = result.evidence["model_suspicion_only"][0]
-    assert suspicion["span"] == ENTROPY_TOKEN
-    assert suspicion["judgement"] is None
-    assert suspicion["why_unverified"]
+    suspicions = result.evidence["model_suspicion_only"]
+    assert len(suspicions) == 2
+    by_span = {s["span"]: s for s in suspicions}
+    assert by_span[""]["judgement"] is None
+    assert by_span[""]["why_unverified"]
+    assert by_span[ENTROPY_TOKEN]["judgement"] is None
+    assert by_span[ENTROPY_TOKEN]["why_unverified"]
 
 
 def test_unverified_claim_needs_human(policy, registry, live_mode):
@@ -194,9 +197,15 @@ def test_unverified_claim_needs_human(policy, registry, live_mode):
     )
     assert result is not None and result.status == "needs_human"
     assert send.calls == []
-    suspicion = result.evidence["model_suspicion_only"][0]
-    assert suspicion["judgement"]["cls"] == "secret"
-    assert suspicion["why_unverified"]
+    suspicions = result.evidence["model_suspicion_only"]
+    assert len(suspicions) == 2
+    message_suspicion = next(
+        s for s in suspicions if s["span"] == "banana"
+    )
+    assert message_suspicion["judgement"]["cls"] == "secret"
+    assert message_suspicion["judgement"]["confidence"] == 0.7
+    assert message_suspicion["judgement"]["span"] == "banana"
+    assert message_suspicion["why_unverified"]
 
 
 def test_model_confirmed_canary_is_never_sent(
@@ -306,12 +315,109 @@ def test_rule_approve_forwards_redacted_only(policy, registry, live_mode):
     assert "ada@corvanelabs.com" not in forwarded
 
 
+def _message_item(hold):
+    return next(
+        item for item in hold.pending if item.get("kind") == "message"
+    )
+
+
+def test_cue_word_hold_carries_pending_message_item(
+    policy, registry, live_mode
+):
+    text = "the vault audit is scheduled"
+    hold = _make_hold(text, policy=policy, registry=registry)
+    kinds = [item.get("kind") for item in hold.pending]
+    assert kinds == ["message"]
+    assert _message_item(hold)["text"] == text
+
+
+def test_whole_message_benign_confident_releases(policy, registry, live_mode):
+    text = "the vault audit is scheduled"
+    hold = _make_hold(text, policy=policy, registry=registry)
+    send = _sender("all good")
+    result = holds.run_review(
+        hold.hold_id,
+        judge_transport=_judge_transport(
+            _judge_payload("benign", "", sensitivity=0.0, confidence=0.95)
+        ),
+        sender=send,
+        policy=policy,
+        registry=registry,
+    )
+    assert result is not None and result.status == "released"
+    assert result.sent_text == text
+    assert result.answer == "all good"
+    assert send.calls == [text]
+
+
+def test_whole_message_non_benign_verified_redacts(policy, registry, live_mode):
+    text = f"the vault audit lists {ENTROPY_TOKEN} for access"
+    hold = _make_hold(text, policy=policy, registry=registry)
+    assert any(
+        item.get("kind") == "span" and item["text"] == ENTROPY_TOKEN
+        for item in hold.pending
+    )
+    send = _sender("noted [SECRET_1], thanks")
+    result = holds.run_review(
+        hold.hold_id,
+        judge_transport=_judge_transport(
+            _judge_payload("secret", ENTROPY_TOKEN)
+        ),
+        sender=send,
+        policy=policy,
+        registry=registry,
+    )
+    assert result is not None and result.status == "redacted_sent"
+    assert ENTROPY_TOKEN not in (result.sent_text or "")
+    assert ENTROPY_TOKEN not in send.calls[0]
+
+
+def test_whole_message_non_benign_unverified_needs_human(
+    policy, registry, live_mode
+):
+    text = "the vault audit is scheduled"
+    hold = _make_hold(text, policy=policy, registry=registry)
+    send = _sender()
+    result = holds.run_review(
+        hold.hold_id,
+        judge_transport=_judge_transport(
+            _judge_payload("secret", "vault audit")
+        ),
+        sender=send,
+        policy=policy,
+        registry=registry,
+    )
+    assert result is not None and result.status == "needs_human"
+    assert send.calls == []
+    suspicion = result.evidence["model_suspicion_only"][0]
+    assert suspicion["judgement"]["cls"] == "secret"
+    assert suspicion["judgement"]["confidence"] == 0.7
+    assert suspicion["judgement"]["span"] == "vault audit"
+    assert suspicion["why_unverified"]
+
+
+def test_whole_message_judge_none_needs_human(policy, registry, live_mode):
+    text = "the vault audit is scheduled"
+    hold = _make_hold(text, policy=policy, registry=registry)
+    send = _sender()
+    result = holds.run_review(
+        hold.hold_id,
+        judge_transport=_judge_transport(None),
+        sender=send,
+        policy=policy,
+        registry=registry,
+    )
+    assert result is not None and result.status == "needs_human"
+    assert result.sent_text is None
+    assert send.calls == []
+
+
 def test_hold_card_shape_and_pending(policy, registry):
     text = f"maybe {ENTROPY_TOKEN}"
     hold = _make_hold(text, policy=policy, registry=registry)
     card = hold_status(hold.hold_id)
     assert card["status"] == "reviewing"
-    assert card["pending"] == [ENTROPY_TOKEN]
+    assert card["pending"] == [text, ENTROPY_TOKEN]
     assert card["proven_by_code"] == []
     assert card["model_suspicion_only"] == []
     assert card["redacted_preview"] == text
@@ -355,6 +461,14 @@ def test_evidence_card_and_live_underline_hooks():
         "mark-live",
         "Model suspicion (Llama 3.2, local)",
         "checked again at send",
+    ):
+        assert hook in js, hook
+    # Hints stay off unless the server says they are on.
+    for hook in (
+        "liveHintsOn",
+        "live_hints",
+        "SF_LIVE_HINTS=on",
+        "Local check \\u00b7 code + Muse Glimmer (30B, this PC)",
     ):
         assert hook in js, hook
     for hook in (".evidence-card", ".mark-live", ".spinner", ".ev-cols"):

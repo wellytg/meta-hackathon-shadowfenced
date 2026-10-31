@@ -177,7 +177,7 @@ def test_composer_text_visible_and_backdrop_aligned():
 def test_header_pill_and_empty_hint_present():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     assert 'data-testid="header-pill"' in html
-    assert "Local check · Meta Llama 3.2 + Muse Glimmer" in html
+    assert "Local check · code + Muse Glimmer (30B, this PC)" in html
     assert 'data-testid="empty-hint"' in html
     assert (
         "Type or paste anything. Sensitive text is underlined as you type, "
