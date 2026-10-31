@@ -86,6 +86,21 @@ def span_from_cp_range(text: str, cp_start: int, cp_end: int, **kwargs) -> Span:
     )
 
 
+def _merge_winner(current: Span, span: Span) -> Span:
+    """Pick the span whose metadata survives a merge.
+
+    A ``canary`` subclass always wins over another span of the same class:
+    it decides BLOCK, so a wider password-assignment span must never hide
+    it. Otherwise the more severe span wins (ties keep the earlier one).
+    """
+    if current.cls == span.cls:
+        if current.subclass == "canary":
+            return current
+        if span.subclass == "canary":
+            return span
+    return span if span.severity() > current.severity() else current
+
+
 def merge_overlaps(spans: list[Span]) -> list[Span]:
     """Merge spans whose code-point ranges overlap, keeping the more severe.
 
@@ -97,7 +112,7 @@ def merge_overlaps(spans: list[Span]) -> list[Span]:
     for span in ordered:
         if merged and span.cp_start < merged[-1].cp_end:
             current = merged[-1]
-            winner = span if span.severity() > current.severity() else current
+            winner = _merge_winner(current, span)
             merged[-1] = Span(
                 # UTF-16 offsets are monotonic in cp offsets, so the union's
                 # bounds are the min start and max end of the inputs.

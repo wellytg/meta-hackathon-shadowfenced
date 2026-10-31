@@ -1,8 +1,371 @@
-"""Shadowfenced entry point (the proxy arrives in T5)."""
+"""Shadowfenced proxy: scan, gate, forward, re-hydrate.
+
+Endpoints are plain ``def`` so they run anywhere; the upstream call
+goes through the synchronous client while ``upstream.chat`` offers the
+same request/response code as an async API. Tests inject an httpx
+``MockTransport`` via ``app.state.upstream_transport``.
+"""
 
 from __future__ import annotations
 
+import time
+import uuid
+from pathlib import Path
+from typing import Any, Literal
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from . import engine
+from .canary import CanaryRegistry
+from .config import get_settings
+from .policy import Policy, load_policy
+from .redact import load_mapping, rehydrate
+from .spans import Span
+from .upstream import UpstreamError, chat_sync
+
+app = FastAPI(title="shadowfenced")
+
+_POLICY: Policy | None = None
+_REGISTRY: CanaryRegistry | None = None
+
+REGISTRY_KINDS = ("db_password", "api_key")
+
+
+def get_policy() -> Policy:
+    """Load the org policy once and reuse it."""
+    global _POLICY
+    if _POLICY is None:
+        _POLICY = load_policy()
+    return _POLICY
+
+
+def get_registry() -> CanaryRegistry:
+    """Build the canary registry once from the configured seed."""
+    global _REGISTRY
+    if _REGISTRY is None:
+        _REGISTRY = CanaryRegistry(get_settings().canary_seed, REGISTRY_KINDS)
+    return _REGISTRY
+
+
+def reset_state() -> None:
+    """Forget cached policy/registry (tests only)."""
+    global _POLICY, _REGISTRY
+    _POLICY = None
+    _REGISTRY = None
+
+
+def span_to_dict(span: Span) -> dict[str, Any]:
+    """Serialise one span per the API contract (UTF-16 + code points)."""
+    return {
+        "span_id": span.span_id,
+        "start": span.start,
+        "end": span.end,
+        "cp_start": span.cp_start,
+        "cp_end": span.cp_end,
+        "cls": span.cls,
+        "subclass": span.subclass,
+        "tier": span.tier,
+        "proof": span.proof,
+        "status": span.status,
+        "message": span.message,
+        "why": span.why,
+        "suggested_action": span.suggested_action,
+        "can_keep": span.can_keep,
+        "confidence": span.confidence,
+    }
+
+
+def _part_text(part: Any) -> tuple[str, bool]:
+    """Return (text, is_text) for one message content part."""
+    if isinstance(part, str):
+        return part, True
+    if isinstance(part, dict):
+        if part.get("type") == "text":
+            content = part.get("text", "")
+            return (content if isinstance(content, str) else ""), True
+        return "", False
+    return "", False
+
+
+def extract_user_text(messages: list[Any]) -> tuple[str, bool]:
+    """Concatenate user text; flag is False when non-text parts appear."""
+    chunks: list[str] = []
+    clean = True
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content", "")
+        if isinstance(content, str):
+            chunks.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                text, is_text = _part_text(part)
+                if not is_text:
+                    clean = False
+                chunks.append(text)
+        elif content is None:
+            continue
+        else:
+            clean = False
+    return "\n".join(chunks), clean
+
+
+def _shadowfenced_field(decision: engine.Decision) -> dict[str, Any]:
+    return {
+        "decision": decision.decision,
+        "decision_id": decision.decision_id,
+        "resolved_tier": decision.resolved_tier,
+        "latency_ms": decision.latency_ms,
+    }
+
+
+def _forward_messages(
+    messages: list[dict[str, Any]], sent_text: str | None
+) -> list[dict[str, Any]]:
+    """Rebuild upstream messages with the gated user text only."""
+    kept = [m for m in messages if isinstance(m, dict) and m.get("role") != "user"]
+    if sent_text is not None:
+        kept.append({"role": "user", "content": sent_text})
+    return kept
+
+
+def _transport() -> Any:
+    """Injected httpx transport for tests (None in production)."""
+    return getattr(app.state, "upstream_transport", None)
+
+
+def _send_upstream(
+    messages: list[dict[str, Any]], provider: str | None
+) -> str:
+    """Forward gated messages; honour the injected test transport."""
+    return chat_sync(
+        messages,
+        provider,
+        settings=get_settings(),
+        transport=_transport(),
+    )
+
+
+class ScanRequest(BaseModel):
+    text: str = ""
+    mode: Literal["tier1", "live"] = "tier1"
+
+
+class ChoiceItem(BaseModel):
+    span_id: str
+    choice: str  # redact | keep
+
+
+class SendRequest(BaseModel):
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    file_ids: list[str] = Field(default_factory=list)
+    choices: list[ChoiceItem] = Field(default_factory=list)
+    provider: str | None = None
+
+
+class ChatRequest(BaseModel):
+    model: str = ""
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    stream: bool = False
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    """Liveness probe."""
+    return {"status": "ok"}
+
+
+@app.post("/api/scan")
+def scan(request: ScanRequest) -> dict[str, Any]:
+    """Run the Tier 1 scan and return spans plus latency."""
+    from . import tier1
+
+    started = time.perf_counter()
+    spans = tier1.scan(request.text, get_policy(), get_registry())
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    return {
+        "spans": [span_to_dict(s) for s in spans],
+        "latency_ms": {"tier1": elapsed_ms, "total": elapsed_ms},
+    }
+
+
+@app.post("/api/send")
+def send(body: SendRequest) -> dict[str, Any]:
+    """Gate the user text, forward it when allowed, re-hydrate the answer."""
+    text, clean = extract_user_text(body.messages)
+    decision = engine.gate(
+        text, get_policy(), get_registry(),
+        [c.model_dump() for c in body.choices],
+    )
+    if not clean:
+        return _send_response(_hold_for(decision, "non_text_content"), None, [], [])
+    if decision.decision in ("BLOCK", "HOLD"):
+        return _send_response(decision, None, [], [])
+    try:
+        answer = _send_upstream(
+            _forward_messages(body.messages, decision.sent_text), body.provider
+        )
+    except UpstreamError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "shadowfenced_upstream", "message": str(exc)},
+        ) from exc
+    mapping = load_mapping(decision.decision_id)
+    rehydrated, highlights, unmatched = rehydrate(answer, mapping)
+    return _send_response(decision, rehydrated, highlights, unmatched)
+
+
+def _hold_for(decision: engine.Decision, reason: str) -> engine.Decision:
+    return engine.Decision(
+        decision="HOLD",
+        decision_id=decision.decision_id,
+        spans=decision.spans,
+        sent_text=None,
+        placeholders={},
+        resolved_tier=decision.resolved_tier,
+        latency_ms=decision.latency_ms,
+        reasons=[*decision.reasons, reason],
+    )
+
+
+def _send_response(
+    decision: engine.Decision,
+    answer: str | None,
+    highlights: list[dict],
+    unmatched: list[str],
+) -> dict[str, Any]:
+    return {
+        "decision": decision.decision,
+        "decision_id": decision.decision_id,
+        "sent_text": decision.sent_text,
+        "answer": answer,
+        "answer_highlights": highlights,
+        "evidence": {
+            "spans": [span_to_dict(s) for s in decision.spans],
+            "reasons": decision.reasons,
+        },
+        "resolved_tier": decision.resolved_tier,
+        "latency_ms": decision.latency_ms,
+        "unmatched_placeholders": unmatched,
+    }
+
+
+@app.post("/v1/chat/completions")
+def chat_completions(body: ChatRequest) -> Any:
+    """OpenAI-compatible completions behind the Shadowfenced gate."""
+    text, clean = extract_user_text(body.messages)
+    if not clean:
+        decision = engine.gate(text, get_policy(), get_registry())
+        return _hold_response(decision, "non-text content parts need review")
+    decision = engine.gate(text, get_policy(), get_registry())
+    if decision.decision == "BLOCK":
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": {
+                    "code": "shadowfenced_block",
+                    "message": "blocked: proven secret would leak",
+                },
+                "shadowfenced": _shadowfenced_field(decision),
+            },
+            headers={"X-Shadowfenced-Decision": "BLOCK"},
+        )
+    if decision.decision == "HOLD":
+        return _hold_response(decision, "ambiguous spans need human review")
+    try:
+        answer = _send_upstream(
+            _forward_messages(body.messages, decision.sent_text), None
+        )
+    except UpstreamError as exc:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": {
+                    "code": "shadowfenced_upstream",
+                    "message": str(exc),
+                },
+                "shadowfenced": _shadowfenced_field(decision),
+            },
+            headers={"X-Shadowfenced-Decision": decision.decision},
+        )
+    mapping = load_mapping(decision.decision_id)
+    rehydrated, _, _ = rehydrate(answer, mapping)
+    model = body.model or get_settings().local_model
+    if body.stream:
+        return _stream_response(decision, model, rehydrated)
+    return JSONResponse(
+        status_code=200,
+        content={
+            "id": "chatcmpl-" + uuid.uuid4().hex[:12],
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": rehydrated},
+                    "finish_reason": "stop",
+                }
+            ],
+            "shadowfenced": _shadowfenced_field(decision),
+        },
+        headers={"X-Shadowfenced-Decision": decision.decision},
+    )
+
+
+def _hold_response(decision: engine.Decision, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error": {"code": "shadowfenced_hold", "message": message},
+            "review_url": f"/api/holds/{decision.decision_id}",
+            "shadowfenced": _shadowfenced_field(decision),
+        },
+        headers={"X-Shadowfenced-Decision": "HOLD"},
+    )
+
+
+def _stream_response(
+    decision: engine.Decision, model: str, content: str
+) -> StreamingResponse:
+    import json
+
+    chunk = {
+        "id": "chatcmpl-" + uuid.uuid4().hex[:12],
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+        "shadowfenced": _shadowfenced_field(decision),
+    }
+    body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+    return StreamingResponse(
+        iter([body]),
+        media_type="text/event-stream",
+        headers={"X-Shadowfenced-Decision": decision.decision},
+    )
+
+
+for _candidate in (
+    Path("static"),
+    Path(__file__).resolve().parent / "static",
+):
+    if _candidate.is_dir():
+        app.mount("/", StaticFiles(directory=str(_candidate), html=True), name="static")
+        break
+
 
 def main() -> None:
-    """CLI entry point; print a placeholder until the proxy lands."""
-    print("not implemented yet")
+    """Run the proxy on 127.0.0.1:8765."""
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=8765)

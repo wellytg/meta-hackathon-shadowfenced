@@ -317,6 +317,14 @@ def test_merge_overlaps_helper_prefers_severe():
     assert merged[0].cls == "secret"
 
 
+def test_merge_canary_wins_over_password_assignment(policy, registry):
+    value = _canary(registry)
+    spans = tier1.scan(f"password: {value}", policy, registry)
+    assert len(spans) == 1
+    assert spans[0].subclass == "canary"
+    assert spans[0].suggested_action == "block"
+
+
 def test_benign_prose_clean(policy, registry):
     text = (
         "We saw a heron by the lake near the tallow candles stall. "
