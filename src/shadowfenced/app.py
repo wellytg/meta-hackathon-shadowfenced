@@ -63,7 +63,7 @@ app = FastAPI(title="shadowfenced", lifespan=lifespan)
 _POLICY: Policy | None = None
 _REGISTRY: CanaryRegistry | None = None
 
-REGISTRY_KINDS = ("db_password", "api_key")
+from shadowfenced.canary import DEFAULT_KINDS as REGISTRY_KINDS
 
 # Prepended (as a system message) to upstream requests that carry redacted
 # text so small local models still complete the request instead of

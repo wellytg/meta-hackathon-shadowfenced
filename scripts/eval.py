@@ -38,6 +38,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--judge", choices=("glimmer", "llama", "none"),
                         required=True)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--corpus", default="cases", help="corpus name under corpus/ (cases | holdout)")
     parser.add_argument("--seed", default=None)
     return parser.parse_args(argv)
 
@@ -254,7 +255,7 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     settings = get_settings()
     policy = load_policy()
     registry = CanaryRegistry(settings.canary_seed, REGISTRY_KINDS)
-    raw = load_cases()
+    raw = load_cases(ROOT / "corpus" / f"{args.corpus}.yaml")
     if args.limit:
         raw = raw[:args.limit]
     gate_started = time.perf_counter()
@@ -266,6 +267,7 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
         metrics,
         {
             "judge": args.judge,
+            "corpus": args.corpus,
             "judge_model": judge_model,
             "seed": seed,
             "git_sha": _git_sha(),
@@ -274,7 +276,7 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
             "wall_s": wall_s,
         },
     )
-    out = ROOT / "runs" / f"eval_{date.today().isoformat()}_{args.judge}.json"
+    out = ROOT / "runs" / f"eval_{date.today().isoformat()}_{args.corpus}_{args.judge}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print_table(rows, metrics)

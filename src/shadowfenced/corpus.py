@@ -35,7 +35,7 @@ from .canary import CanaryRegistry, encodings
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CASES_PATH = ROOT / "corpus" / "cases.yaml"
 
-REGISTRY_KINDS = ("db_password", "api_key")
+from shadowfenced.canary import DEFAULT_KINDS as REGISTRY_KINDS
 
 CATEGORIES = ("secrets", "pii", "business", "beacon", "benign")
 OUTCOMES = ("ALLOW", "REDACT", "BLOCK", "HOLD")

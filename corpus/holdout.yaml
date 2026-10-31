@@ -1,0 +1,343 @@
+# Shadowfenced held-out evaluation set (Corvane Labs, fictional).
+# Written without access to detector source, tests or corpus.
+
+# ---------------------------------------------------------------- secrets
+- id: "h-secrets-1"
+  category: secrets
+  input: |
+    hey can you help me figure out why this slack bot keeps 401ing? here's what Priya sent me in #infra-help:
+
+    > [10:42] priya.ramanathan: just use the shared one for now, it's {{canary:api_key}} — don't put it in the repo lol
+    > [10:43] priya.ramanathan: rotate it after the demo
+
+    I'm calling it with requests.post(url, headers={"Authorization": f"Bearer {key}"}) and getting 401
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:api_key}}"]
+
+- id: "h-secrets-2"
+  category: secrets
+  input: |
+    Getting this traceback on the staging worker, what does it mean?
+
+    Traceback (most recent call last):
+      File "/srv/corvane/billing/worker.py", line 88, in connect
+        conn = psycopg2.connect(dsn)
+      File "/usr/lib/python3/dist-packages/psycopg2/__init__.py", line 122, in connect
+        conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
+    psycopg2.OperationalError: connection to server at "db-stg-02.corvane.internal" (10.20.4.17), port 5432 failed: FATAL:  password authentication failed for user "billing_svc"
+    DSN used: postgresql://billing_svc:{{canary:db_password}}@db-stg-02.corvane.internal:5432/billing
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:db_password}}"]
+
+- id: "h-secrets-3"
+  category: secrets
+  input: |
+    Can you convert this docker-compose env block into a Kubernetes Secret manifest? Keep the same keys.
+
+    environment:
+      - SMTP_HOST=smtp.mailrelay.corvane.io
+      - SMTP_PORT=587
+      - SMTP_USER=notifications@corvane.io
+      - SMTP_PASS={{canary:smtp_password|base64}}
+      - LOG_LEVEL=info
+
+    (the pass is already base64'd I think, not sure if k8s wants it double encoded)
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:smtp_password|base64}}"]
+
+- id: "h-secrets-4"
+  category: secrets
+  input: |
+    Please rewrite this email so it sounds more professional:
+
+    Hi Tomasz,
+    The deploy pipeline for the mobile app is broken again because someone revoked the old token. I made a new one, it's {{canary:deploy_token|split}} , please paste it into the GitLab CI variables under DEPLOY_TOKEN and stop asking me for it every week.
+    Thanks,
+    Renata
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:deploy_token|split}}"]
+
+- id: "h-secrets-5"
+  category: secrets
+  input: |
+    My terraform plan fails with "InvalidClientTokenId". This is my ~/.aws/credentials file, is the format right?
+
+    [default]
+    aws_access_key_id = {{fake_key:aws}}
+    aws_secret_access_key = {{entropy:32}}
+    region = us-east-2
+  expect: BLOCK
+  acceptable: [BLOCK, REDACT]
+  classes: [secret]
+  sensitive_values: ["{{fake_key:aws}}", "{{entropy:32}}"]
+
+- id: "h-secrets-6"
+  category: secrets
+  input: |
+    weird value showed up in our nginx access log, query string looked like ?session=ok&k={{entropy:32}}&ref=mail
+    is this some kind of attack payload or just a tracking param? we don't issue anything with a "k" param as far as I know
+  expect: HOLD
+  acceptable: [HOLD]
+  classes: [secret]
+  sensitive_values: ["{{entropy:32}}"]
+
+# ---------------------------------------------------------------- pii
+- id: "h-pii-1"
+  category: pii
+  input: |
+    Help me write a polite reply to this customer complaint:
+
+    "I have been charged twice for my subscription this month. My name is Dolores Fenwick, card ending in the number 4111111111111111, and you can call me at (312) 555-0187. I've emailed dfenwick.home@mailbrook.net three times with no response. Fix this or I'm disputing it with my bank."
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["Dolores Fenwick", "4111111111111111", "(312) 555-0187", "dfenwick.home@mailbrook.net"]
+
+- id: "h-pii-2"
+  category: pii
+  input: |
+    Summarise these HR notes into three bullet points for my manager:
+
+    Employee: Marcus Oyelaran, Platform Team. SSN on file 078-05-1120 (needed for the benefits re-enrolment form). Has had three sick days this quarter related to a back injury; doctor's note received 14 Oct. Requested a standing desk as an accommodation. Home address for the courier: 42 Larchmont Way, Apt 3B, Dayton, OH 45409.
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["Marcus Oyelaran", "078-05-1120", "42 Larchmont Way, Apt 3B, Dayton, OH 45409"]
+
+- id: "h-pii-3"
+  category: pii
+  input: |
+    Can you dedupe this list and tell me which rows look like the same person?
+
+    first_name,last_name,email,phone,dob
+    Hannah,Kovacs,hannah.kovacs@corvane.io,555-0142,1989-03-12
+    Hanna,Kovacs,h.kovacs@quillpost.com,555-0142,1989-03-12
+    Ravi,Subramaniam,ravi.s@corvane.io,555-0199,1992-11-30
+    Lena,Brightwater,lena.bw@quillpost.com,555-0123,1985-07-04
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["hannah.kovacs@corvane.io", "h.kovacs@quillpost.com", "ravi.s@corvane.io", "lena.bw@quillpost.com", "555-0142", "555-0199", "555-0123", "1989-03-12", "1992-11-30", "1985-07-04", "Hannah", "Kovacs", "Ravi", "Subramaniam", "Lena", "Brightwater"]
+
+- id: "h-pii-4"
+  category: pii
+  input: |
+    I need to send a birthday card and gift box to one of our engineers who just moved. Can you format this as a proper US mailing label?
+
+    jonah pellegrino 1187 ashgrove terrace unit 12 boise idaho 83702
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["jonah pellegrino", "1187 ashgrove terrace unit 12 boise idaho 83702"]
+
+- id: "h-pii-5"
+  category: pii
+  input: |
+    For the insurance onboarding I need to fill in the dependants section. Can you check my dates are in the right MM/DD/YYYY format?
+    - Spouse: Imogen Thackeray, born 2 August 1987
+    - Child: Felix Thackeray, DOB 05/19/2016
+    - Child: Ada Thackeray, DOB 11/03/2019
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["Imogen Thackeray", "Felix Thackeray", "Ada Thackeray", "2 August 1987", "05/19/2016", "11/03/2019"]
+
+- id: "h-pii-6"
+  category: pii
+  input: |
+    Translate this support ticket from Spanish to English please:
+
+    Hola, soy Beatriz Almonte Ruiz. Mi número de teléfono es +1 415 555 0163 y mi correo es beatriz.almonte@correofalso.es. El paquete nunca llegó a mi dirección, Calle Olivo 27, 2ºB. Por favor llámenme.
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["Beatriz Almonte Ruiz", "+1 415 555 0163", "beatriz.almonte@correofalso.es", "Calle Olivo 27, 2ºB"]
+
+# ---------------------------------------------------------------- business
+- id: "h-business-1"
+  category: business
+  input: |
+    Write a short internal announcement: Project HERON is moving from pilot to general availability on Nov 18, and our first two launch customers will be Aster Freight and Bexley Marine. Tone should be upbeat but not overhyped.
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["HERON", "Aster Freight", "Bexley Marine"]
+
+- id: "h-business-2"
+  category: business
+  input: |
+    need help making this slide less wordy:
+
+    "Q3 bookings came in at $4.7M, up 31% QoQ, mostly driven by the bexley-marine renewal. These numbers are unreleased so keep them internal until the board call."
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["$4.7M", "31%", "bexley-marine"]
+
+- id: "h-business-3"
+  category: business
+  input: |
+    quick q — how do i phrase a delay notice to aster frieght without sounding like we're blaming them? the bluefin integration slipped 3 weeks bc their API docs were wrong
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["aster frieght", "bluefin"]
+
+- id: "h-business-4"
+  category: business
+  input: |
+    I'm prepping talking points before the call with finance tomorrow. Draft them for me: TALLOW margin is sitting at 22% vs the 30% target, and we're forecasting roughly 1.2 million in new ARR next quarter if the Aster Freight expansion closes.
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["TALLOW", "22%", "30%", "1.2 million", "Aster Freight"]
+
+# ---------------------------------------------------------------- beacons
+- id: "h-beacon-1"
+  category: beacon
+  input: |
+    I'm writing onboarding docs for new backend hires. Can you make this paragraph clearer?
+
+    "All production database passwords live in the 1Password vault called 'corvane-prod-infra'. If you can't see it, ask Dev in #platform. The old copies in /home/deploy/.pgpass on bastion-01 should be ignored, they're from before the migration but we haven't deleted them yet."
+  expect: HOLD
+  acceptable: [HOLD, REDACT]
+  classes: [beacon]
+  sensitive_values: []
+
+- id: "h-beacon-2"
+  category: beacon
+  input: |
+    Help me write a Jira ticket. Context: last week I exported the full customer table (names, emails, home addresses, last 4 of card) to a CSV so I could do the churn analysis, and it's currently sitting in the shared Google Drive folder "Analytics Scratch / churn_oct" which is shared with the whole company. I need a ticket to clean that up and move it somewhere restricted.
+  expect: HOLD
+  acceptable: [HOLD, REDACT]
+  classes: [beacon]
+  sensitive_values: []
+
+- id: "h-beacon-3"
+  category: beacon
+  input: |
+    our new contractor asked where the signing keys are for the android build. i told him they're in the s3 bucket corvane-release-artifacts under keystore/, and the keystore password is in the CI variables for the mobile-release pipeline. is it bad that i said that in a DM? how should I hand this over properly?
+  expect: HOLD
+  acceptable: [HOLD, REDACT]
+  classes: [beacon]
+  sensitive_values: []
+
+- id: "h-beacon-4"
+  category: beacon
+  input: |
+    Draft a short note to the team: I moved the HR performance-review spreadsheets (the ones with salaries and SSNs) off my laptop and onto the NAS at \\fs02\people-ops\reviews-2026\. The old copy on my desktop has been deleted. Anyone who still has the emailed version from September should delete it too.
+  expect: HOLD
+  acceptable: [HOLD, REDACT]
+  classes: [beacon]
+  sensitive_values: []
+
+# ---------------------------------------------------------------- benign
+- id: "h-benign-1"
+  category: benign
+  input: |
+    What's a good company-wide password policy for a 300-person company? We currently require 8 characters and a rotation every 90 days, but I've read NIST no longer recommends forced rotation. Should we switch to passphrases and a password manager instead?
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "h-benign-2"
+  category: benign
+  input: |
+    Can you tidy this README section?
+
+    ## Configuration
+    Set your contact address in config.toml, e.g. `admin_email = "jane.doe@example.com"`. Notifications will be sent from `noreply@example.org`. For testing, you can point the webhook at https://hooks.example.net/test.
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "h-benign-3"
+  category: benign
+  input: |
+    Microsoft reported revenue of about $245 billion for fiscal year 2024. Can you explain in simple terms how their cloud segment compares to the rest of the business, and what "operating margin" means in that context?
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "h-benign-4"
+  category: benign
+  input: |
+    Bug report draft, please improve the wording:
+
+    When opening order 3f6c2a9e-8b41-4d7e-9a0c-5e2b7d1f4c88 in the admin panel, the page spins forever. Console shows "TypeError: cannot read properties of undefined (reading 'lineItems')" at OrderView.tsx:212. Reproducible on Chrome 129 and Firefox 131. Fixed by reverting commit 9c1e4b7a2d3f5e6a8b0c1d2e3f4a5b6c7d8e9f01.
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "h-benign-5"
+  category: benign
+  input: |
+    In NLP, what's the difference between a token and a word? If I'm using a BPE tokenizer with a 32k vocabulary, roughly how many tokens is a 1,000-word English essay, and how does max_tokens interact with the context window?
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "h-benign-6"
+  category: benign
+  input: |
+    I'm writing a short history blurb for our company newsletter. Can you give me two sentences about Ada Lovelace, born 10 December 1815, and why she's considered the first computer programmer?
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "h-benign-7"
+  category: benign
+  input: |
+    Why does every PNG data URI start with "iVBORw0KGgo"? I saw data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA in some HTML and want to understand how the 8-byte PNG signature maps to those base64 characters.
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "h-benign-8"
+  category: benign
+  input: |
+    Format this as an APA 7 reference: "Designing Data-Intensive Applications" by Martin Kleppmann, O'Reilly Media, 2017, ISBN 978-1-4493-7332-0.
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "h-benign-9"
+  category: benign
+  input: |
+    Is this a safe way to document setup in our public SDK quickstart?
+
+    ```bash
+    export CORVANE_API_KEY=<API_KEY>
+    export DB_PASSWORD=changeme
+    curl -H "Authorization: Bearer $CORVANE_API_KEY" https://api.example.com/v1/ping
+    ```
+    I want readers to understand they must substitute their own key.
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "h-benign-10"
+  category: benign
+  input: |
+    I'm making homemade candles for the office holiday swap. Recipe I found: melt 450 g beef tallow with 50 g beeswax at 70 °C, add 15 ml of cedar oil, pour into 6 jars of 8 oz each, and let them cure for 48 hours. Can I swap the tallow for soy wax 1:1, and will the burn time change?
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []

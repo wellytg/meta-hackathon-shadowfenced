@@ -16,6 +16,10 @@ from urllib.parse import quote, unquote
 PREFIX = "SF_CANARY_"
 
 
+# Canary kinds the org plants; shared by the app, review and evaluation.
+DEFAULT_KINDS = ("db_password", "api_key", "deploy_token", "smtp_password")
+
+
 def make_canary(seed: str, kind: str) -> str:
     """Build the canary value for one kind from the seed."""
     digest = hmac.new(seed.encode("utf-8"), kind.encode("utf-8"),

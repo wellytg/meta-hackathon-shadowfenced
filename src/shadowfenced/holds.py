@@ -35,7 +35,7 @@ from .policy import Policy, load_policy
 from .redact import PLACEHOLDER_RE, rehydrate, save_mapping
 from .spans import Span, merge_overlaps, span_from_cp_range
 
-REGISTRY_KINDS = ("db_password", "api_key")
+from shadowfenced.canary import DEFAULT_KINDS as REGISTRY_KINDS
 
 STATUSES = (
     "reviewing",
