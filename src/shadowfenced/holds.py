@@ -1,7 +1,7 @@
 """Asynchronous Glimmer review for HOLDs (T10).
 
-``engine.gate(mode="send")`` never calls the judge inline: ambiguous
-spans HOLD instantly and :func:`start_review` reviews them in a
+``engine.gate(mode="send")`` runs the whole-message live screen inline, then HOLDS instantly for flagged spans:
+:func:`start_review` reviews them in a
 background thread. For each pending span the send-model judge is asked
 and the answer is verified in code (Tier 3):
 

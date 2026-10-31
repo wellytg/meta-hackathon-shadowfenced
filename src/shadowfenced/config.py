@@ -30,6 +30,8 @@ _ENV_KEYS = (
     "SF_LIVE_TIMEOUT_S",
     "SF_LIVE_NUM_GPU",
     "SF_TIER2_MODE",
+    "SF_SCREEN",
+    "SF_SCREEN_TIMEOUT_S",
 )
 
 DEFAULT_LOG_PATH = "runs/decisions.jsonl"
@@ -86,6 +88,8 @@ class Settings(BaseModel):
     live_timeout_s: float = 4.0
     live_num_gpu: int = 0
     tier2_mode: str = "live"
+    screen_enabled: bool = True
+    screen_timeout_s: float = 6.0
 
     @property
     def meta_available(self) -> bool:
@@ -112,6 +116,13 @@ def _parse_float(raw: str | None, default: float) -> float:
         return float(raw) if raw not in (None, "") else default
     except (TypeError, ValueError):
         return default
+
+
+def _parse_screen(raw: str | None) -> bool:
+    """Parse SF_SCREEN: on|off (default on; off/0/false/no disable)."""
+    if raw is None or str(raw).strip() == "":
+        return True
+    return str(raw).strip().lower() not in ("off", "0", "false", "no")
 
 
 def _parse_int(raw: str | None, default: int) -> int:
@@ -151,6 +162,8 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
         live_timeout_s=_parse_float(merged.get("SF_LIVE_TIMEOUT_S"), 4.0),
         live_num_gpu=_parse_int(merged.get("SF_LIVE_NUM_GPU"), 0),
         tier2_mode=_tier2_mode(merged.get("SF_TIER2_MODE")),
+        screen_enabled=_parse_screen(merged.get("SF_SCREEN")),
+        screen_timeout_s=_parse_float(merged.get("SF_SCREEN_TIMEOUT_S"), 6.0),
     )
 
 

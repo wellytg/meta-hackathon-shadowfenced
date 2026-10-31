@@ -14,3 +14,5 @@ def _isolate_decision_log(monkeypatch, tmp_path):
     monkeypatch.setenv("SF_LOG_PATH", str(tmp_path / "decisions.jsonl"))
     # Tier 2 stays off unless a test opts in: no test may touch the network.
     monkeypatch.setenv("SF_TIER2_MODE", "off")
+    # Whole-message send screen stays off unless a test opts in.
+    monkeypatch.setenv("SF_SCREEN", "off")
