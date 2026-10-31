@@ -90,10 +90,10 @@ def scenes(ev: dict) -> list[dict]:
          "send": True, "hold": True, "deny": True},
         {"id": "results", "say": f"We tested it on {n} messages written by an independent agent that never saw the "
          f"detection code. All {ev['n_sensitive']} sensitive messages were flagged. In "
-         f"{round(ev['leak_rate'] * ev['n_sensitive'])} of them, a partial redaction still let one personal detail "
-         f"through, so there is work left. {round(ev['false_escalation_rate'] * ev['n_benign'])} of "
+         f"{round(ev['leak_rate'] * ev['n_sensitive'])} of them, a partial redaction still let personal details "
+         f"through, such as a name, a date of birth or an address, so there is work left. {round(ev['false_escalation_rate'] * ev['n_benign'])} of "
          f"{ev['n_benign']} harmless messages were held for review, which is the cost of failing closed. "
-         f"{pct(ev['resolved_by_tier'].get('1', 0))} were settled by code alone in under a millisecond."},
+         f"{pct(ev['resolved_by_tier'].get('1', 0))} were settled by code alone in about a millisecond."},
         {"id": "close", "say": "Every decision goes into a tamper-evident log. Shadowfenced: local first, proven by "
          "code, and it fails closed. Built during the hackathon with Muse Code, Muse Glimmer and Muse Spark."},
     ]
@@ -220,7 +220,7 @@ def main() -> None:
             held = round(ev["false_escalation_rate"] * ev["n_benign"])
             sc["lines"] = [f"{ev['n']} messages, written by an agent that never saw the detection code",
                            f"Sensitive messages flagged: {ev['n_sensitive']} of {ev['n_sensitive']}",
-                           f"Partial redaction still leaked a detail: {leaked} of {ev['n_sensitive']}",
+                           f"Partial redaction still leaked personal details: {leaked} of {ev['n_sensitive']}",
                            f"Harmless messages held for review: {held} of {ev['n_benign']}",
                            f"Settled by code alone: {pct(rb.get('1', 0))} · Glimmer + code: {pct(rb.get('3', 0))}"
                            f" · a person: {pct(rb.get('4', 0))}"]

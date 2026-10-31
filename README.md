@@ -45,7 +45,7 @@ Three test sets, all synthetic (fictional org "Corvane Labs"; secrets are runtim
 | **`corpus/final.yaml` (40)** | **second independent agent, sealed until tuning froze** | **3 of 26 (11.5 %)** | **26 of 26** | **4 of 14** | **final numbers** |
 
 Final set: 55 % of messages were settled by code alone (p95 under 1 ms), 7.5 % by Glimmer + code (~11 s), 37.5 %
-went to a person. The 3 leaks are partial redactions where one personal detail slipped through. Raw files:
+went to a person. The 3 leaks are partial redactions: names, a date of birth and a street address slipped through (1, 2 and 2 values). Raw files:
 `docs/results/`. The final set was run twice: the second run followed a parser fix (long Glimmer spans were being
 discarded) found while recording the demo; both runs gave identical metrics.
 
