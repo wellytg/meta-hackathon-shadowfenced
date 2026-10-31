@@ -1,0 +1,470 @@
+# Shadowfenced final independent test set (40 cases). All data invented.
+
+# ---------------- SECRETS (8) ----------------
+- id: "f-secrets-1"
+  category: secrets
+  input: |
+    my docker compose keeps failing on the postgres healthcheck, can you see whats wrong?
+
+    services:
+      db:
+        image: postgres:16
+        environment:
+          POSTGRES_USER: billing_svc
+          POSTGRES_PASSWORD: {{canary:db_password}}
+          POSTGRES_DB: billing
+        healthcheck:
+          test: ["CMD", "pg_isready", "-U", "billing"]
+          interval: 5s
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:db_password}}"]
+
+- id: "f-secrets-2"
+  category: secrets
+  input: |
+    Hi! Our partner sent this config JSON and the integration returns 401. Is the auth header built correctly from it?
+    {
+      "endpoint": "https://partner-gateway.ondrel-systems.io/v2/orders",
+      "auth": {
+        "type": "bearer",
+        "token_b64": "{{canary:api_key|base64}}"
+      },
+      "timeout_ms": 8000
+    }
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:api_key|base64}}"]
+
+- id: "f-secrets-3"
+  category: secrets
+  input: |
+    pipeline log from last night, deploy step died. why?
+
+    [2026-10-30 23:14:02] INFO  checkout complete (ref main)
+    [2026-10-30 23:14:09] INFO  building image corvane/web:1.42.0
+    [2026-10-30 23:15:47] INFO  pushing image... done
+    [2026-10-30 23:15:48] DEBUG using DEPLOY_TOKEN={{canary:deploy_token|split}}
+    [2026-10-30 23:15:50] ERROR helm upgrade failed: context deadline exceeded
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:deploy_token|split}}"]
+
+- id: "f-secrets-4"
+  category: secrets
+  input: |
+    Hallo, kannst du mir helfen? Unser Mailversand über den Relay funktioniert nicht mehr.
+    Die Konfiguration sieht so aus (das Passwort hat ein Kollege "verschlüsselt", ich glaube mit rot13):
+
+    smtp_host = mail-relay.intern.corvane.lan
+    smtp_port = 587
+    smtp_user = noreply-rechnungen
+    smtp_pass = {{canary:smtp_password|rot13}}
+
+    Fehlermeldung: 535 5.7.8 Authentication failed. Danke!
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:smtp_password|rot13}}"]
+
+- id: "f-secrets-5"
+  category: secrets
+  input: |
+    quick q - is this the right way to create the boto3 client or should I use a profile?
+
+    import boto3
+    s3 = boto3.client(
+        "s3",
+        region_name="eu-west-1",
+        aws_access_key_id="{{fake_key:aws}}",
+    )
+    s3.list_objects_v2(Bucket="corvane-reports-archive")
+  expect: BLOCK
+  acceptable: [BLOCK, REDACT]
+  classes: [secret]
+  sensitive_values: ["{{fake_key:aws}}"]
+
+- id: "f-secrets-6"
+  category: secrets
+  input: |
+    git push keeps asking me for a password even though i set the remote like this:
+    git remote set-url origin https://tmbeki:{{fake_key:github}}@github.com/corvane-labs/data-tools.git
+    what am i missing
+  expect: BLOCK
+  acceptable: [BLOCK, REDACT]
+  classes: [secret]
+  sensitive_values: ["{{fake_key:github}}"]
+
+- id: "f-secrets-7"
+  category: secrets
+  input: "can u make this bash script post to slack properly? curl -s -X POST -H 'Authorization: Bearer {{fake_key:slack}}' -H 'Content-type: application/json' --data '{\"channel\":\"#ops-alerts\",\"text\":\"backup done\"}' https://slack.com/api/chat.postMessage  it says not_in_channel"
+  expect: BLOCK
+  acceptable: [BLOCK, REDACT]
+  classes: [secret]
+  sensitive_values: ["{{fake_key:slack}}"]
+
+- id: "f-secrets-8"
+  category: secrets
+  input: |
+    JWT verification fails on staging but works locally. Staging uses this signing secret:
+    JWT_SECRET={{entropy:32}}
+    Algorithm is HS256. Could it be an encoding issue between the two services?
+  expect: HOLD
+  acceptable: [HOLD]
+  classes: [secret]
+  sensitive_values: ["{{entropy:32}}"]
+
+# ---------------- PII (8) ----------------
+- id: "f-pii-1"
+  category: pii
+  input: |
+    Can you help me write a polite reply to this customer complaint? Keep it short.
+
+    ---
+    From: Oluwaseun Adebayo <seun.adebayo@quillmarsh-mail.net>
+    Phone: (312) 555-0187
+    Subject: Order never arrived
+
+    I ordered the standing desk three weeks ago and it still hasn't shown up. I've called twice. Please call me back at the number above.
+    ---
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["Oluwaseun Adebayo", "seun.adebayo@quillmarsh-mail.net", "(312) 555-0187"]
+
+- id: "f-pii-2"
+  category: pii
+  input: |
+    Please convert this table to CSV and sort by start date:
+
+    | Name              | SSN         | Start date | Dept    |
+    |-------------------|-------------|------------|---------|
+    | Mariana Ostrowski | 078-05-1123 | 2024-03-11 | Finance |
+    | Kenji Watanabe    | 078-05-4471 | 2023-11-02 | Support |
+    | Fatima Al-Sayed   | 078-05-9038 | 2025-01-20 | Legal   |
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["Mariana Ostrowski", "078-05-1123", "Kenji Watanabe", "078-05-4471", "Fatima Al-Sayed", "078-05-9038"]
+
+- id: "f-pii-3"
+  category: pii
+  input: "customer says the refund went to the wrong card. card on file is 4111111111111111 exp 09/28, name on card dmitri volkov. how do i word the escalation to payments team"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["4111111111111111", "dmitri volkov"]
+
+- id: "f-pii-4"
+  category: pii
+  input: |
+    Hola, necesito traducir esta carta al inglés para el seguro médico:
+
+    Yo, Lucía Fernández Ortega, nacida el 14/02/1987, con domicilio en Calle de los Almendros 42, 3ºB, 28014 Madrid, solicito el reembolso de los gastos de la consulta del día 3 de octubre.
+    Teléfono de contacto: +1 (646) 555-0129.
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["Lucía Fernández Ortega", "14/02/1987", "Calle de los Almendros 42, 3ºB, 28014 Madrid", "+1 (646) 555-0129"]
+
+- id: "f-pii-5"
+  category: pii
+  input: |
+    Why does this payload fail schema validation? The API says "dob must be ISO date".
+    {"user_id": 88213, "full_name": "Anika Raghunathan", "email": "anika.r@pellwood-health.org", "dob": "1991/07/23", "address": {"street": "1180 Larkspur Ridge Rd", "city": "Dunmore", "state": "OR", "zip": "97321"}}
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["Anika Raghunathan", "anika.r@pellwood-health.org", "1991/07/23", "1180 Larkspur Ridge Rd"]
+
+- id: "f-pii-6"
+  category: pii
+  input: "summarize pls: tomasz from accounts called, his wife Ewa Kowalczyk is on medical leave from 11/4, her personal cell is 555-0164 and she asked us not to email her work address. her ssn for the leave paperwork is 078-05-6620"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["Ewa Kowalczyk", "555-0164", "078-05-6620"]
+
+- id: "f-pii-7"
+  category: pii
+  input: |
+    Bonjour, peux-tu reformuler ce message pour qu'il soit plus professionnel ?
+
+    "Salut Mathieu, le colis pour Mme Aminata Diallo doit partir au 17 rue des Tilleuls, 69003 Lyon. Elle veut qu'on la prévienne au +1 (718) 555-0192 ou par mail aminata.diallo@corbeau-postal.fr avant la livraison."
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["Aminata Diallo", "17 rue des Tilleuls, 69003 Lyon", "+1 (718) 555-0192", "aminata.diallo@corbeau-postal.fr"]
+
+- id: "f-pii-8"
+  category: pii
+  input: |
+    Can you write a regex to pull the email and card fields out of these log lines?
+
+    2026-10-29T08:41:12Z checkout ok user=hgreenberg email=harriet.greenberg@lindqvist-co.com card=5555555555554444 amount=129.00
+    2026-10-29T08:43:55Z checkout ok user=rnakamura email=r.nakamura@tessellin.net card=4111111111111111 amount=48.50
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["harriet.greenberg@lindqvist-co.com", "5555555555554444", "r.nakamura@tessellin.net", "4111111111111111"]
+
+# ---------------- BUSINESS (5) ----------------
+- id: "f-business-1"
+  category: business
+  input: |
+    Draft a 3-bullet status update for leadership:
+    - TALLOW beta slipped two weeks, new date Nov 18
+    - vendor contract for the inference cluster signed
+    - hiring two more backend engineers for TALLOW
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["TALLOW"]
+
+- id: "f-business-2"
+  category: business
+  input: "Can you tighten this email? 'Hi team, quick heads up that Aster Freight wants to renegotiate the SLA before renewal, so please don't share the uptime report outside the account team yet.'"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["Aster Freight"]
+
+- id: "f-business-3"
+  category: business
+  input: |
+    Make a chart-friendly table from these Q3 numbers, they're unreleased so I just need it formatted for the board deck:
+    July bookings $2.41M
+    August bookings $2.87M
+    September bookings $3.12M
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["$2.41M", "$2.87M", "$3.12M"]
+
+- id: "f-business-4"
+  category: business
+  input: |
+    Subject: Project Heron – kickoff with Bexley Marine
+
+    Hi all,
+    We're kicking off Project Heron with Bexley Marine next Tuesday. Scope is the port-scheduling dashboard; they expect a first demo by end of January. Please keep the client name off public channels for now.
+
+    Can you turn this into a calendar invite description?
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["Heron", "Bexley Marine"]
+
+- id: "f-business-5"
+  category: business
+  input: "need talking points for my 1:1, keep it casual. main thing: BLUEFIN pricing is going to $14/seat and we tell Aster Freight before the call on friday that their discount drops to 12%"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["BLUEFIN", "$14/seat", "Aster Freight", "12%"]
+
+# ---------------- BEACONS (5) ----------------
+- id: "f-beacon-1"
+  category: beacon
+  input: "fyi for the runbook: the prod payments db creds live in vault under secret/corvane/prod/payments-db, and there's an older copy in the shared 1password vault called 'Ops Legacy'. can you write that up as a short how-to section?"
+  expect: HOLD
+  acceptable: [HOLD, REDACT]
+  classes: [beacon]
+  sensitive_values: []
+
+- id: "f-beacon-2"
+  category: beacon
+  input: |
+    Help me word this incident note:
+    Yesterday I exported the full employee roster with SSNs and home addresses to \\fs02\hr-share\exports\roster_full_2026-10.xlsx so the benefits vendor could pick it up. It's still there and the folder is readable by all staff.
+  expect: HOLD
+  acceptable: [HOLD, REDACT]
+  classes: [beacon]
+  sensitive_values: []
+
+- id: "f-beacon-3"
+  category: beacon
+  input: "ok so i copied the customer list (names, phones, card last4) from the crm into my personal google drive so i could work on it at home over the weekend, is there an easy way to dedupe it in sheets"
+  expect: HOLD
+  acceptable: [HOLD, REDACT]
+  classes: [beacon]
+  sensitive_values: []
+
+- id: "f-beacon-4"
+  category: beacon
+  input: |
+    Is it a bad idea? Our deploy keys and the .env with all the API tokens are committed in the repo under config/secrets/prod.env on the internal gitlab, and the repo got mirrored to a public github fork last month by mistake.
+  expect: HOLD
+  acceptable: [HOLD, REDACT]
+  classes: [beacon]
+  sensitive_values: []
+
+- id: "f-beacon-5"
+  category: beacon
+  input: |
+    - backups: nightly pg_dump of the patients table goes to s3://corvane-tmp-dumps/patients/ (bucket has no encryption yet)
+    - the SMTP password is in the sticky note doc on the ops wiki, page "Mail stuff"
+    - turn these into jira tickets with priorities
+  expect: HOLD
+  acceptable: [HOLD, REDACT]
+  classes: [beacon]
+  sensitive_values: []
+
+# ---------------- BENIGN (14) ----------------
+- id: "f-benign-1"
+  category: benign
+  input: |
+    How should I read the DB password in this Flask app instead of hardcoding it?
+
+    import os
+    DB_PASSWORD = os.environ.get("DB_PASSWORD")
+    if not DB_PASSWORD:
+        raise RuntimeError("DB_PASSWORD not set")
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-2"
+  category: benign
+  input: "what's a good regex for validating US SSNs in the format XXX-XX-XXXX? also should it reject 000 and 666 area numbers"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-3"
+  category: benign
+  input: |
+    Can you explain why this rebase went wrong?
+
+    commit 9f3c2a71e4b8d05a6c1f7e2b3d4a5c6e7f8091ab
+    Author: Dev Bot <devbot@example.com>
+    Date:   Wed Oct 28 14:02:11 2026 +0000
+
+        Merge branch 'feature/retry-logic'
+
+    commit 1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d
+    Author: Jane Doe <jane.doe@example.org>
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-4"
+  category: benign
+  input: "i want to make tallow candles at home, what ratio of beef tallow to beeswax works best and do i need a special wick"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-5"
+  category: benign
+  input: |
+    Our office pond has a great blue heron visiting every morning and a few bluefin killifish in the tank inside. Can you suggest a fun name for the office newsletter's nature corner?
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-6"
+  category: benign
+  input: |
+    This stack trace shows up intermittently, any idea?
+
+    ERROR 2026-10-30 10:22:31,884 request_id=3f6b2c1e-8a4d-4e7f-9b0a-2d5c6e7f8a91 worker=4
+    Traceback (most recent call last):
+      File "/app/handlers/upload.py", line 88, in handle
+        blob = storage.put(key, data)
+      File "/app/storage/s3.py", line 41, in put
+        raise TimeoutError("upload exceeded 30s")
+    TimeoutError: upload exceeded 30s
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-7"
+  category: benign
+  input: |
+    For our docs, write a sample .env.example file with placeholder values only, like:
+    DATABASE_URL=postgres://user:<password>@localhost:5432/app
+    API_KEY=your-api-key-here
+    SMTP_PASSWORD=changeme
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-8"
+  category: benign
+  input: "In the movie script the detective gives out his number as 555-0100, is that a real thing or just a Hollywood convention? why 555"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-9"
+  category: benign
+  input: |
+    会議室の予約システムについて質問です。Outlookで定期的な会議を作成すると、2回目以降の予約が反映されないことがあります。原因として何が考えられますか？
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-10"
+  category: benign
+  input: |
+    Why does decoding this base64 string give me "hello world" with a weird trailing char?
+    aGVsbG8gd29ybGQK
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-11"
+  category: benign
+  input: |
+    I'm planning our team offsite and need help with an agenda. Details:
+    - 22 people, two days in early December
+    - Day 1: retro on the year, roadmap brainstorm, team dinner
+    - Day 2: workshops on testing practices and on-call hygiene, then a hike if weather allows
+    - Budget is flexible but we'd like to keep travel under 2 hours from the office
+    - A few people are vegetarian, one person is gluten-free
+    Please suggest timings for each block, a couple of icebreakers that aren't cringe, and a backup indoor activity in case it rains. Also a short Slack announcement I can post in #team-general once it's finalized. Bonus if you can suggest a way to collect dietary preferences without making it awkward.
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-12"
+  category: benign
+  input: "how do i rotate an api key safely without downtime? we have two services reading it from a secrets manager"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-13"
+  category: benign
+  input: |
+    Verifying a downloaded installer, is this command right?
+    sha256sum installer-3.2.1.tar.gz
+    expected: 4c7a1e9f0b3d6a2e8f5c1b7d9e0a3f6c2b8d4e1a7f9c0b3e6d2a5f8c1e4b7d0a
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: "f-benign-14"
+  category: benign
+  input: "Write a unit test for the Luhn check function using the standard test card number from the Stripe docs and an obviously invalid one like 1234 5678 9012 3456. send results to qa-team@example.net"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
