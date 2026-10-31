@@ -2,7 +2,7 @@
 
 import pytest
 
-from tripwire import verifier
+from shadowfenced import verifier
 
 
 @pytest.mark.xfail(reason="verifier not implemented (scaffold only)", strict=True)

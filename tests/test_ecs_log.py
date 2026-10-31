@@ -2,7 +2,7 @@
 
 import pytest
 
-from tripwire import ecs_log
+from shadowfenced import ecs_log
 
 
 @pytest.mark.xfail(reason="ecs_log not implemented (scaffold only)", strict=True)

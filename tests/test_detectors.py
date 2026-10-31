@@ -2,7 +2,7 @@
 
 import pytest
 
-from tripwire import detectors
+from shadowfenced import detectors
 
 
 @pytest.mark.xfail(reason="detectors not implemented (scaffold only)", strict=True)

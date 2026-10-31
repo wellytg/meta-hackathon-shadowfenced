@@ -1,4 +1,4 @@
-"""Pytest bootstrap: put src/ on sys.path so tests import tripwire."""
+"""Pytest bootstrap: put src/ on sys.path so tests import shadowfenced."""
 
 import os
 import sys
