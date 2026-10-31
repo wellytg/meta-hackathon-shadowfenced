@@ -12,8 +12,14 @@
 
   var scanSeq = 0;       // latest scan request id; stale responses are dropped
   var spans = [];        // spans from the latest accepted scan
-  var choices = {};      // span_id -> "redact" | "keep"
+  var choices = {};      // span_id -> "redact" | "keep", only spans the user clicked
   var scanTimer = null;
+  var emptyHint = document.getElementById("empty-hint");
+
+  function updateEmptyHint() {
+    if (!emptyHint) return;
+    emptyHint.hidden = thread.querySelector(".bubble, .banner") !== null;
+  }
 
   function escapeHtml(text) {
     return text
@@ -149,8 +155,9 @@
       .then(function (body) {
         if (mySeq !== scanSeq) return; // stale response
         spans = body.spans || [];
+        // No default choices: only spans the user explicitly clicks are
+        // sent, so the gate never reports a choice the user never made.
         choices = {};
-        spans.forEach(function (s) { choices[s.span_id] = "redact"; });
         renderBackdrop(text, spans);
         renderIssues(spans, body.latency_ms);
       })
@@ -186,18 +193,29 @@
     return html;
   }
 
+  // User-facing banner line. The server's user_message is plain text
+  // with no span ids, hashes, or raw values; machine reasons stay in
+  // the log and are never shown here.
   function bannerText(decision, body) {
+    if (body && typeof body.user_message === "string" && body.user_message) {
+      return body.user_message;
+    }
     if (decision === "ALLOW") return "Sent clean";
+    if (decision === "BLOCK") {
+      return "A planted canary token was found (proven by code). Nothing was sent.";
+    }
+    if (decision === "HOLD") {
+      return "Held for review: possible pointer to sensitive data.";
+    }
     if (decision === "REDACT") {
       var n = 0;
-      if (body.sent_text) {
+      if (body && body.sent_text) {
         var found = body.sent_text.match(/\[[^\]]*\]/g);
         n = found ? found.length : 0;
       }
-      return "Sent with " + n + " redaction" + (n === 1 ? "" : "s");
+      return "Sent with " + n + " redaction" + (n === 1 ? "" : "s") + ".";
     }
-    if (decision === "BLOCK") return "Blocked: proven by code";
-    return "Held for human review";
+    return "Held for review: possible pointer to sensitive data.";
   }
 
   function refreshStats() {
@@ -254,12 +272,27 @@
       .catch(function () { /* badge keeps its last state */ });
   }
 
+  function clearComposer() {
+    composer.value = "";
+    spans = [];
+    choices = {};
+    renderBackdrop("", []);
+    renderIssues([], null);
+    syncScroll();
+  }
+
   function sendNow() {
     var text = composer.value;
     if (!text) return;
-    var choiceList = spans.map(function (s) {
-      return { span_id: s.span_id, choice: choices[s.span_id] || "redact" };
-    });
+    // Only spans the user explicitly clicked Redact/Keep on are sent;
+    // anything untouched redacts by default without a recorded choice.
+    var choiceList = spans
+      .filter(function (s) {
+        return Object.prototype.hasOwnProperty.call(choices, s.span_id);
+      })
+      .map(function (s) {
+        return { span_id: s.span_id, choice: choices[s.span_id] };
+      });
     var userBubble = document.createElement("div");
     userBubble.className = "bubble user";
     userBubble.textContent = text;
@@ -283,13 +316,9 @@
         banner.className = "banner";
         banner.setAttribute("data-testid", "banner");
         banner.setAttribute("data-decision", decision);
+        // Plain user-facing line only; machine reasons (span ids, hashes)
+        // stay in the log and are never rendered here.
         banner.textContent = bannerText(decision, body);
-        if ((decision === "BLOCK" || decision === "HOLD") &&
-            body.evidence && body.evidence.reasons && body.evidence.reasons.length) {
-          var reason = document.createElement("small");
-          reason.textContent = body.evidence.reasons.join("; ");
-          banner.appendChild(reason);
-        }
         thread.appendChild(banner);
 
         var toggle = document.createElement("button");
@@ -319,6 +348,7 @@
           answer.innerHTML = highlightRanges(body.answer, body.answer_highlights);
           thread.appendChild(answer);
         }
+        updateEmptyHint();
         refreshStats();
       })
       .catch(function () {
@@ -326,10 +356,12 @@
         banner.className = "banner";
         banner.setAttribute("data-testid", "banner");
         banner.setAttribute("data-decision", "HOLD");
-        banner.textContent = "Held for human review";
+        banner.textContent = "Held for review: possible pointer to sensitive data.";
         thread.appendChild(banner);
+        updateEmptyHint();
       })
       .then(function () {
+        clearComposer();
         checking.hidden = true;
         sendBtn.disabled = false;
       });
@@ -346,5 +378,6 @@
   });
 
   renderBackdrop("", []);
+  updateEmptyHint();
   refreshStats();
 })();

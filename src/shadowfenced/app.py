@@ -34,12 +34,14 @@ _REGISTRY: CanaryRegistry | None = None
 REGISTRY_KINDS = ("db_password", "api_key")
 
 # Prepended (as a system message) to upstream requests that carry redacted
-# text so the model treats placeholders as the real values.
+# text so small local models still complete the request instead of
+# refusing on the bracketed placeholder labels.
 REDACT_NOTE = (
-    "Some values in the user's message were replaced by placeholders "
-    "such as [PII_EMAIL_1] or [CODENAME_1] for privacy. Treat each "
-    "placeholder as the real value, use it verbatim where needed, and "
-    "do not comment on it."
+    "Privacy notice from the user's organisation: items in square "
+    "brackets like [PII_EMAIL_1] are harmless placeholder labels "
+    "standing in for values that were removed on purpose. They are not "
+    "private data. Complete the user's request normally and copy the "
+    "labels exactly where the values belong."
 )
 
 
@@ -280,6 +282,7 @@ def _send_response(
         "sent_text": decision.sent_text,
         "answer": answer,
         "answer_highlights": highlights,
+        "user_message": engine.user_message(decision),
         "evidence": {
             "spans": [span_to_dict(s) for s in decision.spans],
             "reasons": decision.reasons,

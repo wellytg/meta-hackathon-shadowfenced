@@ -8,12 +8,17 @@
 </head>
 <body>
 <header class="topbar">
-  <h1>Shadowfenced</h1>
-  <p class="tagline">Nothing sensitive crosses the boundary.</p>
+  <div>
+    <h1>Shadowfenced</h1>
+    <p class="tagline">Nothing sensitive crosses the boundary.</p>
+  </div>
+  <span class="header-pill" data-testid="header-pill">Local check · Meta Llama 3.2 + Muse Glimmer</span>
 </header>
 <main class="layout">
   <section class="chat-col">
-    <div id="thread" class="thread" aria-live="polite"></div>
+    <div id="thread" class="thread" aria-live="polite">
+      <div id="empty-hint" data-testid="empty-hint" class="thread-hint">Type or paste anything. Sensitive text is underlined as you type, and only clean or redacted text is sent to the AI.</div>
+    </div>
     <div class="composer-block">
       <div class="composer-wrap">
         <div id="backdrop" class="composer-backdrop" aria-hidden="true"></div>
