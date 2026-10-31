@@ -24,7 +24,14 @@ from shadowfenced.app import (
 )
 from shadowfenced.app import app
 from shadowfenced.config import Settings, get_settings
-from shadowfenced.upstream import UpstreamError, build_request
+from shadowfenced.upstream import (
+    META_TIMEOUT_S,
+    TIMEOUT_S,
+    UpstreamError,
+    _timeout_for,
+    _verify_for,
+    build_request,
+)
 
 
 def _key(suffix: str = "x") -> str:
@@ -175,6 +182,42 @@ def test_send_accepts_provider_and_reports_it(
         str(mock_upstream[1].url)
         == "http://127.0.0.1:11434/v1/chat/completions"
     )
+
+
+def test_meta_body_omits_max_tokens():
+    key = _key("nomax")
+    settings = Settings(
+        upstream="meta",
+        meta_api_key=key,
+        meta_base_url="http://meta.example",
+        meta_model="m",
+    )
+    _, _, body = build_request(
+        [{"role": "user", "content": "hi"}], "meta", settings
+    )
+    assert "max_tokens" not in body
+
+
+def test_meta_default_timeout_is_90s(hermetic_env):
+    settings = get_settings({"META_API_KEY": _key("t")})
+    assert META_TIMEOUT_S == 90.0
+    assert _timeout_for("meta", TIMEOUT_S, settings) == 90.0
+    assert _timeout_for("ollama", TIMEOUT_S, settings) == TIMEOUT_S
+    assert _timeout_for("meta", 5.0, settings) == 5.0
+
+
+def test_verify_stays_on_for_https():
+    import ssl
+
+    verify = _verify_for("https://api.meta.ai/v1/chat/completions")
+    try:
+        import truststore
+
+        assert isinstance(verify, ssl.SSLContext)
+        assert isinstance(verify, truststore.SSLContext)
+    except ImportError:
+        assert verify is True
+    assert _verify_for("http://127.0.0.1:11434/v1/chat/completions") is True
 
 
 def test_send_default_follows_provider_override(

@@ -12,6 +12,7 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "httpx",
+    "truststore",
     "pydantic",
     "pyyaml",
     "python-multipart",

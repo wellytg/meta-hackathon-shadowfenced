@@ -26,6 +26,21 @@ from pydantic import BaseModel, field_validator
 
 from .config import get_settings
 
+# Eval runs set SF_KEEP_ALIVE=5m so back-to-back judgements do not pin
+# GPU memory between cases; production keeps models resident with -1.
+import os as _os
+
+
+def _keep_alive() -> Any:
+    """Ollama keep_alive: int seconds, duration string, or -1 (resident)."""
+    raw = (_os.environ.get("SF_KEEP_ALIVE") or "-1").strip()
+    if raw == "-1":
+        return -1
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
+
 JudgementClass = Literal["secret", "pii", "business", "beacon", "benign"]
 
 SYSTEM_PROMPT = (
@@ -117,7 +132,7 @@ def _request_body(window: str, model: str, *, live: bool) -> dict[str, Any]:
         "format": Judgement.model_json_schema(),
         "stream": False,
         "think": False,
-        "keep_alive": -1,
+        "keep_alive": _keep_alive(),
         "options": options,
     }
 
@@ -180,7 +195,7 @@ def _ping(
             "messages": [{"role": "user", "content": "ok"}],
             "stream": False,
             "think": False,
-            "keep_alive": -1,
+            "keep_alive": _keep_alive(),
             "options": {"num_ctx": 2048, "num_predict": 4},
         }
         if live:

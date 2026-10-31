@@ -670,12 +670,19 @@
       banner.textContent = text;
     }
 
-    function showHoldAnswer(answerText) {
+    function showHoldAnswer(answerText, providerId) {
       var bubble = document.createElement("div");
       bubble.className = "bubble answer";
       bubble.setAttribute("data-testid", "answer");
       bubble.innerHTML = highlightRanges(answerText, []);
       thread.appendChild(bubble);
+      // Footer names the provider actually used (server-echoed), never
+      // just the selector value, so a mid-flight switch cannot mislabel.
+      var holdSrc = document.createElement("div");
+      holdSrc.className = "answer-src";
+      holdSrc.textContent = "via " + providerLabel(
+        providerId || (providerSel && providerSel.value));
+      thread.appendChild(holdSrc);
     }
 
     function rule(ok, approveBtn, denyBtn) {
@@ -697,7 +704,7 @@
               res.body.decision || "REDACT",
               res.body.user_message || "Sent with redactions."
             );
-            if (res.body.answer != null) showHoldAnswer(res.body.answer);
+            if (res.body.answer != null) showHoldAnswer(res.body.answer, res.body.provider);
             label.textContent = "Approved: the redacted text was sent.";
           } else if (!ok && res.body && res.body.user_message) {
             finishBanner("HOLD", res.body.user_message);
@@ -758,7 +765,7 @@
           stop();
           if (st === "redacted_sent") {
             finishBanner("REDACT", body.user_message || "Sent with redactions.");
-            if (body.answer != null) showHoldAnswer(body.answer);
+            if (body.answer != null) showHoldAnswer(body.answer, body.provider);
             label.textContent = body.title || body.user_message || "Sent with redactions.";
           } else if (st === "released") {
             var sent = body.sent_text || "";
@@ -766,7 +773,7 @@
               sent.indexOf("[") >= 0 ? "REDACT" : "ALLOW",
               body.user_message || "Sent."
             );
-            if (body.answer != null) showHoldAnswer(body.answer);
+            if (body.answer != null) showHoldAnswer(body.answer, body.provider);
             label.textContent = body.title || body.user_message || "Sent.";
           } else if (st === "needs_human") {
             label.textContent = body.title || "Glimmer could not clear this \u2014 your call.";
@@ -790,7 +797,7 @@
               out.indexOf("[") >= 0 ? "REDACT" : "ALLOW",
               body.user_message || "Sent."
             );
-            if (body.answer != null) showHoldAnswer(body.answer);
+            if (body.answer != null) showHoldAnswer(body.answer, body.provider);
             label.textContent = body.user_message || "Sent.";
           }
           updateEmptyHint();

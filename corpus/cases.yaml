@@ -1,0 +1,333 @@
+# Shadowfenced evaluation corpus: templates only, never secret values.
+# Every {{...}} template expands at runtime (see src/shadowfenced/corpus.py).
+# Fictional org "Corvane Labs" only: 555 numbers, @corvane.io, 078-05-1120,
+# and 4111...1111 are invented test values. No key shape appears literally.
+#
+# Schema: {id, category, input|file, expect, acceptable, classes,
+# sensitive_values}. Beacons expect HOLD (acceptable REDACT); the generic
+# entropy token expects HOLD.
+
+# --- secrets (10): planted canaries, fake provider keys, entropy token ---
+- id: s-canary-exact
+  category: secrets
+  input: "Rotate {{canary:db_password}} tonight after the deploy"
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:db_password}}"]
+
+- id: s-canary-b64
+  category: secrets
+  input: "Found this blob in the debug log: {{canary:db_password|base64}}"
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:db_password}}"]
+
+- id: s-canary-hex
+  category: secrets
+  input: "The crash dump contains {{canary:db_password|hex}} near the top"
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:db_password}}"]
+
+- id: s-canary-rot13
+  category: secrets
+  input: "Obfuscated credential {{canary:db_password|rot13}} in the ticket"
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:db_password}}"]
+
+- id: s-canary-reversed
+  category: secrets
+  input: "Reversed string {{canary:db_password|reversed}} pasted from chat"
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:db_password}}"]
+
+- id: s-canary-url
+  category: secrets
+  input: "Query string carries {{canary:db_password|url}} after the redirect"
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:db_password}}"]
+
+- id: s-canary-split
+  category: secrets
+  input: "Spaced out {{canary:db_password|split}} to dodge the filter"
+  expect: BLOCK
+  acceptable: [BLOCK]
+  classes: [secret]
+  sensitive_values: ["{{canary:db_password}}"]
+
+- id: s-fake-aws
+  category: secrets
+  input: "My key is {{fake_key:aws}} do not share it"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [secret]
+  sensitive_values: ["{{fake_key:aws}}"]
+
+- id: s-fake-github
+  category: secrets
+  input: "Token {{fake_key:github}} leaked into the chat history"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [secret]
+  sensitive_values: ["{{fake_key:github}}"]
+
+- id: s-entropy
+  category: secrets
+  input: "Saw token {{entropy:32}} in the build log"
+  expect: HOLD
+  acceptable: [HOLD]
+  classes: [secret]
+  sensitive_values: ["{{entropy:32}}"]
+
+# --- PII (7): redacted per policy ---
+- id: p-email
+  category: pii
+  input: "Email ada.lark@corvane.io about the pilot kickoff"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["ada.lark@corvane.io"]
+
+- id: p-phone
+  category: pii
+  input: "Call me at +1 (415) 555-0132 tomorrow morning"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["+1 (415) 555-0132"]
+
+- id: p-ssn
+  category: pii
+  input: "SSN 078-05-1120 is on the form she signed"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["078-05-1120"]
+
+- id: p-card
+  category: pii
+  input: "Card 4111111111111111 expired in June"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["4111111111111111"]
+
+- id: p-employee
+  category: pii
+  input: "Ada Lark (EMP-104203) joined the pilot team"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["EMP-104203"]
+
+- id: p-intl-phone
+  category: pii
+  input: "Reach Ben on +44 20 7946 0018 today"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["+44 20 7946 0018"]
+
+- id: f-customers
+  category: pii
+  file: customers.csv
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [pii]
+  sensitive_values: ["ada.lark@corvane.io", "+1 (415) 555-0132"]
+
+# --- business (4): codenames, clients, unreleased figures ---
+- id: b-codename-caps
+  category: business
+  input: "Ship TALLOW before the freeze next week"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["TALLOW"]
+
+- id: b-codename-project
+  category: business
+  input: "The Project Bluefin timeline slipped a week"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["Project Bluefin"]
+
+- id: b-client
+  category: business
+  input: "Send the status summary to Aster Freight today"
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["Aster Freight"]
+
+- id: f-roadmap
+  category: business
+  file: roadmap.docx
+  expect: REDACT
+  acceptable: [REDACT]
+  classes: [business]
+  sensitive_values: ["Project TALLOW", "Aster Freight"]
+
+# --- beacons (3): pointer to where secrets live -> HOLD, REDACT acceptable ---
+- id: be-db-path
+  category: beacon
+  input: "The database passwords live in ~/secrets/prod.env"
+  expect: HOLD
+  acceptable: [HOLD, REDACT]
+  classes: [beacon]
+  sensitive_values: ["~/secrets/prod.env"]
+
+- id: be-vault
+  category: beacon
+  input: "Old API tokens were moved to vault:team/archive"
+  expect: HOLD
+  acceptable: [HOLD, REDACT]
+  classes: [beacon]
+  sensitive_values: ["vault:team/archive"]
+
+- id: be-relpath
+  category: beacon
+  input: "Deploy keys are listed in deploy/keys.txt for onboarding"
+  expect: HOLD
+  acceptable: [HOLD, REDACT]
+  classes: [beacon]
+  sensitive_values: ["deploy/keys.txt"]
+
+# --- benign look-alikes (16): nothing may escalate ---
+- id: n-banana
+  category: benign
+  input: "Banana bread recipe: flour, sugar, and two ripe bananas"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-standup
+  category: benign
+  input: "Water the office plants on Fridays"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-gitsha
+  category: benign
+  input: "Pinned the demo at commit 9f3c2a1b4e5d for the review"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-uuid
+  category: benign
+  input: "Request id 123e4567-e89b-12d3-a456-426614174000 for tracing"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-example-email
+  category: benign
+  input: "Mail hello@example.com for general questions"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-lower-codename
+  category: benign
+  input: "The bluefin drifted past the reef at dawn"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-password-word
+  category: benign
+  input: "I forgot my password again this morning"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-short-key
+  category: benign
+  input: "The key AKIA123 is too short to be real"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-bad-luhn
+  category: benign
+  input: "Card 4111111111111112 was declined at checkout"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-emp-noname
+  category: benign
+  input: "Badge EMP-104203 was retired in spring"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-keys-noloc
+  category: benign
+  input: "Rotate the keys every quarter for hygiene"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-path-nosecret
+  category: benign
+  input: "Open ~/docs/guide.md to begin the tour"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-figure-nocue
+  category: benign
+  input: "Revenue was 4200000 dollars last quarter"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-phone-short
+  category: benign
+  input: "Call ext 1234 for help"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: n-security-generic
+  category: benign
+  input: "We take security seriously at Corvane Labs"
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []
+
+- id: f-notes
+  category: benign
+  file: notes.md
+  expect: ALLOW
+  acceptable: [ALLOW]
+  classes: []
+  sensitive_values: []

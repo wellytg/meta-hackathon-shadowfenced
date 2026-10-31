@@ -17,6 +17,41 @@ from .config import Settings, get_settings
 
 TIMEOUT_S = 60.0
 
+# Meta reasons first (hundreds of reasoning tokens before any content),
+# so it gets a longer timeout than the local Ollama stand-in.
+META_TIMEOUT_S = 90.0
+
+
+def _verify_for(url: str) -> Any:
+    """TLS verification for one upstream URL (never disabled).
+
+    HTTPS upstreams verify through the OS store via ``truststore`` (the
+    Windows store holds enterprise re-signing roots that certifi lacks);
+    when ``truststore`` cannot be imported, httpx's default verification
+    applies. Plain HTTP needs no TLS context.
+    """
+    if not url.lower().startswith("https://"):
+        return True
+    try:
+        import ssl
+
+        import truststore
+
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        return True
+
+
+def _timeout_for(provider: str | None, timeout: float,
+                 settings: Settings) -> float:
+    """Effective timeout: Meta gets 90 s unless the caller overrode it."""
+    if timeout != TIMEOUT_S:
+        return timeout
+    name = (provider or settings.upstream or "ollama").lower()
+    if name == "meta":
+        return META_TIMEOUT_S
+    return timeout
+
 
 class UpstreamError(RuntimeError):
     """The upstream AI could not produce an answer."""
@@ -34,6 +69,8 @@ def build_request(
             raise UpstreamError("meta upstream unavailable")
         url = settings.meta_base_url.rstrip("/") + "/chat/completions"
         headers = {"Authorization": "Bearer " + settings.meta_api_key}
+        # No max_tokens: the Meta model reasons first (hundreds of
+        # reasoning tokens), so a small cap returns empty content.
         body: dict[str, Any] = {"model": settings.meta_model, "messages": messages}
         return url, headers, body
     if name == "ollama":
@@ -80,7 +117,11 @@ def chat_sync(
     cfg = settings or get_settings()
     url, headers, body = build_request(messages, provider, cfg)
     try:
-        with httpx.Client(transport=transport, timeout=timeout) as client:
+        with httpx.Client(
+            transport=transport,
+            timeout=_timeout_for(provider, timeout, cfg),
+            verify=_verify_for(url),
+        ) as client:
             response = client.post(url, json=body, headers=headers)
     except UpstreamError:
         raise
@@ -106,7 +147,9 @@ async def chat(
     url, headers, body = build_request(messages, provider, cfg)
     try:
         async with httpx.AsyncClient(
-            transport=transport, timeout=timeout
+            transport=transport,
+            timeout=_timeout_for(provider, timeout, cfg),
+            verify=_verify_for(url),
         ) as client:
             response = await client.post(url, json=body, headers=headers)
     except UpstreamError:

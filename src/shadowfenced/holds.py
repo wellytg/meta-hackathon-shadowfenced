@@ -595,6 +595,7 @@ def hold_card(hold: Hold) -> dict[str, Any]:
     return {
         "hold_id": hold.hold_id,
         "status": hold.status,
+        "provider": hold.provider,
         "title": hold_title(hold),
         "proven_by_code": proven_by_code,
         "model_suspicion_only": list(
