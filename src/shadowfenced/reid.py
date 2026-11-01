@@ -57,15 +57,31 @@ Raw values never leave this module except inside caller-held return objects:
 trace helpers emit counts, kind labels and short sha256 fingerprints only.
 See ``docs/REID.md`` for the quasi-identifier list, combination rationale
 and the generalisation table this module implements.
+
+Historical and public-figure guards (T48, documented in ``docs/REID.md``
+section 6c):
+
+- a birth year more than 110 years before today carries no
+  living-person weight, so the matching date of birth never counts;
+  death dates ("died 1852") are never a living birthday either;
+- an encyclopedic question ("summarise the life of", "biography of",
+  "who was", "what did ... invent") about a name local Muse Glimmer
+  confirms is a well-known public figure stays quiet, unless a current
+  street address, phone, email or ID number is also present;
+- Glimmer is asked over a local call with a short timeout; any failure
+  falls back to the date rule alone.
 """
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from .glimmer import glimmer_keep_alive, glimmer_options
 
 # --- Weights ----------------------------------------------------------------
 # One point per unit of joining power. Contact anchors (phone, email),
@@ -313,6 +329,130 @@ _STORY_RE = re.compile(
     r"(?i)\b(novel|dragon|princess|ghost ship|fairy|mystery|moon-apple|"
     r"chapter)\b"
 )
+
+
+# --- T48 historical / public-figure guards ----------------------------------------
+# A birth year more than 110 years ago cannot locate anyone alive, so the
+# matching date of birth carries no living-person weight; death dates are
+# never a living birthday. Encyclopedic questions about a Glimmer-confirmed
+# well-known figure stay quiet when no current contact detail (street,
+# phone, email, postcode) is present.
+_HISTORICAL_YEARS = 110
+CONTACT_KINDS = frozenset({"street", "phone", "email", "postcode"})
+_DEATH_CUE_RE = re.compile(r"(?i)\bdied\b")
+_DEATH_YEAR_RE = re.compile(
+    r"(?i)\bdied\b(?:\s+(?:on|in))?\s+[^\n.]{0,60}?(\d{4})")
+_ENCYCLOPEDIC_RE = re.compile(
+    r"(?i)\bsummari[sz]e the life of\b"
+    r"|\bbiography of\b"
+    r"|\bwho was\b"
+    r"|\bwhat did\b[\s\S]{0,80}\binvent\b")
+_VALUE_YEAR_RE = re.compile(r"\b(1[0-9]{3}|2[0-9]{3})\b")
+
+
+def _value_year(value: str) -> int | None:
+    """First 1000-2999 year in a finding value, or None."""
+    match = _VALUE_YEAR_RE.search(value or "")
+    return int(match.group(1)) if match else None
+
+
+def _is_historical_year(
+    year: int | None, today: datetime.date | None = None,
+) -> bool:
+    """True when a year is more than 110 years before today."""
+    if year is None:
+        return False
+    ref = today or datetime.date.today()
+    return ref.year - year > _HISTORICAL_YEARS
+
+
+def has_encyclopedic_framing(
+    text: str, conversation: list[str] | None = None,
+) -> bool:
+    """True when the message asks an encyclopedia-style question."""
+    if text:
+        combined = "\n".join([*(conversation or []), text])
+    else:
+        combined = "\n".join(conversation or [])
+    return _ENCYCLOPEDIC_RE.search(combined) is not None
+
+
+def groups_have_contact(groups: list[list[dict[str, Any]]]) -> bool:
+    """True when any group holds a current contact detail."""
+    return any(item.get("kind") in CONTACT_KINDS
+               for group in groups for item in group)
+
+
+def _groups_have_living_birth(groups: list[list[dict[str, Any]]]) -> bool:
+    """True when a date of birth or born-year age remains in play."""
+    for group in groups:
+        for item in group:
+            kind = item.get("kind")
+            if kind == "dob":
+                return True
+            if (kind == "age"
+                    and "born" in str(item.get("value", "")).lower()):
+                return True
+    return False
+
+
+def _without_historical_dob(
+    groups: list[list[dict[str, Any]]], text: str,
+) -> tuple[list[list[dict[str, Any]]], bool]:
+    """Drop birth/death dates that carry no living-person weight.
+
+    Returns ``(groups, historical)``: ``historical`` is True when the
+    text holds a birth year more than 110 years ago or an old death
+    date. Dropped: dob findings with a historical year, dob findings
+    next to a "died" cue (a death date is never a living birthday),
+    "born YYYY" ages with a historical year, and age/dated-event
+    fragments on a dropped span.
+    """
+    historical = False
+    death_year = _DEATH_YEAR_RE.search(text)
+    if death_year and _is_historical_year(int(death_year.group(1))):
+        historical = True
+
+    def _drop_dob(item: dict[str, Any]) -> bool:
+        start, end = item["span"]
+        if _nearby(text, start, end, _DEATH_CUE_RE):
+            return True
+        return _is_historical_year(
+            _value_year(str(item.get("value", ""))))
+
+    dropped: list[tuple[int, int]] = []
+    for group in groups:
+        for item in group:
+            if item.get("kind") != "dob" or not _drop_dob(item):
+                continue
+            dropped.append((item["span"][0], item["span"][1]))
+            if _is_historical_year(
+                    _value_year(str(item.get("value", "")))):
+                historical = True
+    if any(item.get("kind") == "age"
+           and "born" in str(item.get("value", "")).lower()
+           and _is_historical_year(_value_year(str(item.get("value", ""))))
+           for group in groups for item in group):
+        historical = True
+
+    def _kept(item: dict[str, Any]) -> bool:
+        kind = item.get("kind")
+        if kind == "dob":
+            return not _drop_dob(item)
+        if (kind == "age"
+                and "born" in str(item.get("value", "")).lower()
+                and _is_historical_year(
+                    _value_year(str(item.get("value", ""))))):
+            return False
+        if kind in ("age", "dated_event"):
+            start, end = item["span"]
+            if any(start < other_end and end > other_start
+                   for other_start, other_end in dropped):
+                return False
+        return True
+
+    return ([[item for item in group if _kept(item)]
+             for group in groups], historical)
 
 
 # --- T30b false-warning guards ------------------------------------------------
@@ -784,6 +924,7 @@ def assess(
     conversation: list[str] | None = None,
     current_findings: list[dict[str, Any]] | None = None,
     generalise_offer: bool = True,
+    public_figure_judge_fn: Callable[[str], Any] | None = None,
 ) -> ReIDResult:
     """Assess one message together with earlier conversation messages.
 
@@ -822,6 +963,44 @@ def assess(
 
         groups = [[item for item in group if _kept(item)]
                   for group in groups]
+    combined_text = "\n".join([*prior, text])
+    groups, historical = _without_historical_dob(groups, combined_text)
+    if (historical and not groups_have_contact(groups)
+            and not _groups_have_living_birth(groups)):
+        # A birth/death date more than a century old cannot locate
+        # anyone alive (T48 rule 1): with no current contact detail
+        # and no living birthday left, nothing here identifies a
+        # living person.
+        score, combination, _ = score_groups(groups)
+        return ReIDResult(
+            outcome="OK", score=score, combination=combination,
+            banner="", findings=list(current),
+        )
+    if (has_encyclopedic_framing(text, prior)
+            and any(item.get("kind") == "name"
+                    for group in groups for item in group)
+            and not groups_have_contact(groups)):
+        # An encyclopedic question about a Glimmer-confirmed
+        # well-known figure stays quiet (T48 rule 2); any Glimmer
+        # failure falls back to the code-only rules above and below.
+        try:
+            raw = (public_figure_judge_fn(combined_text)
+                   if public_figure_judge_fn is not None
+                   else local_glimmer_public_figure(combined_text))
+        except Exception:
+            raw = None
+        if _parse_public_figure(raw) is True:
+            lowered = [[item for item in group
+                        if item.get("kind") != "name"]
+                       for group in groups]
+            score, combination, _ = score_groups(lowered)
+            return ReIDResult(
+                outcome="OK", score=score, combination=combination,
+                banner="", findings=list(current),
+                exempted=True,
+                exempt_reason=(
+                    "well-known public figure in encyclopedic framing"),
+            )
     score, combination, outcome = score_groups(groups)
     banner = banner_for(combination, outcome) if outcome != "OK" else ""
     generalised_text = ""
@@ -1049,6 +1228,100 @@ def generalise(
     return out, mapping
 
 
+# --- T48 public-figure Glimmer judgement ------------------------------------------
+PUBLIC_FIGURE_SYSTEM = (
+    "Decide whether the user text asks about a well-known public or "
+    "historical figure (an encyclopedia-style question about a famous "
+    "person). Reply with JSON only: {\"public_figure\": bool}."
+)
+
+
+def local_glimmer_public_figure(
+    text: str,
+    timeout_s: float = 2.0,
+    transport: Any = None,
+) -> bool | None:
+    """Ask local Muse Glimmer whether the text is about a public figure.
+
+    Local Ollama only (``/api/chat`` on the configured Ollama URL with the
+    configured judge model). Never touches a cloud model or the Meta
+    upstream client. The timeout is deliberately short; Tier 2 ``off``
+    and any transport error, timeout or unparsable answer return None
+    so the caller falls back to the code-only rules.
+    """
+    try:
+        from .judge import tier2_mode
+        if tier2_mode() == "off":
+            return None
+    except Exception:
+        pass
+    try:
+        import httpx
+
+        from .config import get_settings
+
+        settings = get_settings()
+        url = settings.ollama_url.rstrip("/") + "/api/chat"
+        with httpx.Client(transport=transport, timeout=timeout_s) as client:
+            response = client.post(
+                url,
+                json={
+                    "model": settings.judge_model,
+                    "messages": [
+                        {"role": "system", "content": PUBLIC_FIGURE_SYSTEM},
+                        {"role": "user", "content": text[:2000]},
+                    ],
+                    "stream": False,
+                    "think": False,
+                    "keep_alive": glimmer_keep_alive(),
+                    "options": glimmer_options(
+                        settings, temperature=0, seed=7, num_predict=20
+                    ),
+                },
+            )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return None
+        message = payload.get("message", {})
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            return None
+        cleaned = content.strip()
+        import json as _json
+
+        try:
+            parsed = _json.loads(cleaned)
+        except ValueError:
+            start, end = cleaned.find("{"), cleaned.rfind("}")
+            if start == -1 or end <= start:
+                return None
+            try:
+                parsed = _json.loads(cleaned[start:end + 1])
+            except ValueError:
+                return None
+        if isinstance(parsed, dict):
+            verdict = parsed.get("public_figure",
+                                 parsed.get("subject_public"))
+            if isinstance(verdict, bool):
+                return verdict
+        return None
+    except Exception:
+        return None
+
+
+def _parse_public_figure(raw: Any) -> bool | None:
+    """Normalise an injected public-figure verdict; None when unusable."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, dict):
+        for key in ("public_figure", "subject_public", "is_public"):
+            if isinstance(raw.get(key), bool):
+                return raw[key]
+    return None
+
+
 # --- Residual-context check (inference reversal) --------------------------------
 @dataclass
 class ResidualResult:
@@ -1085,6 +1358,7 @@ def _parse_judge_answer(raw: Any) -> dict[str, Any] | None:
 def local_glimmer_judge(
     redacted_text: str,
     timeout_s: float = 10.0,
+    transport: Any = None,
 ) -> dict[str, Any] | None:
     """Ask local Muse Glimmer about redacted text; None on any failure.
 
@@ -1097,6 +1371,7 @@ def local_glimmer_judge(
         import httpx
 
         from .config import get_settings
+        from .glimmer import glimmer_keep_alive, glimmer_options
 
         settings = get_settings()
         url = settings.ollama_url.rstrip("/") + "/api/chat"
@@ -1109,16 +1384,16 @@ def local_glimmer_judge(
             "Each clue must be copied word-for-word from the text.\n\n"
             + redacted_text[:2000]
         )
-        with httpx.Client(timeout=timeout_s) as client:
-            response = client.post(
-                url,
-                json={
-                    "model": settings.judge_model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "think": False,
-                },
-            )
+        body = {
+            "model": settings.judge_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "think": False,
+            "keep_alive": glimmer_keep_alive(),
+            "options": glimmer_options(settings),
+        }
+        with httpx.Client(transport=transport, timeout=timeout_s) as client:
+            response = client.post(url, json=body)
         payload = response.json()
         if not isinstance(payload, dict):
             return None

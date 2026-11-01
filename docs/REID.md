@@ -202,3 +202,26 @@ becomes `of Dunmere`), postcodes keep their prefix (`postcode
 982**`), neighbouring articles collapse (never `the the`), and person
 names become initials (`M.V.`) only when they are a person's name --
 already-redacted tokens such as `[PII_NAME_1]` are left untouched.
+
+## 6c. Historical and public-figure guards (T48)
+
+Research questions about people who cannot be located or harmed stay
+quiet. Each rule below is implemented in `reid.py`:
+
+- **Old dates carry no living-person weight.** A birth year more than
+  110 years before today cannot locate anyone alive, so the matching
+  date of birth never counts as a quasi-identifier. Death dates
+  (`died 1852`) are never a living birthday either. With no current
+  contact detail (street, phone, email, postcode) and no living
+  birthday left, the message is ALLOW: a name plus a birthplace from
+  1815 identifies nobody alive.
+- **Encyclopedic questions about confirmed public figures stay
+  quiet.** `summarise the life of`, `biography of`, `who was`, and
+  `what did ... invent`, plus a name local Muse Glimmer confirms is a
+  well-known public figure, lower the score to ALLOW -- unless the
+  message also holds a current street address, phone, email or ID
+  number, in which case the usual rules apply.
+- **Glimmer is local with a short timeout.** The public-figure check
+  calls loopback Ollama with a ~2s timeout and honours the Tier 2 off
+  switch; any failure falls back to the date rule alone, and a recent
+  birthday (a living person) still warns as before.

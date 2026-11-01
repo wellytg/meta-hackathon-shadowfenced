@@ -91,13 +91,26 @@ def _merge_winner(current: Span, span: Span) -> Span:
 
     A ``canary`` subclass always wins over another span of the same class:
     it decides BLOCK, so a wider password-assignment span must never hide
-    it. Otherwise the more severe span wins (ties keep the earlier one).
+    it. A ``provider_key`` subclass wins over other non-canary secret
+    spans for the same reason. Otherwise the more severe span wins
+    (ties keep the earlier one).
     """
     if current.cls == span.cls:
         if current.subclass == "canary":
             return current
         if span.subclass == "canary":
             return span
+        if current.cls == "secret":
+            # A provider key names its owner for the BLOCK message, so a
+            # wider password-assignment span must never hide it.
+            order = {"provider_key": 1}
+            if order.get(span.subclass, 0) != order.get(current.subclass, 0):
+                return (
+                    span
+                    if order.get(span.subclass, 0)
+                    > order.get(current.subclass, 0)
+                    else current
+                )
     return span if span.severity() > current.severity() else current
 
 

@@ -204,4 +204,20 @@ Model/providers: `static/app.js` (`/api/guard`, `/api/providers`,
 `static/rules.js`. States under test: `window.ShadowfencedUI`
 (`receiptLabel`, `receiptIcon`, `membraneFor`, `isSendEnabled`),
 `window.ShadowfencedDictation.formatElapsed`; static pins in
-`tests/test_t38b_states.py`.
+`tests/test_t38b_states.py`. Risk card: `riskCardModel` in
+`window.ShadowfencedUI` (see §17).
+
+## 17. Risk card (T45)
+
+One component for every risky turn, built from
+`riskCardModel(decisionResponse)` (null for a clean ALLOW, three rows
+otherwise). Clean ALLOW shows no card, only the quiet receipt
+"✓ Checked · nothing sensitive" (small, steel blue, "Why" on click).
+REDACT/WARN/HOLD/BLOCK show the card attached to the message: title bar
+with the decision word, rows Sending (placeholders highlighted) /
+Why it's risky (one plain grouped sentence per finding) / What was
+done (Replaced with placeholders / Blocked — not sent / Waiting for
+you: Generalise · Send anyway · Cancel). Compact by default (one line
+per row; "Show details" expands the full trace); single column at
+390px. HOLD review renders the same card (`evidence-card` hook kept)
+with its live review section inside.

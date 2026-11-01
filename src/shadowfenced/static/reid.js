@@ -1,7 +1,8 @@
-/* Shadowfenced re-identification (T30) plus person-search intent (T33) banner: plain-words notice plus a
-   one-click Generalise choice. No app.js changes: this file watches the
-   existing /api/send responses and renders only evidence.reid (banner and
-   coarsened generalised_text). Machine reasons are never rendered. */
+/* Shadowfenced re-identification (T30) plus person-search intent (T33).
+   T50: the send-time banner is retired -- the risk card in app.js is the
+   one place for send-time warnings, so this file no longer watches send
+   traffic. Live typing underlines are untouched: they come from the live
+   scan in app.js. renderReid/clearReid stay exported for compatibility. */
 
 (function () {
   "use strict";
@@ -94,30 +95,9 @@
     box.appendChild(banner);
   }
 
-  function maybeBody(response, url) {
-    if (typeof url !== "string" || url.indexOf("/api/send") === -1) {
-      return;
-    }
-    try {
-      response
-        .clone()
-        .json()
-        .then(renderReid)
-        .catch(function () {
-          /* Non-JSON or already consumed: nothing to render. */
-        });
-    } catch (err) {
-      /* Cloning failed: leave the default UI untouched. */
-    }
-  }
-
-  var originalFetch = window.fetch.bind(window);
-  window.fetch = function (url, options) {
-    return originalFetch(url, options).then(function (response) {
-      maybeBody(response, typeof url === "string" ? url : url.url);
-      return response;
-    });
-  };
+  // T50: no send-flow hook. The risk card owns send-time warnings; calling
+  // renderReid from fetch traffic only duplicated the banner under the
+  // composer.
 
   window.ShadowfencedReid = { renderReid: renderReid, clearReid: clearReid };
 })();

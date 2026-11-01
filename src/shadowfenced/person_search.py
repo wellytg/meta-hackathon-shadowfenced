@@ -35,6 +35,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, field_validator
 
 from . import reid as reid_module
+from .glimmer import glimmer_keep_alive, glimmer_options
 
 # --- Trigger: people-search wording ------------------------------------------
 _SEARCH_PATTERNS = (
@@ -164,7 +165,10 @@ def local_glimmer_person_search(
             "format": schema,
             "stream": False,
             "think": False,
-            "options": {"temperature": 0, "seed": 7, "num_ctx": 2048, "num_predict": 150},
+            "keep_alive": glimmer_keep_alive(),
+            "options": glimmer_options(
+                settings, temperature=0, seed=7, num_predict=150
+            ),
         }
         timeout = float(timeout_s) if timeout_s else 10.0
         with httpx.Client(transport=transport, timeout=timeout) as client:
@@ -301,6 +305,8 @@ class PersonSearchResult:
     """Outcome of the person-search intent check."""
 
     warn: bool = False
+    subject_public: bool | None = None
+    verified_subject: bool = False
     triggered: bool = False
     banner: str = ""
     inferred_labels: list[str] = field(default_factory=list)
@@ -394,6 +400,8 @@ def check_person_search(
             ),
             generalised_text=generalised,
             reason="verified private-person search -> WARN",
+            subject_public=False,
+            verified_subject=True,
         )
         _trace_warn(trace_out, result, parsed)
         return result
@@ -411,6 +419,8 @@ def check_person_search(
             {reid_module.fingerprint(clue) for clue in verified_inferred}
         ),
         reason="no verified private-person search",
+        subject_public=parsed.subject_public,
+        verified_subject=bool(verified_subject),
     )
 
 

@@ -42,6 +42,7 @@ PLACEHOLDER_DESCRIPTIONS = {
     "CLIENT": "client name",
     "FIGURE": "unreleased figure",
     "BEACON": "possible sensitive pointer",
+    "CONTRACT_CLAUSE": "contract clause",
 }
 
 _PLURALS = {
@@ -89,6 +90,20 @@ def user_message(decision: Decision) -> str:
     decision line.
     """
     if decision.decision == "BLOCK":
+        ordered = sorted(
+            decision.spans, key=lambda span: (span.cp_start, span.cp_end)
+        )
+        if not any(
+            span.subclass == "canary" and span.status == "proven"
+            for span in ordered
+        ):
+            for span in ordered:
+                if (
+                    span.subclass == "provider_key"
+                    and span.status == "proven"
+                    and span.message
+                ):
+                    return span.message
         base = (
             "A planted canary token was found (proven by code). "
             "Nothing was sent."
@@ -153,6 +168,31 @@ def _hold(
         reasons=reasons,
     )
 
+
+def _confidential_contract_marker(text: str) -> str | None:
+    """Stamp name when a classified contract must hold for review.
+
+    Returns the handling-caveat stamp (``confidential``,
+    ``do-not-distribute`` or ``privileged``; fixed vocabulary, never
+    raw text) when the document classifier says contract AND the
+    text carries such a stamp, else None. The gate raises the
+    decision to HOLD with the reason "Confidential contract text"
+    so a human picks Redact-and-send; redaction itself still
+    replaces every proven span with a placeholder.
+    """
+    try:
+        from . import contract as contract_module
+        from . import docclass as docclass_module
+
+        info = docclass_module.classify(text)
+    except Exception:
+        return None
+    if not isinstance(info, dict) or info.get("doc_type") != "contract":
+        return None
+    try:
+        return contract_module.confidential_marker_of(text)
+    except Exception:
+        return None
 
 # Sensitivity cue words for the send-time hold rule. Tier-1-clean text
 # holding none of these (and no ambiguous spans) is decided from Tier 1
@@ -409,6 +449,31 @@ def _gate_impl(
                 latency_ms=latency_ms,
                 reasons=reasons,
             )
+        provider_hit = sorted(
+            (
+                span for span in enforced
+                if span.subclass == "provider_key"
+                and span.status == "proven"
+            ),
+            key=lambda span: (span.cp_start, span.cp_end),
+        )
+        if provider_hit:
+            reasons.append(
+                f"proven provider key -> BLOCK ({provider_hit[0].why})"
+            )
+            if mode == "send":
+                latency_ms["tier2"] = 0.0
+                latency_ms["tier3"] = 0.0
+            return Decision(
+                decision="BLOCK",
+                decision_id=uuid.uuid4().hex,
+                spans=spans,
+                sent_text=None,
+                placeholders={},
+                resolved_tier=1,
+                latency_ms=latency_ms,
+                reasons=reasons,
+            )
         custom_block = [
             s for s in enforced
             if s.status == "proven" and s.proof == "custom"
@@ -442,6 +507,45 @@ def _gate_impl(
                 f"{len(custom_review)} custom rule span(s) "
                 "with action review -> HOLD"
             )
+            if mode == "send":
+                latency_ms["tier2"] = 0.0
+                latency_ms["tier3"] = 0.0
+                latency_ms["total"] = (
+                    time.perf_counter() - total_started
+                ) * 1000
+                return Decision(
+                    decision="HOLD",
+                    decision_id=uuid.uuid4().hex,
+                    spans=spans,
+                    sent_text=None,
+                    placeholders={},
+                    resolved_tier=4,
+                    latency_ms=latency_ms,
+                    reasons=reasons,
+                    evidence={
+                        "proven_by_code": [s.span_id for s in proven],
+                        "pending": [
+                            {
+                                "kind": "message",
+                                "text": text[:MESSAGE_PENDING_CHARS],
+                            }
+                        ],
+                    },
+                    status="reviewing",
+                )
+            return _hold(spans, latency_ms, reasons)
+        contract_marker = _confidential_contract_marker(text)
+        if contract_marker is not None:
+            reasons.append(
+                "Confidential contract text "
+                f"({contract_marker} marker) -> HOLD"
+            )
+            if trace_out is not None:
+                trace_out.append(
+                    {"step": "contract.hold", "tool": "gate",
+                     "detail": f"contract doc + {contract_marker} marker -> HOLD",
+                     "result": "HOLD", "ms": 0.0}
+                )
             if mode == "send":
                 latency_ms["tier2"] = 0.0
                 latency_ms["tier3"] = 0.0
@@ -880,6 +984,78 @@ def _apply_reid(
     )
 
 
+def _downgrade_verified_public_figure(
+    text: str,
+    decision: Decision,
+    conversation: list[str] | None,
+    current: list[dict[str, Any]] | None,
+    result: Any,
+    trace_out: list[dict[str, Any]] | None,
+) -> Decision | None:
+    """ALLOW when Glimmer verifies a public figure in encyclopedic framing.
+
+    Tier 3 coordination for T48 rule 2: the re-identification layer may
+    still warn on a published birthday plus a name, but when Glimmer has
+    verified (exact-substring subject, confidence >= 0.6) that the
+    subject is a public figure, the question uses encyclopedic framing
+    and no current contact detail or ID number is present, there is no
+    private person to protect. Never touches BLOCK or REDACT, and never
+    downgrades while Tier 1 review is still pending (ambiguous spans).
+    """
+    if decision.decision not in ("WARN", "HOLD"):
+        return None
+    reid_info = (decision.evidence or {}).get("reid")
+    if not reid_info or reid_info.get("outcome") not in ("WARN", "HOLD"):
+        return None
+    if result.warn or not result.triggered:
+        return None
+    if result.subject_public is not True or not result.verified_subject:
+        return None
+    try:
+        confidence = float(result.confidence)
+    except (TypeError, ValueError):
+        return None
+    if confidence < 0.6:
+        return None
+    if any(getattr(span, "status", "") == "ambiguous"
+           for span in decision.spans):
+        return None
+    if any(getattr(span, "status", "") == "proven"
+           and getattr(span, "cls", "") in ("pii", "secret")
+           for span in decision.spans):
+        return None
+    combo = set(reid_info.get("combination") or [])
+    if combo & set(reid_module.CONTACT_KINDS):
+        return None
+    if not reid_module.has_encyclopedic_framing(text, conversation):
+        return None
+    reasons = list(decision.reasons) + [
+        "verified public figure in encyclopedic framing -> ALLOW",
+    ]
+    evidence = dict(decision.evidence or {})
+    sent_text = decision.sent_text if decision.decision == "WARN" else text
+    downgraded = Decision(
+        decision="ALLOW",
+        decision_id=uuid.uuid4().hex,
+        spans=decision.spans,
+        sent_text=sent_text,
+        placeholders=dict(decision.placeholders or {}),
+        resolved_tier=1,
+        latency_ms=dict(decision.latency_ms),
+        reasons=reasons,
+        evidence=evidence,
+    )
+    downgraded.doc_type = decision.doc_type
+    downgraded.doc_warning = decision.doc_warning
+    if trace_out is not None:
+        trace_out.append(
+            {"step": "intent.public_figure", "tool": "glimmer",
+             "detail": "verified public figure, encyclopedic framing",
+             "result": "OK", "ms": 0.0}
+        )
+    return downgraded
+
+
 def _apply_person_search(
     text: str,
     decision: Decision,
@@ -913,6 +1089,11 @@ def _apply_person_search(
     except Exception:
         return decision
     if not result.warn:
+        downgraded = _downgrade_verified_public_figure(
+            text, decision, conversation, current, result, trace_out,
+        )
+        if downgraded is not None:
+            return downgraded
         return decision
     evidence: dict[str, Any] = dict(decision.evidence or {})
     evidence["person_search"] = {

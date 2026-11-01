@@ -15,10 +15,13 @@ dependencies = [
     "truststore",
     "pydantic",
     "pyyaml",
+    "pillow",
     "python-multipart",
     "python-docx",
     "pypdf",
     "keyring",
+    "Pillow",
+    "meta-sam-parser",
 ]
 
 [project.optional-dependencies]

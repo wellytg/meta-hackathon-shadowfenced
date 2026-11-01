@@ -56,6 +56,16 @@ def _token_isolation(monkeypatch, tmp_path):
     config_module.reset_ext_token_override()
 
 
+@pytest.fixture(autouse=True)
+def _isolated_log_path(monkeypatch, tmp_path):
+    """Each test logs to its own file: no cross-test bleed.
+
+    Hold-review threads resolve the log path lazily, so a late write
+    from an earlier test must not be able to land in this test's log.
+    """
+    monkeypatch.setenv("SF_LOG_PATH", str(tmp_path / "decisions.jsonl"))
+
+
 def _req(token=None, client=("testclient", 50000),
          path="/api/ext/pairing/regenerate") -> Request:
     headers = []
@@ -105,7 +115,7 @@ def test_log_events_fields_only():
             "ts", "decision_id", "decision", "tier",
             "reasons", "fingerprints",
         }
-        assert entry["decision"] in ("ALLOW", "REDACT", "BLOCK", "HOLD")
+        assert entry["decision"] in ("ALLOW", "REDACT", "BLOCK", "HOLD", "WARN")
         assert isinstance(entry["reasons"], list) and entry["reasons"]
         assert isinstance(entry["fingerprints"], list)
         for fingerprint in entry["fingerprints"]:
