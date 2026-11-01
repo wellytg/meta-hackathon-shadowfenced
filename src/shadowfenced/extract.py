@@ -2,7 +2,10 @@
 
 Supported suffixes map to a ``kind`` (the suffix without the dot):
 ``txt``, ``md``, ``csv`` decode as UTF-8; ``docx`` reads paragraphs and
-table cells via python-docx; ``pdf`` reads page text via pypdf. Anything
+table cells via python-docx; ``pdf`` reads page text via pypdf. Audio
+(``wav``, ``mp3``, ``m4a``, ``ogg``, ``webm``; 10 MB max) is transcribed
+by Meta's Muse Voice Transcribe model (see :mod:`shadowfenced.transcribe`)
+and the transcript is scanned like any other document. Anything
 else is unsupported (the route answers 415); oversized or unparseable
 input is not an error — it extracts to ``unscannable`` so the gate can
 HOLD the send instead of guessing.
@@ -37,6 +40,17 @@ SUPPORTED: dict[str, str] = {
     ".docx": "docx",
     ".pdf": "pdf",
 }
+
+
+MAX_AUDIO_BYTES = 10 * 1024 * 1024
+
+AUDIO_SUFFIXES: tuple[str, ...] = (".wav", ".mp3", ".m4a", ".ogg", ".webm")
+
+
+def is_audio_file(name: str) -> bool:
+    """True when the file name has a supported audio suffix."""
+    lower = name.lower()
+    return any(lower.endswith(suffix) for suffix in AUDIO_SUFFIXES)
 
 
 class UnsupportedType(ValueError):
