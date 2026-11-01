@@ -1,12 +1,14 @@
 # Shadowfenced
 
+*Meta Global AI Developer Hackathon 2026 · team Shadowfenced · repo `meta-hackathon-shadowfenced`*
+
 **Nothing sensitive crosses the boundary.** Shadowfenced is a local layer between people and any AI. It
 underlines sensitive text as you type (like a grammar checker for secrets), checks uploaded files the same way,
 and lets only clean or redacted text reach the AI. The AI's answer comes back with the real values restored on
 your machine.
 
-Built Oct 27 – Nov 4, 2026 for the Meta Global AI Developer Hackathon (Indie track). All code is new work from the
-event, written by Muse Code from the briefs in `docs/muse-briefs/` and reviewed before each commit.
+Built Oct 27 – Nov 4, 2026 for the Meta Global AI Developer Hackathon (Indie track). The product code was
+written by Muse Code from the task briefs in `docs/muse-briefs/`.
 
 ## How a message is decided
 
