@@ -25,21 +25,11 @@ import httpx
 from pydantic import BaseModel, field_validator
 
 from .config import get_settings
-
-# Eval runs set SF_KEEP_ALIVE=5m so back-to-back judgements do not pin
-# GPU memory between cases; production keeps models resident with -1.
-import os as _os
-
+from .glimmer import glimmer_keep_alive, glimmer_options
 
 def _keep_alive() -> Any:
-    """Ollama keep_alive: int seconds, duration string, or -1 (resident)."""
-    raw = (_os.environ.get("SF_KEEP_ALIVE") or "-1").strip()
-    if raw == "-1":
-        return -1
-    try:
-        return int(raw)
-    except ValueError:
-        return raw
+    """Shared Ollama keep_alive (see glimmer.glimmer_keep_alive)."""
+    return glimmer_keep_alive()
 
 JudgementClass = Literal["secret", "pii", "business", "beacon", "benign"]
 
@@ -116,14 +106,12 @@ def _replay_lookup(window: str) -> Judgement | None:
 
 
 def _request_body(window: str, model: str, *, live: bool) -> dict[str, Any]:
-    options: dict[str, Any] = {
-        "temperature": 0,
-        "seed": 7,
-        "num_ctx": 2048,
-        "num_predict": 80,
-    }
+    settings = get_settings()
+    options = glimmer_options(
+        settings, temperature=0, seed=7, num_predict=80
+    )
     if live:
-        options["num_gpu"] = get_settings().live_num_gpu
+        options["num_gpu"] = settings.live_num_gpu
     return {
         "model": model,
         "messages": [
@@ -197,7 +185,7 @@ def _ping(
             "stream": False,
             "think": False,
             "keep_alive": _keep_alive(),
-            "options": {"num_ctx": 2048, "num_predict": 4},
+            "options": glimmer_options(settings, num_predict=4),
         }
         if live:
             body["options"]["num_gpu"] = settings.live_num_gpu

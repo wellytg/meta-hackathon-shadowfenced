@@ -1085,6 +1085,7 @@ def _parse_judge_answer(raw: Any) -> dict[str, Any] | None:
 def local_glimmer_judge(
     redacted_text: str,
     timeout_s: float = 10.0,
+    transport: Any = None,
 ) -> dict[str, Any] | None:
     """Ask local Muse Glimmer about redacted text; None on any failure.
 
@@ -1097,6 +1098,7 @@ def local_glimmer_judge(
         import httpx
 
         from .config import get_settings
+        from .glimmer import glimmer_keep_alive, glimmer_options
 
         settings = get_settings()
         url = settings.ollama_url.rstrip("/") + "/api/chat"
@@ -1109,16 +1111,16 @@ def local_glimmer_judge(
             "Each clue must be copied word-for-word from the text.\n\n"
             + redacted_text[:2000]
         )
-        with httpx.Client(timeout=timeout_s) as client:
-            response = client.post(
-                url,
-                json={
-                    "model": settings.judge_model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "think": False,
-                },
-            )
+        body = {
+            "model": settings.judge_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "think": False,
+            "keep_alive": glimmer_keep_alive(),
+            "options": glimmer_options(settings),
+        }
+        with httpx.Client(transport=transport, timeout=timeout_s) as client:
+            response = client.post(url, json=body)
         payload = response.json()
         if not isinstance(payload, dict):
             return None

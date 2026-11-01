@@ -26,6 +26,7 @@ _ENV_KEYS = (
     "SF_LOG_PATH",
     "SF_LIVE_MODEL",
     "SF_JUDGE_MODEL",
+    "SF_GLIMMER_NUM_CTX",
     "SF_JUDGE_TIMEOUT_S",
     "SF_LIVE_TIMEOUT_S",
     "SF_LIVE_NUM_GPU",
@@ -88,6 +89,7 @@ class Settings(BaseModel):
     log_path: str = DEFAULT_LOG_PATH
     live_model: str = "llama3.2:3b"
     judge_model: str = "muse-glimmer:30b"
+    glimmer_num_ctx: int = 2048
     judge_timeout_s: float = 60.0
     live_timeout_s: float = 4.0
     live_num_gpu: int = 0
@@ -180,6 +182,7 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
         log_path=merged.get("SF_LOG_PATH", DEFAULT_LOG_PATH),
         live_model=merged.get("SF_LIVE_MODEL", "llama3.2:3b"),
         judge_model=merged.get("SF_JUDGE_MODEL", "muse-glimmer:30b"),
+        glimmer_num_ctx=_parse_int(merged.get("SF_GLIMMER_NUM_CTX"), 2048),
         judge_timeout_s=_parse_float(merged.get("SF_JUDGE_TIMEOUT_S"), 60.0),
         live_timeout_s=_parse_float(merged.get("SF_LIVE_TIMEOUT_S"), 4.0),
         live_num_gpu=_parse_int(merged.get("SF_LIVE_NUM_GPU"), 0),
