@@ -43,7 +43,7 @@ _FIRST_TOKEN = r"(?:[A-Z][a-z]+|[a-z]+(?:[-'][a-z]+)?)"
 _NAME_AFTER_CUE_RE = re.compile(
     r"(?i:\b(?:my\s+name\s+is|name\s*:|employee\s*:|customer\s*:"
     r"|patient\s*:|soy|me\s+llamo|dear|from\s*:))"
-    r"\s*:?\s*(" + _FIRST_TOKEN + r"(?:\s+" + _CAP_TOKEN + r"){1,3})\b"
+    r"\s*:?\s*(" + _FIRST_TOKEN + r"(?:[ \t]+" + _CAP_TOKEN + r"){1,3})\b"
 )
 
 # Header cell (normalised: lower, spaces/underscores removed) -> PII type.
@@ -544,6 +544,244 @@ def _scan_short_phones(
     return spans
 
 
+# --- T29: financial account details ---------------------------------------
+
+# Labels that mark a nearby digit run as a bank account number. Bare
+# "account" is included so "account 12345678" (e.g. after a sort code)
+# is caught; a number must still follow within the search window.
+_ACCOUNT_LABEL_RE = re.compile(
+    r"(?i)\b(account\s*(?:number|no\.?)|acct(?:\.|\s*no\.?)?|a/c"
+    r"|checking|savings|account)\b"
+)
+# Masked forms such as ****8841: mask chars plus the last 3-4 digits.
+# Masked forms are low sensitivity (proven pii, redacted like the rest).
+_ACCOUNT_MASKED_RE = re.compile(r"[*xX#\u2022]{2,}[ \t-]*\d{3,4}")
+_ACCOUNT_PLAIN_RE = re.compile(r"(?<!\d)\d(?:[ \t-]?\d){5,16}(?!\d)")
+
+_ROUTING_LABEL_RE = re.compile(r"(?i)\b(routing(?:\s+number)?|ABA|RTN)\b")
+_ROUTING_NUM_RE = re.compile(r"(?<!\d)\d{9}(?!\d)")
+
+# An IBAN start (country code + check digits); the BBAN run is consumed
+# by _iban_end() so spaced groups ("GB82 WEST 1234 ...") work too.
+_IBAN_START_RE = re.compile(r"\b[A-Z]{2}\d{2}")
+
+_SORT_LABEL_RE = re.compile(r"(?i)\bsort\s*code\b")
+_SORT_NUM_RE = re.compile(r"(?<!\d)\d{2}[-\s]?\d{2}[-\s]?\d{2}(?!\d)")
+
+_SWIFT_LABEL_RE = re.compile(r"(?i)\b(SWIFT|BIC)\b")
+_SWIFT_CODE_RE = re.compile(r"\b[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b")
+
+# "Account holder:", "Name:", "Patient:", "Employee:", "Cardholder:".
+# A colon is required so prose mentions ("patients table", "account
+# team") never match.
+_HOLDER_CUE_RE = re.compile(
+    r"(?i)\b(account\s*holder|card\s*holder|cardholder|holder"
+    r"|patient|employee|full\s*name|contact\s*name|name)\s*:"
+    r"[ \t]*(" + _FIRST_TOKEN + r"(?:[ \t]+" + _CAP_TOKEN + r"){1,3})\b"
+)
+
+_LABEL_WINDOW = 60
+
+
+def _aba_valid(digits: str) -> bool:
+    """ABA routing-number checksum: 3-7-1 weighting sums to a multiple of 10."""
+    values = [ord(ch) - ord("0") for ch in digits]
+    total = (
+        3 * (values[0] + values[3] + values[6])
+        + 7 * (values[1] + values[4] + values[7])
+        + (values[2] + values[5] + values[8])
+    )
+    return total % 10 == 0
+
+
+def _iban_mod97_ok(iban: str) -> bool:
+    """ISO 13616 mod-97 check: rearranged digits must leave remainder 1."""
+    rearranged = iban[4:] + iban[:4]
+    numeric = "".join(
+        str(ord(ch) - 55) if "A" <= ch <= "Z" else ch for ch in rearranged
+    )
+    return int(numeric) % 97 == 1
+
+
+def _first_after(
+    text: str, label: re.Match[str], pattern: re.Pattern[str],
+) -> re.Match[str] | None:
+    """First ``pattern`` match in the window after a label."""
+    return pattern.search(
+        text, label.end(), min(len(text), label.end() + _LABEL_WINDOW))
+
+
+def _last_before(
+    text: str, label: re.Match[str], pattern: re.Pattern[str],
+) -> re.Match[str] | None:
+    """Nearest ``pattern`` match in the window before a label."""
+    window_start = max(0, label.start() - _LABEL_WINDOW)
+    before = None
+    for candidate in pattern.finditer(text, window_start, label.start()):
+        before = candidate
+    return before
+
+
+def _near_number(
+    text: str, label: re.Match[str], pattern: re.Pattern[str],
+) -> re.Match[str] | None:
+    """First ``pattern`` match near a label: after it first, else before it."""
+    after = _first_after(text, label, pattern)
+    if after is not None:
+        return after
+    return _last_before(text, label, pattern)
+
+
+def _scan_accounts(text: str, policy: Policy) -> list[Span]:
+    """Bank account numbers (6-17 digits, or masked) next to an account label."""
+    spans: list[Span] = []
+    for label in _ACCOUNT_LABEL_RE.finditer(text):
+        # Prefer the window after the label (either form, whichever is
+        # nearer); only then look before it ("8841 is the account number").
+        # Checking both forms in each window stops an earlier label's
+        # masked number from hiding this label's plain number.
+        after = [
+            match for match in (
+                _first_after(text, label, _ACCOUNT_MASKED_RE),
+                _first_after(text, label, _ACCOUNT_PLAIN_RE),
+            ) if match is not None
+        ]
+        before = [] if after else [
+            match for match in (
+                _last_before(text, label, _ACCOUNT_MASKED_RE),
+                _last_before(text, label, _ACCOUNT_PLAIN_RE),
+            ) if match is not None
+        ]
+        found = (
+            min(after or before, key=lambda m: m.start(), default=None)
+            if after else
+            max(before, key=lambda m: m.start(), default=None)
+        )
+        if found is None:
+            continue
+        digits = re.sub(r"[ \t-]", "", found.group())
+        masked = not digits.isdigit()
+        if not masked and not 6 <= len(digits) <= 17:
+            continue
+        spans.append(
+            _emit(
+                text, found.start(), found.end(), "pii", "account",
+                "proven", "Looks like a bank account number.",
+                "masked digits near an account label" if masked
+                else "6-17 digits near an account label",
+                policy, 0.8 if masked else 0.85,
+            )
+        )
+    return spans
+
+
+def _scan_routing(text: str, policy: Policy) -> list[Span]:
+    """US ABA routing numbers: 9 digits by a routing/ABA/RTN label, checksum valid."""
+    spans: list[Span] = []
+    for label in _ROUTING_LABEL_RE.finditer(text):
+        for candidate in _ROUTING_NUM_RE.finditer(
+            text,
+            max(0, label.start() - _LABEL_WINDOW),
+            min(len(text), label.end() + _LABEL_WINDOW),
+        ):
+            if _aba_valid(candidate.group()):
+                spans.append(
+                    _emit(
+                        text, candidate.start(), candidate.end(), "pii",
+                        "routing", "proven", "Looks like a bank routing number.",
+                        "9 digits by a routing label passing the ABA checksum",
+                        policy, 0.9,
+                    )
+                )
+    return spans
+
+
+def _iban_end(text: str, start: int) -> int:
+    """End offset of the BBAN run starting at ``start`` (single spaces allowed)."""
+    pos = start
+    limit = min(len(text), start + 45)
+    while pos < limit and (text[pos].isalnum() or text[pos] == " "):
+        pos += 1
+    while pos > start and text[pos - 1] == " ":
+        pos -= 1
+    return pos
+
+
+def _scan_iban(text: str, policy: Policy) -> list[Span]:
+    """IBANs passing the ISO 13616 mod-97 check, plus UK sort-code pairs."""
+    spans: list[Span] = []
+    for start_match in _IBAN_START_RE.finditer(text):
+        start = start_match.start()
+        run_end = _iban_end(text, start_match.end())
+        stripped = re.sub(r"\s+", "", text[start:run_end])
+        longest = min(len(stripped), 34)
+        for length in range(longest, 14, -1):
+            candidate = stripped[:length]
+            if not re.fullmatch(r"[A-Z]{2}\d{2}[A-Z0-9]{11,30}", candidate):
+                continue
+            end = start
+            kept = 0
+            while kept < length:
+                if text[end] != " ":
+                    kept += 1
+                end += 1
+            if end < len(text) and text[end].isalnum():
+                continue
+            if _iban_mod97_ok(candidate):
+                spans.append(
+                    _emit(
+                        text, start, end, "pii", "iban", "proven",
+                        "Looks like an IBAN.",
+                        "country code plus check digits passing the "
+                        "ISO 13616 mod-97 check", policy, 0.9,
+                    )
+                )
+                break
+    for label in _SORT_LABEL_RE.finditer(text):
+        number = _near_number(text, label, _SORT_NUM_RE)
+        if number is not None:
+            spans.append(
+                _emit(
+                    text, number.start(), number.end(), "pii", "sort_code",
+                    "proven", "Looks like a UK sort code.",
+                    "6 digits by a sort-code label", policy, 0.85,
+                )
+            )
+    return spans
+
+
+def _scan_swift(text: str, policy: Policy) -> list[Span]:
+    """SWIFT/BIC codes (8 or 11 chars) next to a SWIFT/BIC label."""
+    spans: list[Span] = []
+    for label in _SWIFT_LABEL_RE.finditer(text):
+        code = _near_number(text, label, _SWIFT_CODE_RE)
+        if code is not None:
+            spans.append(
+                _emit(
+                    text, code.start(), code.end(), "pii", "swift", "proven",
+                    "Looks like a SWIFT/BIC code.",
+                    "8 or 11 characters by a SWIFT/BIC label", policy, 0.9,
+                )
+            )
+    return spans
+
+
+def _scan_holder_names(text: str, policy: Policy) -> list[Span]:
+    """Account holder / patient / employee names after a holder label."""
+    spans: list[Span] = []
+    for match in _HOLDER_CUE_RE.finditer(text):
+        start = match.start(2)
+        spans.append(
+            _emit(
+                text, start, start + len(match.group(2)), "pii",
+                "holder_name", "proven",
+                "Looks like an account holder name.",
+                "2-4 capitalised tokens after a holder label", policy, 0.85,
+            )
+        )
+    return spans
+
+
 def _scan_pii(text: str, policy: Policy) -> list[Span]:
     spans: list[Span] = []
     for match in _EMAIL_RE.finditer(text):
@@ -951,6 +1189,11 @@ def scan(
     _run_traced(trace_out, spans, "tier1.csv_scan", counters, _scan_csv_pii, text, policy)
     _run_traced(trace_out, spans, "tier1.dob_scan", counters, _scan_dob, text, policy)
     _run_traced(trace_out, spans, "tier1.address_scan", counters, _scan_addresses, text, policy)
+    _run_traced(trace_out, spans, "tier1.account_scan", counters, _scan_accounts, text, policy)
+    _run_traced(trace_out, spans, "tier1.routing_scan", counters, _scan_routing, text, policy)
+    _run_traced(trace_out, spans, "tier1.iban_scan", counters, _scan_iban, text, policy)
+    _run_traced(trace_out, spans, "tier1.swift_scan", counters, _scan_swift, text, policy)
+    _run_traced(trace_out, spans, "tier1.holder_scan", counters, _scan_holder_names, text, policy)
     tables = _csv_tables(text)
     _run_traced(trace_out, spans, "tier1.short_phone_scan", counters, _scan_short_phones, text, policy, tables)
     _run_traced(trace_out, spans, "tier1.business_scan", counters, _scan_business, text, policy)

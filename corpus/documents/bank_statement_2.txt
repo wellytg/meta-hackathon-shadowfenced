@@ -1,0 +1,21 @@
+Meridian Trust -- Monthly Statement (fictional example)
+
+Account holder: Tomas Reyes
+18 Cliff Road, Seabrook, CA 90210
+Contact: +1 (555) 019-3344
+
+Statement period: April 1-30, 2026
+Opening balance: $12,040.00
+Closing balance: $11,205.44
+
+Checking account ending ****8841
+Sort code 20-00-00, account 12345678
+IBAN: GB82 WEST 1234 5698 7654 32
+SWIFT: NWBKGB2L
+
+Transactions:
+Apr 02  Payroll credit          +3,100.00
+Apr 09  Harbor Grocers           -141.56
+Apr 22  Direct deposit refund     +250.00
+
+Available balance: $11,205.44

@@ -1,0 +1,19 @@
+Services Agreement (fictional example)
+
+This agreement is made on May 6, 2026 between Party A and
+Party B (together, the "Parties").
+
+Party A legal name: Bluepine Traders
+Party B legal name: Harborline Studio
+
+1. Each party shall perform the services described above.
+2. Each party shall indemnify the other against direct losses.
+3. All confidential terms of this agreement stay private.
+4. Termination requires thirty days written notice.
+5. This agreement is subject to the governing law of California.
+
+Settlement account:
+Account holder: Bluepine Traders
+IBAN: DE89 3704 0044 0532 0130 00
+SWIFT: DEUTDEFF
+Contact: +1 (555) 016-5520
