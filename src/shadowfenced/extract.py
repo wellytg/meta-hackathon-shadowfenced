@@ -17,6 +17,18 @@ from io import BytesIO
 
 MAX_FILE_BYTES = 2 * 1024 * 1024
 
+
+def max_file_bytes() -> int:
+    """Upload cap: 1 MB in hosted demo mode, else the default 2 MB."""
+    try:
+        from .hosted import HOSTED_MAX_FILE_BYTES, is_hosted
+
+        if is_hosted():
+            return HOSTED_MAX_FILE_BYTES
+    except Exception:
+        pass
+    return MAX_FILE_BYTES
+
 # suffix -> kind
 SUPPORTED: dict[str, str] = {
     ".txt": "text",
@@ -100,8 +112,9 @@ def extract_text(name: str, data: bytes) -> tuple[str, str]:
     :class:`Unscannable` when a supported file yields no usable text.
     """
     kind = kind_for(name)
-    if len(data) > MAX_FILE_BYTES:
-        raise FileTooLarge(f"file exceeds {MAX_FILE_BYTES} bytes")
+    limit = max_file_bytes()
+    if len(data) > limit:
+        raise FileTooLarge(f"file exceeds {limit} bytes")
     if kind in ("text", "markdown", "csv"):
         text = _decode_text(data)
         if not text.strip():

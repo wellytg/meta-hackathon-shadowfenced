@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="welcome.css">
 </head>
 <body>
+<div id="hosted-banner" data-testid="hosted-banner" hidden>Public demo. Use made-up data only.</div>
 <div class="sheet">
 
   <header class="masthead">
@@ -174,5 +175,18 @@
   </footer>
 
 </div>
+<script>
+(function () {
+  fetch("/api/hosted")
+    .then(function (resp) { return resp.json(); })
+    .then(function (body) {
+      if (body && body.hosted) {
+        var el = document.getElementById("hosted-banner");
+        if (el) el.hidden = false;
+      }
+    })
+    .catch(function () { /* banner stays hidden */ });
+})();
+</script>
 </body>
 </html>

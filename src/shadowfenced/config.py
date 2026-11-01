@@ -32,6 +32,7 @@ _ENV_KEYS = (
     "SF_TIER2_MODE",
     "SF_LIVE_HINTS",
     "SF_PROTECT_KEYS",
+    "SF_HOSTED",
 )
 
 DEFAULT_LOG_PATH = "runs/decisions.jsonl"
@@ -90,6 +91,7 @@ class Settings(BaseModel):
     tier2_mode: str = "live"
     live_hints: bool = False
     protect_keys: str = "META_API_KEY,MODEL_API_KEY"
+    hosted: bool = False
 
     @property
     def meta_available(self) -> bool:
@@ -164,6 +166,7 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
         tier2_mode=_tier2_mode(merged.get("SF_TIER2_MODE")),
         live_hints=_parse_flag(merged.get("SF_LIVE_HINTS"), False),
         protect_keys=merged["SF_PROTECT_KEYS"] if "SF_PROTECT_KEYS" in merged else "META_API_KEY,MODEL_API_KEY",
+        hosted=_parse_flag(merged.get("SF_HOSTED"), False),
     )
 
 

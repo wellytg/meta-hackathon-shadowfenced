@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -11,12 +12,26 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .hosted import MAX_HOSTED_RULES, is_hosted
+
 SpanClass = Literal["secret", "pii", "business", "beacon"]
 GateAction = Literal["block", "redact", "review", "allow"]
 
 _DEFAULT_PATH = Path(__file__).resolve().parents[2] / "policy.yaml"
 _LOCAL_DEFAULT = Path(__file__).resolve().parents[2] / "policy.local.yaml"
 _LOCAL_ENV_VAR = "SF_LOCAL_POLICY"
+
+# Hosted demo (SF_HOSTED=1) keeps custom rules in process memory only:
+# they are never written to disk and are capped at MAX_HOSTED_RULES.
+_HOSTED_RULES: list[CustomRule] = []
+_HOSTED_LOCK = threading.Lock()
+
+
+def reset_hosted_rules() -> None:
+    """Drop every in-memory hosted custom rule (tests only)."""
+    with _HOSTED_LOCK:
+        _HOSTED_RULES.clear()
+
 
 RuleKind = Literal["codename", "client", "pattern"]
 RuleAction = Literal["block", "redact", "review"]
@@ -133,6 +148,10 @@ def local_policy_path() -> Path:
 
 def load_custom_rules(path: str | Path | None = None) -> list[CustomRule]:
     """Read custom rules from the local file; missing file means no rules."""
+    if is_hosted():
+        # Hosted demo: rules live in memory only, never on disk.
+        with _HOSTED_LOCK:
+            return list(_HOSTED_RULES)
     target = Path(path) if path else local_policy_path()
     try:
         raw_text = target.read_text(encoding="utf-8")
@@ -173,6 +192,22 @@ def add_custom_rule(kind: str, value: str, action: str, note: str = "") -> Custo
         raise ValueError(f"unknown rule action {action!r}")
     clean = validate_custom_rule_value(kind, value)
     target = local_policy_path()
+    if is_hosted():
+        # Hosted demo: in-memory only, capped, never written to disk.
+        with _HOSTED_LOCK:
+            if len(_HOSTED_RULES) >= MAX_HOSTED_RULES:
+                raise ValueError(
+                    f"hosted demo keeps at most {MAX_HOSTED_RULES} custom rules"
+                )
+            taken = {rule.id for rule in _HOSTED_RULES}
+            rule_id = uuid.uuid4().hex[:12]
+            while rule_id in taken:
+                rule_id = uuid.uuid4().hex[:12]
+            rule = CustomRule(
+                id=rule_id, kind=kind, value=clean, action=action, note=(note or "").strip()  # type: ignore[arg-type]
+            )
+            _HOSTED_RULES.append(rule)
+            return rule
     rules = load_custom_rules(target)
     taken = {rule.id for rule in rules}
     rule_id = uuid.uuid4().hex[:12]
@@ -188,6 +223,13 @@ def add_custom_rule(kind: str, value: str, action: str, note: str = "") -> Custo
 
 def delete_custom_rule(rule_id: str) -> bool:
     """Remove one custom rule; True when it existed."""
+    if is_hosted():
+        with _HOSTED_LOCK:
+            kept = [rule for rule in _HOSTED_RULES if rule.id != rule_id]
+            if len(kept) == len(_HOSTED_RULES):
+                return False
+            _HOSTED_RULES[:] = kept
+            return True
     target = local_policy_path()
     rules = load_custom_rules(target)
     kept = [rule for rule in rules if rule.id != rule_id]

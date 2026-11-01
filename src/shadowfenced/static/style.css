@@ -599,6 +599,19 @@ body {
   color: var(--ink);
 }
 
+#hosted-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: #16130e;
+  color: #f7f2e7;
+  text-align: center;
+  font-size: 13px;
+  padding: 6px 12px;
+}
+
 @media (max-width: 720px) {
   .layout { grid-template-columns: 1fr; }
   .topbar { flex-wrap: wrap; }
