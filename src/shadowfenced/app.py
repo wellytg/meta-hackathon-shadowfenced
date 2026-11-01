@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -1393,6 +1393,121 @@ async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
     """Accept one multipart file, extract its text, and scan it."""
     data = await file.read()
     return handle_upload(file.filename or "upload", data)
+
+
+# --- voice dictation (T34) --------------------------------------------------
+
+
+DICTATION_MAX_BYTES = 5 * 1024 * 1024
+DICTATION_MAX_SECONDS = 60.0
+DICTATION_SUFFIXES = (".webm", ".ogg", ".wav", ".m4a")
+
+
+def _dictation_error(status_code: int, code: str, message: str) -> HTTPException:
+    """Build a dictation error that never carries transcript text."""
+    return HTTPException(
+        status_code=status_code,
+        detail={
+            "code": code,
+            "type": code,
+            "message": message,
+        },
+    )
+
+
+def handle_transcribe(
+    filename: str,
+    data: bytes,
+    duration: str | float | None = None,
+    *,
+    transport: Any | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Transcribe one short voice clip and return ``{"text": ...}``.
+
+    Sync core of ``POST /api/transcribe`` so tests can call it
+    without an event loop (mirrors :func:`handle_upload`). Raises
+    ``HTTPException`` on every failure; the error never carries
+    transcript text.
+    """
+    if hosted_module.is_hosted():
+        cfg = settings or get_settings()
+        if not cfg.hosted_dictation:
+            raise _dictation_error(
+                403,
+                "shadowfenced_dictation_disabled",
+                "dictation is disabled in hosted demo mode",
+            )
+    if duration not in (None, ""):
+        try:
+            seconds = float(duration)
+        except (TypeError, ValueError):
+            raise _dictation_error(
+                400,
+                "shadowfenced_bad_duration",
+                "duration must be a number of seconds",
+            ) from None
+        if seconds > DICTATION_MAX_SECONDS:
+            raise _dictation_error(
+                413,
+                "shadowfenced_audio_too_long",
+                "audio clip exceeds 60 seconds",
+            )
+    if not data:
+        raise _dictation_error(
+            400,
+            "shadowfenced_empty_audio",
+            "audio clip is empty",
+        )
+    if len(data) > DICTATION_MAX_BYTES:
+        raise _dictation_error(
+            413,
+            "shadowfenced_audio_too_large",
+            "audio clip exceeds 5 MB",
+        )
+    lowered = (filename or "").lower()
+    if not any(lowered.endswith(suffix) for suffix in DICTATION_SUFFIXES):
+        raise _dictation_error(
+            415,
+            "shadowfenced_unsupported_audio",
+            "unsupported audio type; use webm, ogg, wav, or m4a",
+        )
+    from . import transcribe as transcribe_module
+
+    if transport is None:
+        transport = getattr(app.state, "transcribe_transport", None)
+    try:
+        text_out = transcribe_module.transcribe_audio_sync(
+            filename, data, settings=settings or get_settings(),
+            transport=transport,
+        )
+    except TranscribeError as exc:
+        raise _dictation_error(
+            502,
+            "shadowfenced_transcribe_failed",
+            f"transcription failed: {exc}",
+        ) from exc
+    return {"text": text_out}
+
+
+@app.post("/api/transcribe")
+async def transcribe_clip(
+    file: UploadFile = File(...),
+    duration: str | None = Form(default=None),
+) -> dict[str, Any]:
+    """Transcribe one short voice clip with Muse Voice Transcribe.
+
+    Accepts a single audio clip (``webm``/``ogg``/``wav``/``m4a``),
+    at most 60 seconds and 5 MB, and returns ``{"text": ...}``.
+    The transcript is never forwarded to any chat model here; the
+    caller inserts it into the composer so the normal live scan
+    runs before anything is sent. Every failure (including
+    timeouts) raises a clear error with no ``text`` field.
+
+    Disabled in hosted demo mode unless ``SF_HOSTED_DICTATION=1``.
+    """
+    data = await file.read()
+    return handle_transcribe(file.filename or "", data, duration)
 
 
 @app.get("/api/providers")

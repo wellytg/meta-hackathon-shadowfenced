@@ -33,6 +33,7 @@ _ENV_KEYS = (
     "SF_LIVE_HINTS",
     "SF_PROTECT_KEYS",
     "SF_HOSTED",
+    "SF_HOSTED_DICTATION",
 )
 
 DEFAULT_LOG_PATH = "runs/decisions.jsonl"
@@ -92,6 +93,7 @@ class Settings(BaseModel):
     live_hints: bool = False
     protect_keys: str = "META_API_KEY,MODEL_API_KEY"
     hosted: bool = False
+    hosted_dictation: bool = False
 
     @property
     def meta_available(self) -> bool:
@@ -167,6 +169,7 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
         live_hints=_parse_flag(merged.get("SF_LIVE_HINTS"), False),
         protect_keys=merged["SF_PROTECT_KEYS"] if "SF_PROTECT_KEYS" in merged else "META_API_KEY,MODEL_API_KEY",
         hosted=_parse_flag(merged.get("SF_HOSTED"), False),
+        hosted_dictation=_parse_flag(merged.get("SF_HOSTED_DICTATION"), False),
     )
 
 
