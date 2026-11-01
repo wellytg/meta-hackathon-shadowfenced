@@ -1393,6 +1393,7 @@ body {
 }
 .risk-card[data-decision="BLOCK"] { border-left: 6px solid var(--signal); }
 .risk-card[data-decision="HOLD"] { border-left: 6px solid var(--hold); }
+.risk-card[data-decision="CHECKING"] { border-left: 6px solid var(--hold); }
 .risk-card[data-decision="WARN"] { border-left: 6px solid var(--hold); }
 .risk-card[data-decision="REDACT"] { border-left: 6px solid var(--steel); }
 .risk-card[data-decision="ALLOW"] { border-left: 6px solid var(--steel); }
@@ -1405,6 +1406,7 @@ body {
 }
 .risk-card[data-decision="BLOCK"] .risk-title { color: var(--signal-deep); }
 .risk-card[data-decision="HOLD"] .risk-title,
+.risk-card[data-decision="CHECKING"] .risk-title,
 .risk-card[data-decision="WARN"] .risk-title { color: var(--hold-ink); }
 .risk-card[data-decision="REDACT"] .risk-title,
 .risk-card[data-decision="ALLOW"] .risk-title { color: var(--steel-deep); }
