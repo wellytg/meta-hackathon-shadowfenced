@@ -94,10 +94,10 @@ def test_send_disabled_while_empty_or_busy_with_checking_state():
 
 def test_failure_keeps_typed_text_and_names_it_inline():
     js = _js()
-    # The only clear of the composer happens on the success path, before
-    # the failure branch; the failure branch only reports inline.
+    # The composer clears on send, before the reply lands; the failure
+    # branch never clears: it only reports inline (restoring the text).
     assert js.index("clearComposer();") < js.index('noteTurn("UNKNOWN", null);')
-    tail = js.split('noteTurn("UNKNOWN", null);')[1].split("})")[0]
+    tail = js.split('noteTurn("UNKNOWN", null);')[1].split("function renderHoldCard")[0]
     assert "showComposerError(" in tail
     assert "clearComposer" not in tail
     assert "Your text was kept" in js
@@ -211,3 +211,95 @@ def test_pure_state_helpers_are_exported():
     mic = (STATIC / "dictation.js").read_text(encoding="utf-8")
     assert "window.ShadowfencedDictation" in mic
     assert "formatElapsed" in mic
+
+
+# --- T50 chat fixes (state model) -------------------------------------------------------
+#
+# WARN is a known decision everywhere (never "couldn't check"); warn confirms
+# reach an explicit final state; the old send-time banner is gone; the
+# composer clears on send and restores on failure; the Why row uses plain
+# human labels.
+
+
+def _known_decisions(js: str) -> str:
+    start = js.index("KNOWN_DECISIONS =")
+    return js[start:js.index("];", start) + 2]
+
+
+def test_t50_warn_is_a_known_decision_everywhere():
+    js = _js()
+    known = _known_decisions(js)
+    for decision in ("ALLOW", "REDACT", "WARN", "HOLD", "BLOCK"):
+        assert f'"{decision}"' in known, decision
+    # Receipt label carries words (amber review), never "couldn't check".
+    assert "Waiting for you \u2014 review" in js
+    # Drawer records the WARN key itself (noteTurn maps through KNOWN_DECISIONS).
+    assert 'var key = KNOWN_DECISIONS.indexOf(decision) >= 0 ? decision : "UNKNOWN";' in js
+    # Icon and membrane cover WARN (amber review, not grey unknown).
+    icons = js[js.index("RECEIPT_ICONS ="):js.index("};", js.index("RECEIPT_ICONS =")) + 2]
+    assert "WARN" in icons
+    assert 'if (decision === "WARN") return "review";' in js
+
+
+def test_t50_warn_receipt_is_amber_not_grey():
+    css = _css("style.css")
+    assert '.receipt[data-decision="WARN"]' in css
+
+
+def test_t50_warn_confirm_reaches_a_final_state():
+    js = _js()
+    # Both card choices confirm through the server and land on explicit text.
+    assert '"send_generalised"' in js
+    assert "Sent anyway \u2014 you chose to send" in js
+    assert "Sent generalised" in js
+    # The receipt is re-rendered from the confirm response...
+    assert "renderReceipt(res.body.decision" in js
+    # ...and the choice buttons disappear.
+    assert 'querySelector(".risk-choices")' in js
+    assert ".remove()" in js
+
+
+def test_t50_no_send_time_reid_banner():
+    reid = (STATIC / "reid.js").read_text(encoding="utf-8")
+    # The old banner under the composer no longer hooks the send flow;
+    # live typing underlines still come from /api/scan in app.js.
+    assert "/api/send" not in reid
+    assert '"/api/scan"' in _js()
+
+
+def _send_now(js: str) -> str:
+    start = js.index("function sendNow")
+    return js[start:js.index("function renderHoldCard", start)]
+
+
+def test_t50_composer_clears_on_send_not_on_reply():
+    js = _js()
+    send = _send_now(js)
+    # The text moves into the user bubble and the box clears immediately,
+    # so anything typed while the reply loads is kept.
+    assert send.index("clearComposer();") < send.index('fetch("/api/send"')
+    tail = send.split('fetch("/api/send"')[1]
+    assert "clearComposer();" not in tail
+
+
+def test_t50_failed_send_restores_or_offers_restore():
+    js = _js()
+    send = _send_now(js)
+    # Failure puts the sent text back when the box is empty...
+    assert "composer.value = sentText;" in send
+    # ...otherwise the error line keeps it behind a Restore control.
+    assert "Restore" in send
+    assert 'data-testid", "composer-restore"' in js
+
+
+def test_t50_why_row_uses_plain_human_labels():
+    js = _js()
+    for label in ("street address", "email address", "phone number",
+                  "date of birth", "project codename", "contract clause",
+                  "API key"):
+        assert label in js, label
+    # No internal class names leak into the Why sentence.
+    assert "pii address" not in js.lower()
+    # Placeholder bases and span classes share one human-label mapping,
+    # so the same finding cannot appear twice under two names.
+    assert js.count("riskHumanLabel(") >= 3

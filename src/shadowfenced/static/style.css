@@ -763,6 +763,7 @@ body {
 }
 .receipt[data-decision="ALLOW"] { border-left-color: var(--steel); }
 .receipt[data-decision="REDACT"] { border-left-color: var(--steel); }
+.receipt[data-decision="WARN"] { border-left-color: var(--hold); }
 .receipt[data-decision="HOLD"] { border-left-color: var(--hold); }
 .receipt[data-decision="BLOCK"] { border-left-color: var(--signal); }
 .receipt[data-decision="UNKNOWN"] { border-left-color: var(--muted); }
@@ -984,6 +985,7 @@ summary:focus-visible {
 }
 .receipt[data-decision="ALLOW"] .receipt-icon { color: var(--steel); }
 .receipt[data-decision="REDACT"] .receipt-icon { color: var(--steel); }
+.receipt[data-decision="WARN"] .receipt-icon { color: var(--hold-ink); }
 .receipt[data-decision="HOLD"] .receipt-icon { color: var(--hold-ink); }
 .receipt[data-decision="BLOCK"] .receipt-icon { color: var(--signal-deep); }
 .receipt[data-decision="UNKNOWN"] .receipt-icon { color: var(--muted); }
@@ -1005,6 +1007,7 @@ summary:focus-visible {
 }
 .receipt[data-decision="ALLOW"] { border-left-color: var(--steel); }
 .receipt[data-decision="REDACT"] { border-left-color: var(--steel); }
+.receipt[data-decision="WARN"] { border-left-color: var(--hold); }
 .receipt[data-decision="HOLD"] { border-left-color: var(--hold); }
 .receipt[data-decision="BLOCK"] { border-left-color: var(--signal); }
 .receipt[data-decision="UNKNOWN"] { border-left-color: var(--muted); }
