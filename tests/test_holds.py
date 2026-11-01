@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from conftest import route_methods
 from shadowfenced import holds
 from shadowfenced.app import RuleRequest, app, hold_rule, hold_status
 from shadowfenced.canary import CanaryRegistry, encodings
@@ -476,10 +477,7 @@ def test_evidence_card_and_live_underline_hooks():
 
 
 def test_hold_routes_registered():
-    table = {
-        getattr(r, "path", ""): sorted(getattr(r, "methods", []) or [])
-        for r in app.routes
-    }
+    table = route_methods(app)
     assert table["/api/holds/{hold_id}"] == ["GET"]
     assert table["/api/holds/{hold_id}/rule"] == ["POST"]
 
