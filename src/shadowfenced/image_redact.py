@@ -25,6 +25,8 @@ Request shapes follow the public docs:
   imported lazily so this app still starts when it is not installed.
 - Glimmer request: local Ollama ``/api/chat`` with the image on the
   message (``images: [b64]``), like :mod:`judge` but vision-capable.
+  ``options`` and ``keep_alive`` come from the shared
+  :mod:`glimmer` helper so the vision model never triggers a reload.
 
 The Meta key is read from settings (``META_API_KEY`` / ``MODEL_API_KEY``
 via :mod:`config`); it is only placed in the request header and is never
@@ -35,7 +37,6 @@ from __future__ import annotations
 
 import base64
 import io
-import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -44,6 +45,11 @@ from typing import Any
 import httpx
 
 from .config import Settings, get_settings
+from .glimmer import (
+    glimmer_keep_alive,
+    glimmer_options,
+    parse_glimmer_json as _parse_glimmer_json_shared,
+)
 from .upstream import _verify_for
 
 logger = logging.getLogger(__name__)
@@ -80,10 +86,6 @@ class ImageRedactError(RuntimeError):
     """Image redaction failed; the caller must fail closed."""
 
 
-#: Stray chat special tokens (``<|eot|>`` and kin) Glimmer sometimes
-#: appends after otherwise-correct JSON. Stripped before parsing.
-_SPECIAL_TOKEN_RE = re.compile(r"<\|.*?\|>")
-
 #: Remembers whether the missing-parser warning was already logged so a
 #: box-fill fallback does not spam the log once per image.
 _SAM_PARSER_WARNED = False
@@ -112,48 +114,16 @@ def sam_parser_available() -> bool:
 def parse_glimmer_json(content: object) -> object:
     """Parse one Glimmer vision reply tolerantly (shared helper).
 
-    Strips ``<|...|>`` special tokens, then ``json.loads``; when that
-    fails, retries on the outermost ``{...}`` slice so prose around the
-    JSON still parses. Raises :class:`GlimmerError` only when no JSON
-    object can be recovered.
+    Delegates to :func:`glimmer.parse_glimmer_json` so every Glimmer
+    caller strips the same ``<|...|>`` special tokens and retries the
+    same outermost ``{...}`` slice; maps the shared :class:`ValueError`
+    to :class:`GlimmerError` so this module's fail-closed contract is
+    unchanged.
     """
-    if not isinstance(content, str) or not content.strip():
-        raise GlimmerError("glimmer returned no content")
-    text = _SPECIAL_TOKEN_RE.sub("", content).strip()
-    if not text:
-        raise GlimmerError("glimmer returned non-JSON content")
     try:
-        parsed = json.loads(text)
-    except ValueError:
-        start, end = text.find("{"), text.rfind("}")
-        if start == -1 or end <= start:
-            raise GlimmerError(
-                "glimmer returned non-JSON content"
-            ) from None
-        try:
-            parsed = json.loads(text[start : end + 1])
-        except ValueError as exc:
-            raise GlimmerError(
-                "glimmer returned non-JSON content"
-            ) from exc
-    return parsed
-
-
-def _keep_alive() -> Any:
-    """Ollama keep_alive: int seconds, duration string, or -1 (resident).
-
-    Mirrors :mod:`judge` so the vision model stays resident instead of
-    reloading on every screenshot (``SF_KEEP_ALIVE``, default ``-1``).
-    """
-    import os as _os
-
-    raw = (_os.environ.get("SF_KEEP_ALIVE") or "-1").strip()
-    if raw == "-1":
-        return -1
-    try:
-        return int(raw)
-    except ValueError:
-        return raw
+        return _parse_glimmer_json_shared(content)
+    except ValueError as exc:
+        raise GlimmerError(str(exc)) from exc
 
 
 class GlimmerError(ImageRedactError):
@@ -306,8 +276,8 @@ def find_regions(
         "format": "json",
         "stream": False,
         "think": False,
-        "keep_alive": _keep_alive(),
-        "options": {"num_ctx": 2048},
+        "keep_alive": glimmer_keep_alive(),
+        "options": glimmer_options(cfg),
     }
     url = cfg.ollama_url.rstrip("/") + "/api/chat"
     try:

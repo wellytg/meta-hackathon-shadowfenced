@@ -10,7 +10,9 @@ model on every size switch and trips the 10 s person-search timeout.
 
 from __future__ import annotations
 
+import json as _json
 import os as _os
+import re as _re
 from typing import Any
 
 #: Fallback context size when no setting is available.
@@ -60,3 +62,31 @@ def glimmer_options(settings: Any = None, **extra: Any) -> dict[str, Any]:
     options: dict[str, Any] = {"num_ctx": glimmer_num_ctx(settings)}
     options.update(extra)
     return options
+
+
+#: Stray chat special tokens (``<|eot|>`` and kin) Glimmer sometimes
+#: appends after otherwise-correct JSON. Stripped before parsing.
+_SPECIAL_TOKEN_RE = _re.compile(r"<\|.*?\|>")
+
+
+def parse_glimmer_json(content: object) -> Any:
+    """Parse one Glimmer reply tolerantly.
+
+    Strips ``<|...|>`` special tokens, then ``json.loads``; when that
+    fails, retries on the outermost ``{...}`` slice so prose around the
+    JSON still parses. Raises :class:`ValueError` when no JSON object
+    can be recovered; callers map that to their own error type (or
+    ``None`` when they fail soft).
+    """
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("glimmer returned no content")
+    text = _SPECIAL_TOKEN_RE.sub("", content).strip()
+    if not text:
+        raise ValueError("glimmer returned non-JSON content")
+    try:
+        return _json.loads(text)
+    except ValueError:
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            raise ValueError("glimmer returned non-JSON content") from None
+        return _json.loads(text[start : end + 1])
