@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -138,14 +138,39 @@ def get_registry() -> CanaryRegistry:
 
 def reset_state() -> None:
     """Forget cached policy/registry (tests only)."""
-    global _POLICY, _REGISTRY
+    global _POLICY, _REGISTRY, _IMAGE_REDACTION_OVERRIDE
     _POLICY = None
     _REGISTRY = None
+    _IMAGE_REDACTION_OVERRIDE = None
 
 
 # In-memory default provider override set by POST /api/provider
 # (reset between tests via reset_provider_override()).
 _PROVIDER_OVERRIDE: str | None = None
+
+# In-memory image-redaction choice from the consent card
+# ("on" = Glimmer + cloud SAM masks, "local" = Glimmer + local box fill,
+# "off" = ask first). Set by POST /api/image-redaction/consent, default
+# from SF_IMAGE_REDACTION ("off"); reset between tests via reset_state().
+_IMAGE_REDACTION_OVERRIDE: str | None = None
+
+
+def image_redaction_mode(settings: Settings | None = None) -> str:
+    """Effective image-redaction mode: consent override, else settings."""
+    if _IMAGE_REDACTION_OVERRIDE in ("on", "local", "off"):
+        return _IMAGE_REDACTION_OVERRIDE
+    try:
+        cfg = settings or get_settings()
+    except Exception:
+        return "off"
+    mode = (cfg.image_redaction or "off").strip().lower()
+    return mode if mode in ("on", "local") else "off"
+
+
+def reset_image_redaction() -> None:
+    """Forget the consent-card override (tests only)."""
+    global _IMAGE_REDACTION_OVERRIDE
+    _IMAGE_REDACTION_OVERRIDE = None
 
 # --- WARN confirmations (T37) -------------------------------------------------
 # WARN decisions send nothing upstream. The warning (banner, combination,
@@ -1102,6 +1127,12 @@ def _file_sections(file_ids: list[str]) -> tuple[list[str], str | None]:
         record = UPLOADS.load(file_id)
         if record is None:
             return [], f"unknown or expired file {file_id}"
+        if record.kind == "image":
+            if record.status == "unscannable" or not record.image_png:
+                return [], f"file {record.name} is unscannable and needs review"
+            note = record.text.strip() or f"({record.regions} regions redacted)"
+            sections.append(f"\nAttached image {record.name}:\n{note}")
+            continue
         if record.status == "unscannable" or not record.text.strip():
             return [], f"file {record.name} is unscannable and needs review"
         sections.append(f"\nAttached file {record.name}:\n{record.text}")
@@ -1684,11 +1715,133 @@ def _handle_audio_upload(
     }
 
 
-def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, settings: Settings | None = None) -> dict[str, Any]:
+def _handle_image_upload(filename: str, data: bytes, *, settings: Settings | None = None, glimmer_transport: Any | None = None, sam_transport: Any | None = None) -> dict[str, Any]:
+    """Redact one screenshot/photo, or ask for consent first (T43).
+
+    Hosted mode refuses (no local Glimmer). With redaction off, no
+    bytes are analysed or stored: the payload carries the consent
+    notice instead. Otherwise Glimmer finds regions locally, SAM 3.1
+    sharpens them to masks when enabled ("on"), boxes are filled when
+    SAM is off ("local") or fails, and only the redacted PNG is kept.
+    Any text Glimmer read goes through the Tier 1 detectors. Failures
+    store an ``unscannable`` record so the send path HOLDs.
+    """
+    from . import image_redact as image_redact_module
+    from . import tier1
+    from .extract import max_file_bytes
+
+    cfg = settings or get_settings()
+    if hosted_module.is_hosted():
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "shadowfenced_image_unavailable",
+                "type": "shadowfenced_image_unavailable",
+                "message": "image attachments are disabled in hosted demo mode",
+            },
+        )
+    mode = image_redaction_mode(cfg)
+    if mode == "off":
+        return {
+            "file_id": "",
+            "name": filename,
+            "kind": "image",
+            "chars": 0,
+            "status": "consent_required",
+            "consent_required": True,
+            "notice": image_redact_module.NOTICE_TEXT,
+            "choices": ["on", "local", "off"],
+            "spans": [],
+            "summary": {},
+            "summary_text": "image needs your choice before attaching",
+            "regions": 0,
+            "method": "none",
+            "doc_type": None,
+            "doc_warning": None,
+        }
+    if glimmer_transport is None:
+        glimmer_transport = getattr(app.state, "glimmer_transport", None)
+    if sam_transport is None:
+        sam_transport = getattr(app.state, "sam_transport", None)
+    try:
+        if len(data) > max_file_bytes():
+            raise FileTooLarge(f"file exceeds {max_file_bytes()} bytes")
+        redacted = image_redact_module.redact_image(
+            data,
+            settings=cfg,
+            glimmer_transport=glimmer_transport,
+            sam_transport=sam_transport,
+            sam_enabled=(mode == "on"),
+        )
+    except (FileTooLarge, image_redact_module.ImageRedactError) as exc:
+        record = UPLOADS.save(
+            filename, "image", "", status="unscannable",
+        )
+        return {
+            "file_id": record.file_id,
+            "name": filename,
+            "kind": "image",
+            "chars": 0,
+            "status": "unscannable",
+            "spans": [],
+            "summary": {},
+            "summary_text": "could not read image",
+            "error": str(exc),
+            "regions": 0,
+            "method": "none",
+            "doc_type": None,
+            "doc_warning": None,
+        }
+    text = "\n".join(redacted.texts)
+    spans = tier1.scan(text, get_policy(), get_registry())
+    status = "flagged" if spans else "clean"
+    record = UPLOADS.save(filename, "image", text, status=status)
+    record.image_png = redacted.png
+    record.regions = len(redacted.regions)
+    record.method = redacted.method
+    try:
+        record.thumbnail = image_redact_module.png_data_url(
+            image_redact_module.thumbnail_png(redacted.png)
+        )
+    except Exception:
+        record.thumbnail = ""
+    count = len(redacted.regions)
+    region_word = f"{count} region{'s' if count != 1 else ''} hidden"
+    summary: dict[str, int] = {}
+    for span in spans:
+        summary[span.cls] = summary.get(span.cls, 0) + 1
+    if spans:
+        from .redact import redact as _redact
+
+        _, mapping = _redact(text, [s for s in spans if s.status == "proven"])
+        extra = ", ".join(engine.describe_placeholders(mapping))
+        summary_text = region_word + (f" ({extra})" if extra else " (needs review)")
+    else:
+        summary_text = region_word if count else "clean"
+    return {
+        "file_id": record.file_id,
+        "name": filename,
+        "kind": "image",
+        "chars": len(text),
+        "status": status,
+        "spans": [span_to_dict(s) for s in spans],
+        "summary": summary,
+        "summary_text": summary_text,
+        "regions": count,
+        "method": redacted.method,
+        "method_label": redacted.method_label,
+        "thumbnail": record.thumbnail,
+        "doc_type": None,
+        "doc_warning": None,
+    }
+
+
+def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, settings: Settings | None = None, glimmer_transport: Any | None = None, sam_transport: Any | None = None) -> dict[str, Any]:
     """Validate, extract, scan, and store one uploaded file.
 
     Audio files are transcribed by Muse Voice Transcribe first; the
-    transcript is then scanned like any other document.
+    transcript is then scanned like any other document. Images go
+    through the T43 redaction flow (consent, Glimmer, SAM 3.1).
 
     Returns the ``/api/upload`` payload. Raises ``HTTPException`` 415
     for an unsupported suffix; oversized or unparseable input stores an
@@ -1700,6 +1853,13 @@ def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, s
         if is_audio_file(filename):
             return _handle_audio_upload(
                 filename, data, transport=transport, settings=settings
+            )
+        from . import image_redact as image_redact_module
+        if image_redact_module.is_image_file(filename):
+            return _handle_image_upload(
+                filename, data, settings=settings,
+                glimmer_transport=glimmer_transport,
+                sam_transport=sam_transport,
             )
         kind, text = extract_text(filename, data)
     except UnsupportedType as exc:
@@ -1764,6 +1924,63 @@ def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, s
         "summary_text": summary_text,
         **_doc_fields(text),
     }
+
+
+@app.get("/api/image-redaction")
+def image_redaction_status() -> dict[str, Any]:
+    """Current image-redaction mode (T43 opt-in, off by default)."""
+    from . import image_redact as image_redact_module
+
+    hosted = hosted_module.is_hosted()
+    mode = "off" if hosted else image_redaction_mode()
+    return {
+        "mode": mode,
+        "hosted": hosted,
+        "notice": image_redact_module.NOTICE_TEXT,
+        "choices": ["on", "local", "off"],
+    }
+
+
+@app.post("/api/image-redaction/consent")
+def image_redaction_consent(payload: dict[str, Any]) -> dict[str, Any]:
+    """Store the consent-card choice for image attachments.
+
+    ``"on"`` runs Glimmer locally plus cloud SAM 3.1 masks; ``"local"``
+    keeps everything on this PC (Glimmer boxes only); ``"off"`` keeps
+    asking on every image attach.
+    """
+    global _IMAGE_REDACTION_OVERRIDE
+    choice = payload.get("choice") if isinstance(payload, dict) else None
+    if choice not in ("on", "local", "off"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "shadowfenced_bad_choice",
+                "type": "shadowfenced_bad_choice",
+                "message": "choice must be one of: on, local, off",
+            },
+        )
+    _IMAGE_REDACTION_OVERRIDE = choice
+    return {"mode": choice}
+
+
+@app.get("/api/uploads/{file_id}/image")
+def upload_image(file_id: str) -> Response:
+    """Return the redacted PNG bytes for one image upload.
+
+    Only the redacted image is ever served; the original is never kept.
+    """
+    record = UPLOADS.load(file_id)
+    if record is None or record.kind != "image" or not record.image_png:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "shadowfenced_no_image",
+                "type": "shadowfenced_no_image",
+                "message": "no redacted image for this file",
+            },
+        )
+    return Response(content=record.image_png, media_type="image/png")
 
 
 @app.post("/api/upload")
