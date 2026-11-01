@@ -1,0 +1,93 @@
+/* Providers panel (T35): one card per provider. Keys stay local. */
+#providers-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.providers-notice {
+  font-size: 0.85rem;
+  opacity: 0.85;
+  margin: 0 0 0.25rem;
+}
+
+.provider-card {
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.provider-card h3 {
+  margin: 0;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.provider-badge {
+  font-size: 0.7rem;
+  font-weight: bold;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 0.3rem;
+}
+
+.provider-badge.on {
+  color: #1a7f37;
+}
+
+.provider-badge.off {
+  color: #9a6700;
+}
+
+.providers-status {
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.providers-storage {
+  font-size: 0.8rem;
+  opacity: 0.8;
+  margin: 0;
+}
+
+.providers-keyrow {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.providers-keyrow input[type="password"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.providers-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.providers-msg {
+  font-size: 0.8rem;
+  margin: 0;
+  min-height: 1em;
+}
+
+.providers-dialog {
+  position: fixed;
+  top: 4rem;
+  right: 1rem;
+  z-index: 50;
+  background: white;
+  border: 1px solid #999;
+  border-radius: 8px;
+  padding: 1rem;
+  max-width: 22rem;
+  max-height: 80vh;
+  overflow: auto;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+}
