@@ -12,9 +12,12 @@ from __future__ import annotations
 import base64
 import math
 import re
+import time
 from collections import Counter
+from typing import Any
 
 from .canary import PREFIX as CANARY_PREFIX
+from .redact import base_label
 from .canary import CanaryRegistry, encodings
 from .policy import Policy
 from .spans import Span, merge_overlaps, span_from_cp_range
@@ -819,21 +822,139 @@ def _scan_beacon(text: str, policy: Policy) -> list[Span]:
     return spans
 
 
-def scan(
-    text: str, policy: Policy, registry: CanaryRegistry | None = None
-) -> list[Span]:
-    """Run every Tier 1 detector and return merged spans sorted by offset."""
+_CUSTOM_SUBCLASS = {
+    "codename": "codename",
+    "client": "client",
+    "pattern": "custom_pattern",
+}
+
+
+def _scan_custom_rules(text: str, policy: Policy) -> list[Span]:
+    """User organisation rules as Tier 1 proven spans with the chosen action.
+
+    Codename and client rules match literally (case-insensitively, like the
+    base policy words); pattern rules match as user-supplied regular
+    expressions. Every hit is ``proven`` with ``proof="custom"`` and carries
+    the rule's own action, so the gate can honour block/review directly.
+    """
+    rules = list(getattr(policy, "custom_rules", None) or [])
+    if not text or not rules:
+        return []
     spans: list[Span] = []
-    spans.extend(_scan_canaries(text, registry, policy))
-    spans.extend(_scan_provider_keys(text, policy))
-    spans.extend(_scan_pii(text, policy))
-    spans.extend(_scan_names(text, policy))
-    spans.extend(_scan_csv_pii(text, policy))
-    spans.extend(_scan_dob(text, policy))
-    spans.extend(_scan_addresses(text, policy))
+    for rule in rules:
+        kind = getattr(rule, "kind", "")
+        value = getattr(rule, "value", "") or ""
+        action = getattr(rule, "action", "")
+        subclass = _CUSTOM_SUBCLASS.get(kind)
+        if subclass is None or not value.strip():
+            continue
+        if action not in ("block", "redact", "review"):
+            continue
+        try:
+            if kind == "codename":
+                pattern = re.compile(
+                    r"\b" + re.escape(value.strip()) + r"\b", re.IGNORECASE
+                )
+            elif kind == "client":
+                pattern = _phrase_pattern(value.strip())
+            else:
+                pattern = re.compile(value)
+        except re.error:
+            continue
+        for match in pattern.finditer(text):
+            if match.start() == match.end():
+                continue
+            spans.append(
+                span_from_cp_range(
+                    text,
+                    match.start(),
+                    match.end(),
+                    cls="business",
+                    subclass=subclass,
+                    tier=1,
+                    proof="custom",
+                    status="proven",
+                    message="Matched a custom organisation rule.",
+                    why=f"custom {kind} rule with action {action}",
+                    suggested_action=action,
+                    can_keep=policy.keepable("business"),  # type: ignore[arg-type]
+                    confidence=0.9,
+                )
+            )
+    return spans
+
+
+def _trace_labels(
+    found: list[Span], counters: dict[str, int]
+) -> list[str]:
+    """Placeholder-style labels for trace steps; never raw values."""
+    labels: list[str] = []
+    for span in found:
+        base = base_label(span.cls, span.subclass)
+        counters[base] = counters.get(base, 0) + 1
+        labels.append(f"[{base}_{counters[base]}]")
+    return labels
+
+
+def _run_traced(
+    trace_out: list[dict[str, Any]] | None,
+    spans: list[Span],
+    step: str,
+    counters: dict[str, int],
+    func: Any,
+    *args: Any,
+) -> None:
+    """Run one Tier 1 detector, timing it into the trace when asked."""
+    if trace_out is None:
+        spans.extend(func(*args))
+        return
+    started = time.perf_counter()
+    found = func(*args)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    spans.extend(found)
+    if found:
+        detail = (
+            f"{len(found)} hit(s): "
+            + ", ".join(_trace_labels(found, counters))
+        )
+        result = "hit"
+    else:
+        detail = "0 hits"
+        result = "clean"
+    trace_out.append(
+        {
+            "step": step,
+            "tool": "tier1",
+            "detail": detail,
+            "result": result,
+            "ms": round(elapsed_ms, 3),
+        }
+    )
+
+
+def scan(
+    text: str, policy: Policy, registry: CanaryRegistry | None = None,
+    trace_out: list[dict[str, Any]] | None = None
+) -> list[Span]:
+    """Run every Tier 1 detector and return merged spans sorted by offset.
+
+    When ``trace_out`` is a list, one ``{step, tool, detail, result, ms}``
+    entry per detector is appended: counts and placeholder-style labels
+    only, never raw text.
+    """
+    spans: list[Span] = []
+    counters: dict[str, int] = {}
+    _run_traced(trace_out, spans, "tier1.canary_scan", counters, _scan_canaries, text, registry, policy)
+    _run_traced(trace_out, spans, "tier1.key_scan", counters, _scan_provider_keys, text, policy)
+    _run_traced(trace_out, spans, "tier1.pii_scan", counters, _scan_pii, text, policy)
+    _run_traced(trace_out, spans, "tier1.name_scan", counters, _scan_names, text, policy)
+    _run_traced(trace_out, spans, "tier1.csv_scan", counters, _scan_csv_pii, text, policy)
+    _run_traced(trace_out, spans, "tier1.dob_scan", counters, _scan_dob, text, policy)
+    _run_traced(trace_out, spans, "tier1.address_scan", counters, _scan_addresses, text, policy)
     tables = _csv_tables(text)
-    spans.extend(_scan_short_phones(text, policy, tables))
-    spans.extend(_scan_business(text, policy))
-    spans.extend(_scan_entropy(text, policy))
-    spans.extend(_scan_beacon(text, policy))
+    _run_traced(trace_out, spans, "tier1.short_phone_scan", counters, _scan_short_phones, text, policy, tables)
+    _run_traced(trace_out, spans, "tier1.business_scan", counters, _scan_business, text, policy)
+    _run_traced(trace_out, spans, "tier1.custom_scan", counters, _scan_custom_rules, text, policy)
+    _run_traced(trace_out, spans, "tier1.entropy_scan", counters, _scan_entropy, text, policy)
+    _run_traced(trace_out, spans, "tier1.beacon_scan", counters, _scan_beacon, text, policy)
     return merge_overlaps(spans)
