@@ -2,16 +2,78 @@
 
 from __future__ import annotations
 
+import os
+import re
+import uuid
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 SpanClass = Literal["secret", "pii", "business", "beacon"]
 GateAction = Literal["block", "redact", "review", "allow"]
 
 _DEFAULT_PATH = Path(__file__).resolve().parents[2] / "policy.yaml"
+_LOCAL_DEFAULT = Path(__file__).resolve().parents[2] / "policy.local.yaml"
+_LOCAL_ENV_VAR = "SF_LOCAL_POLICY"
+
+RuleKind = Literal["codename", "client", "pattern"]
+RuleAction = Literal["block", "redact", "review"]
+
+# A group whose body already holds a quantifier (``+ * ? {n}``), closed and
+# followed by another quantifier: ``(a+)+``, ``(x*)*``, ``(a{2,3})+``.
+# Such nested quantifiers risk catastrophic backtracking, so custom
+# patterns holding them are rejected.
+_NESTED_QUANT_RE = re.compile(
+    r"\([^()]*(\+|\*|\?|\{\s*\d)[^()]*\)\s*(\*|\+|\?|\{)"
+)
+
+
+def validate_custom_rule_value(kind: str, value: str) -> str:
+    """Check one custom rule value; return it stripped, else raise ValueError."""
+    text = (value or "").strip()
+    if kind in ("codename", "client"):
+        if not 2 <= len(text) <= 64:
+            raise ValueError(
+                f"{kind} rule value must be 2 to 64 characters "
+                f"(got {len(text)})"
+            )
+        return text
+    if kind == "pattern":
+        if not 1 <= len(value) <= 200:
+            raise ValueError(
+                "pattern rule value must be 1 to 200 characters "
+                f"(got {len(value)})"
+            )
+        try:
+            re.compile(value)
+        except re.error as exc:
+            raise ValueError(f"pattern does not compile: {exc}") from exc
+        if _NESTED_QUANT_RE.search(value):
+            raise ValueError(
+                "pattern holds nested quantifiers such as (a+)+ and is "
+                "rejected to avoid catastrophic backtracking"
+            )
+        return value
+    raise ValueError(f"unknown rule kind {kind!r}")
+
+
+class CustomRule(BaseModel):
+    """One runtime custom rule, stored in ``policy.local.yaml``."""
+
+    id: str = ""
+    kind: RuleKind = "codename"
+    value: str = ""
+    action: RuleAction = "redact"
+    note: str = ""
+
+    @model_validator(mode="after")
+    def _check_value(self) -> CustomRule:
+        validate_custom_rule_value(self.kind, self.value)
+        if self.action not in ("block", "redact", "review"):
+            raise ValueError(f"unknown rule action {self.action!r}")
+        return self
 
 
 class Codename(BaseModel):
@@ -32,6 +94,7 @@ class Policy(BaseModel):
     actions: dict[str, GateAction] = Field(default_factory=dict)
     user_can_keep: dict[str, bool] = Field(default_factory=dict)
     allowlist: Allowlist = Field(default_factory=Allowlist)
+    custom_rules: list[CustomRule] = Field(default_factory=list)
 
     @field_validator("actions", "user_can_keep")
     @classmethod
@@ -62,9 +125,100 @@ class Policy(BaseModel):
         return [item.name.upper() for item in self.codenames]
 
 
+def local_policy_path() -> Path:
+    """Local custom-rule file: ``SF_LOCAL_POLICY`` wins, else the repo root."""
+    override = os.environ.get(_LOCAL_ENV_VAR, "").strip()
+    return Path(override) if override else _LOCAL_DEFAULT
+
+
+def load_custom_rules(path: str | Path | None = None) -> list[CustomRule]:
+    """Read custom rules from the local file; missing file means no rules."""
+    target = Path(path) if path else local_policy_path()
+    try:
+        raw_text = target.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    try:
+        data = yaml.safe_load(raw_text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"local policy file {target} is not valid YAML: {exc}") from exc
+    if data is None:
+        return []
+    if isinstance(data, dict):
+        items = data.get("custom_rules", [])
+    elif isinstance(data, list):
+        items = data
+    else:
+        raise ValueError(f"local policy file {target} must hold a mapping")
+    if not isinstance(items, list):
+        raise ValueError(f"local policy file {target} must hold a rule list")
+    return [CustomRule.model_validate(item) for item in items]
+
+
+def _write_custom_rules(rules: list[CustomRule], path: Path) -> None:
+    """Persist custom rules; the file itself stays git-ignored."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"custom_rules": [rule.model_dump() for rule in rules]}
+    path.write_text(
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+
+def add_custom_rule(kind: str, value: str, action: str, note: str = "") -> CustomRule:
+    """Validate, store, and return one custom rule."""
+    if kind not in ("codename", "client", "pattern"):
+        raise ValueError(f"unknown rule kind {kind!r}")
+    if action not in ("block", "redact", "review"):
+        raise ValueError(f"unknown rule action {action!r}")
+    clean = validate_custom_rule_value(kind, value)
+    target = local_policy_path()
+    rules = load_custom_rules(target)
+    taken = {rule.id for rule in rules}
+    rule_id = uuid.uuid4().hex[:12]
+    while rule_id in taken:
+        rule_id = uuid.uuid4().hex[:12]
+    rule = CustomRule(
+        id=rule_id, kind=kind, value=clean, action=action, note=(note or "").strip()  # type: ignore[arg-type]
+    )
+    rules.append(rule)
+    _write_custom_rules(rules, target)
+    return rule
+
+
+def delete_custom_rule(rule_id: str) -> bool:
+    """Remove one custom rule; True when it existed."""
+    target = local_policy_path()
+    rules = load_custom_rules(target)
+    kept = [rule for rule in rules if rule.id != rule_id]
+    if len(kept) == len(rules):
+        return False
+    _write_custom_rules(kept, target)
+    return True
+
+
+def base_rules(policy: Policy) -> list[dict[str, object]]:
+    """Read-only view of the base rules from ``policy.yaml``."""
+    action = policy.actions.get("business", "redact")
+    entries: list[dict[str, object]] = []
+    for item in policy.codenames:
+        entries.append(
+            {"kind": "codename", "value": item.name, "action": action,
+             "source": "base", "readonly": True}
+        )
+    for name in policy.clients:
+        entries.append(
+            {"kind": "client", "value": name, "action": action,
+             "source": "base", "readonly": True}
+        )
+    return entries
+
+
 def load_policy(path: str | Path = _DEFAULT_PATH) -> Policy:
-    """Load and validate the policy file."""
+    """Load and validate the policy file, merging local custom rules."""
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(f"policy file {path} must contain a mapping")
-    return Policy.model_validate(raw)
+    policy = Policy.model_validate(raw)
+    policy.custom_rules = load_custom_rules()
+    return policy

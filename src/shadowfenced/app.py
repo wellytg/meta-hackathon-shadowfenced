@@ -307,17 +307,52 @@ def scan(request: ScanRequest) -> dict[str, Any]:
     from . import tier1
 
     started = time.perf_counter()
-    spans = tier1.scan(request.text, get_policy(), get_registry())
+    trace: list[dict[str, Any]] = []
+    spans = tier1.scan(
+        request.text, get_policy(), get_registry(), trace_out=trace
+    )
     tier1_ms = (time.perf_counter() - started) * 1000
     latency_ms: dict[str, float] = {"tier1": tier1_ms}
     if request.mode == "live" and get_settings().live_hints:
         tier2_started = time.perf_counter()
+        live_before = len(spans)
         spans = _with_live_suspicions(request.text, spans)
         latency_ms["tier2"] = (time.perf_counter() - tier2_started) * 1000
+        trace.append(
+            {
+                "step": "live.hints",
+                "tool": "live",
+                "detail": (
+                    f"{len(spans) - live_before} model suspicion(s)"
+                ),
+                "result": "hit" if len(spans) > live_before else "clean",
+                "ms": round(latency_ms["tier2"], 3),
+            }
+        )
     latency_ms["total"] = (time.perf_counter() - started) * 1000
+    if request.mode == "live" and not get_settings().live_hints:
+        trace.append(
+            {
+                "step": "live.hints",
+                "tool": "live",
+                "detail": "disabled (SF_LIVE_HINTS=off); Tier 1 only",
+                "result": "skipped",
+                "ms": 0.0,
+            }
+        )
+    trace.append(
+        {
+            "step": "scan.complete",
+            "tool": "tier1",
+            "detail": f"{len(spans)} span(s)",
+            "result": "done",
+            "ms": round(latency_ms["total"], 3),
+        }
+    )
     return {
         "spans": [span_to_dict(s) for s in spans],
         "latency_ms": latency_ms,
+        "trace": trace,
     }
 
 
@@ -375,34 +410,54 @@ def _with_live_suspicions(text: str, spans: list[Span]) -> list[Span]:
 def send(body: SendRequest) -> dict[str, Any]:
     """Gate the user text, forward it when allowed, re-hydrate the answer."""
     provider = resolve_provider(body.provider)
+    trace: list[dict[str, Any]] = []
     text, clean = extract_user_text(body.messages)
     file_texts, file_error = _file_sections(body.file_ids)
     if file_error is not None:
-        decision = engine.gate(text, get_policy(), get_registry(), mode="send")
+        decision = engine.gate(text, get_policy(), get_registry(), mode="send", trace_out=trace)
         decision = _hold_for(decision, file_error)
+        trace.append(
+            {
+                "step": "gate.hold_reason",
+                "tool": "gate",
+                "detail": "attached file needs review; send held",
+                "result": "HOLD",
+                "ms": 0.0,
+            }
+        )
         _log_decision(decision, text)
         _register_hold(decision, text, body.messages, provider, why=file_error)
-        return _send_response(decision, None, [], [], provider)
+        return _send_response(decision, None, [], [], provider, trace)
     if file_texts:
         text = text + "".join(file_texts) if text else "".join(file_texts).lstrip("\n")
     decision = engine.gate(
         text, get_policy(), get_registry(),
         [c.model_dump() for c in body.choices],
+        trace_out=trace,
         mode="send",
     )
     if not clean:
         decision = _hold_for(decision, "non_text_content")
+        trace.append(
+            {
+                "step": "gate.hold_reason",
+                "tool": "gate",
+                "detail": "non-text content parts need review; send held",
+                "result": "HOLD",
+                "ms": 0.0,
+            }
+        )
         _log_decision(decision, text)
         _register_hold(
             decision, text, body.messages, provider,
             why="non-text content parts need review",
         )
-        return _send_response(decision, None, [], [], provider)
+        return _send_response(decision, None, [], [], provider, trace)
     _log_decision(decision, text)
     if decision.decision in ("BLOCK", "HOLD"):
         if decision.decision == "HOLD":
             _register_hold(decision, text, body.messages, provider)
-        return _send_response(decision, None, [], [], provider)
+        return _send_response(decision, None, [], [], provider, trace)
     try:
         answer = _send_upstream(
             _forward_messages(
@@ -421,7 +476,7 @@ def send(body: SendRequest) -> dict[str, Any]:
         ) from exc
     mapping = load_mapping(decision.decision_id)
     rehydrated, highlights, unmatched = rehydrate(answer, mapping)
-    return _send_response(decision, rehydrated, highlights, unmatched, provider)
+    return _send_response(decision, rehydrated, highlights, unmatched, provider, trace)
 
 
 def _file_sections(file_ids: list[str]) -> tuple[list[str], str | None]:
@@ -500,6 +555,7 @@ def _send_response(
     highlights: list[dict],
     unmatched: list[str],
     provider: str | None = None,
+    trace: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "spans": [span_to_dict(s) for s in decision.spans],
@@ -518,6 +574,7 @@ def _send_response(
         "latency_ms": decision.latency_ms,
         "unmatched_placeholders": unmatched,
         "provider": resolve_provider(provider),
+        "trace": trace if trace is not None else [],
     }
     if decision.decision == "HOLD":
         response["review_url"] = f"/api/holds/{decision.decision_id}"
@@ -841,6 +898,15 @@ def _stream_response(
         headers={"X-Shadowfenced-Decision": decision.decision},
     )
 
+
+from .rules import router as rules_router
+
+app.include_router(rules_router)
+# include_router wraps the app lifespan even when the router has none;
+# restore the original only when it was actually wrapped, so startup
+# behaviour (and its identity) is unchanged on old and new FastAPI.
+if getattr(app.router, "lifespan_context", lifespan) is not lifespan:
+    app.router.lifespan_context = lifespan
 
 for _candidate in (
     Path("static"),

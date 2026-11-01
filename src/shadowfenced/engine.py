@@ -256,12 +256,13 @@ def _gate_send(
             latency_ms=latency_ms,
             reasons=reasons,
         )
-def gate(
+def _gate_impl(
     text: str,
     policy: Policy,
     registry: CanaryRegistry | None = None,
     choices: list[dict[str, Any]] | None = None,
     mode: str = "tier1",
+    trace_out: list[dict[str, Any]] | None = None,
 ) -> Decision:
     """Run the gate over text and return a Decision.
 
@@ -281,7 +282,7 @@ def gate(
     total_started = time.perf_counter()
     try:
         scan_started = time.perf_counter()
-        spans = tier1.scan(text, policy, registry)
+        spans = tier1.scan(text, policy, registry, trace_out=trace_out)
         tier1_ms = (time.perf_counter() - scan_started) * 1000
         latency_ms = {
             "tier1": tier1_ms,
@@ -330,6 +331,66 @@ def gate(
                 latency_ms=latency_ms,
                 reasons=reasons,
             )
+        custom_block = [
+            s for s in enforced
+            if s.status == "proven" and s.proof == "custom"
+            and s.suggested_action == "block"
+        ]
+        if custom_block:
+            reasons.append(
+                f"{len(custom_block)} custom rule span(s) "
+                "with action block -> BLOCK"
+            )
+            if mode == "send":
+                latency_ms["tier2"] = 0.0
+                latency_ms["tier3"] = 0.0
+            return Decision(
+                decision="BLOCK",
+                decision_id=uuid.uuid4().hex,
+                spans=spans,
+                sent_text=None,
+                placeholders={},
+                resolved_tier=1,
+                latency_ms=latency_ms,
+                reasons=reasons,
+            )
+        custom_review = [
+            s for s in enforced
+            if s.status == "proven" and s.proof == "custom"
+            and s.suggested_action == "review"
+        ]
+        if custom_review:
+            reasons.append(
+                f"{len(custom_review)} custom rule span(s) "
+                "with action review -> HOLD"
+            )
+            if mode == "send":
+                latency_ms["tier2"] = 0.0
+                latency_ms["tier3"] = 0.0
+                latency_ms["total"] = (
+                    time.perf_counter() - total_started
+                ) * 1000
+                return Decision(
+                    decision="HOLD",
+                    decision_id=uuid.uuid4().hex,
+                    spans=spans,
+                    sent_text=None,
+                    placeholders={},
+                    resolved_tier=4,
+                    latency_ms=latency_ms,
+                    reasons=reasons,
+                    evidence={
+                        "proven_by_code": [s.span_id for s in proven],
+                        "pending": [
+                            {
+                                "kind": "message",
+                                "text": text[:MESSAGE_PENDING_CHARS],
+                            }
+                        ],
+                    },
+                    status="reviewing",
+                )
+            return _hold(spans, latency_ms, reasons)
         if mode == "send":
             return _gate_send(
                 text, policy, registry, spans, proven, ambiguous,
@@ -389,6 +450,110 @@ def gate(
             decision.latency_ms["tier2"] = 0.0
             decision.latency_ms["tier3"] = 0.0
         return decision
+
+
+def _trace_step(
+    trace: list[dict[str, Any]],
+    step: str,
+    tool: str,
+    detail: str,
+    result: str,
+    ms: float = 0.0,
+) -> None:
+    """Append one descriptive-mode step (counts and labels, never raw text)."""
+    trace.append(
+        {"step": step, "tool": tool, "detail": detail,
+         "result": result, "ms": ms}
+    )
+
+
+def _append_gate_trace(
+    trace_out: list[dict[str, Any]] | None,
+    decision: Decision,
+    choices: list[dict[str, Any]] | None,
+    total_ms: float,
+) -> None:
+    """Post-hoc gate steps built from the finished decision.
+
+    Tier 1 detector steps (when asked for) are already in ``trace_out``;
+    here come triage, redaction, background-review, and decision steps.
+    Placeholder labels such as ``[PII_EMAIL_1]`` are safe to list: they
+    hold no raw values.
+    """
+    if trace_out is None:
+        return
+    proven = sum(1 for s in decision.spans if s.status == "proven")
+    ambiguous = sum(1 for s in decision.spans if s.status == "ambiguous")
+    _trace_step(
+        trace_out, "gate.triage", "gate",
+        f"{proven} proven, {ambiguous} ambiguous", "triaged",
+    )
+    if choices:
+        _trace_step(
+            trace_out, "gate.choices", "gate",
+            f"{len(choices)} choice(s) recorded", "applied",
+        )
+    if decision.placeholders:
+        labels = ", ".join(sorted(decision.placeholders))
+        _trace_step(
+            trace_out, "redact.apply", "redact",
+            f"{len(decision.placeholders)} placeholder(s): {labels}",
+            "redacted",
+        )
+    if decision.status == "reviewing":
+        _trace_step(
+            trace_out, "glimmer.review", "glimmer",
+            "full message queued for background review", "reviewing",
+        )
+    _trace_step(
+        trace_out, "decision", "gate",
+        f"resolved tier {decision.resolved_tier}", decision.decision,
+        round(total_ms, 3),
+    )
+
+
+def gate(
+    text: str,
+    policy: Policy,
+    registry: CanaryRegistry | None = None,
+    choices: list[dict[str, Any]] | None = None,
+    mode: str = "tier1",
+    trace_out: list[dict[str, Any]] | None = None,
+) -> Decision:
+    """Run the gate over text and return a Decision.
+
+    ``choices`` is a list of ``{span_id, choice}`` where choice is
+    ``redact`` or ``keep``. ``keep`` is honoured only when the policy
+    allows keeping that span class, and never for secrets.
+
+    ``mode="tier1"`` (default) resolves ambiguous spans to HOLD at
+    tier 1. ``mode="send"`` HOLDS instantly at resolved tier 4
+    (status ``reviewing``) when Tier 1 finds ambiguous spans or the
+    message holds a sensitivity cue word: ``holds.start_review``
+    judges the whole message once with Glimmer plus each ambiguous
+    span in a background thread and verifies the answer in code.
+    Proven-only input redacts and clean input allows, with no model
+    call.
+
+    Custom rules (``policy.custom_rules``) apply as Tier 1 proven
+    spans with their own action: ``block`` blocks, ``review`` holds,
+    ``redact`` redacts.
+
+    When ``trace_out`` is a list, a step-by-step descriptive trace of
+    ``{step, tool, detail, result, ms}`` entries is appended: one per
+    Tier 1 detector plus triage/redaction/review/decision steps. The
+    trace holds counts and placeholder-style labels only, never raw
+    sensitive values, and is never written to the decision log.
+    """
+    started = time.perf_counter()
+    decision = _gate_impl(
+        text, policy, registry, choices, mode, trace_out=trace_out
+    )
+    _append_gate_trace(
+        trace_out, decision, choices,
+        (time.perf_counter() - started) * 1000,
+    )
+    return decision
 
 
 # Re-export for callers that only import the engine.
