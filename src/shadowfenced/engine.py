@@ -89,6 +89,20 @@ def user_message(decision: Decision) -> str:
     decision line.
     """
     if decision.decision == "BLOCK":
+        ordered = sorted(
+            decision.spans, key=lambda span: (span.cp_start, span.cp_end)
+        )
+        if not any(
+            span.subclass == "canary" and span.status == "proven"
+            for span in ordered
+        ):
+            for span in ordered:
+                if (
+                    span.subclass == "provider_key"
+                    and span.status == "proven"
+                    and span.message
+                ):
+                    return span.message
         base = (
             "A planted canary token was found (proven by code). "
             "Nothing was sent."
@@ -396,6 +410,31 @@ def _gate_impl(
 
         if any(s.subclass == "canary" and s.status == "proven" for s in enforced):
             reasons.append("proven canary -> BLOCK")
+            if mode == "send":
+                latency_ms["tier2"] = 0.0
+                latency_ms["tier3"] = 0.0
+            return Decision(
+                decision="BLOCK",
+                decision_id=uuid.uuid4().hex,
+                spans=spans,
+                sent_text=None,
+                placeholders={},
+                resolved_tier=1,
+                latency_ms=latency_ms,
+                reasons=reasons,
+            )
+        provider_hit = sorted(
+            (
+                span for span in enforced
+                if span.subclass == "provider_key"
+                and span.status == "proven"
+            ),
+            key=lambda span: (span.cp_start, span.cp_end),
+        )
+        if provider_hit:
+            reasons.append(
+                f"proven provider key -> BLOCK ({provider_hit[0].why})"
+            )
             if mode == "send":
                 latency_ms["tier2"] = 0.0
                 latency_ms["tier3"] = 0.0
