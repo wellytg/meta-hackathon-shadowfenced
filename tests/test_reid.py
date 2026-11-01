@@ -244,8 +244,8 @@ def test_engine_gate_reid_warn_and_hold():
     assert "name" in hold.evidence["reid"]["combination"]
 
     plain = engine.gate(DOB_TEXT, policy, registry)
-    assert plain.decision in ("REDACT", "HOLD", "ALLOW")
-    assert "reid" not in (plain.evidence or {})
+    assert plain.decision == "HOLD"
+    assert "name" in plain.evidence["reid"]["combination"]
 
 
 def test_engine_gate_reid_conversation_and_residual():

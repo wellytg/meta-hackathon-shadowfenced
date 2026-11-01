@@ -120,6 +120,8 @@
       save.type = "button";
       save.textContent = "Save";
       save.addEventListener("click", function () {
+        if (save.disabled) return;
+        save.disabled = true;
         postJson("/api/providers/" + p.id + "/key", { key: input.value })
           .then(function (res) {
             if (res.ok) {
@@ -127,10 +129,14 @@
               setMsg(el, "Saved.");
               load();
             } else {
+              save.disabled = false;
               setMsg(el, errorText(res, "Could not save the key."));
             }
           })
-          .catch(function () { setMsg(el, "Could not save the key."); });
+          .catch(function () {
+            save.disabled = false;
+            setMsg(el, "Could not save the key.");
+          });
       });
       actions.appendChild(save);
     }
@@ -139,11 +145,18 @@
     test.type = "button";
     test.textContent = "Test connection";
     test.addEventListener("click", function () {
+      if (test.disabled) return;
+      test.disabled = true;
+      setMsg(el, "Testing\u2026");
       postJson("/api/providers/" + p.id + "/test")
         .then(function (res) {
+          test.disabled = false;
           setMsg(el, res.data && res.data.message ? res.data.message : "No answer.");
         })
-        .catch(function () { setMsg(el, "Test failed."); });
+        .catch(function () {
+          test.disabled = false;
+          setMsg(el, "Test failed.");
+        });
     });
     actions.appendChild(test);
 
@@ -152,9 +165,14 @@
       drop.type = "button";
       drop.textContent = "Disconnect";
       drop.addEventListener("click", function () {
+        if (drop.disabled) return;
+        drop.disabled = true;
         fetch("/api/providers/" + p.id + "/key", { method: "DELETE" })
           .then(function () { setMsg(el, "Disconnected."); load(); })
-          .catch(function () { setMsg(el, "Could not disconnect."); });
+          .catch(function () {
+            drop.disabled = false;
+            setMsg(el, "Could not disconnect.");
+          });
       });
       actions.appendChild(drop);
     }
@@ -211,6 +229,15 @@
       .catch(function () { /* panel keeps its last state */ });
   }
 
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape" && event.key !== "Esc") return;
+    var where = host();
+    if (where && where.root && !where.root.hidden) {
+      where.root.hidden = true;
+      var opener = document.getElementById("providers-open");
+      if (opener) opener.focus();
+    }
+  });
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", load);
   } else {

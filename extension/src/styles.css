@@ -1,18 +1,47 @@
-/* Shadowfenced popup styles. (In-page overlay/hover/banner styling lives
-   inside content.js's closed shadow root so site CSS can never clash.) */
-:root { color-scheme: light dark; }
-body { margin: 0; font: 13px/1.45 system-ui, sans-serif; }
-.sf-popup { width: 300px; padding: 14px 16px 16px; }
-.sf-popup h1 { font-size: 16px; margin: 0 0 6px; }
-.sf-popup h2 { font-size: 13px; margin: 14px 0 6px; }
-.sf-status { border-radius: 8px; padding: 8px 10px; margin: 0 0 12px; }
-.sf-unknown { background: #eee; color: #333; }
-.sf-ok { background: #dff3e2; color: #14532d; }
-.sf-bad { background: #fde4e4; color: #7f1d1d; }
-.sf-label { display: block; font-weight: 600; margin-bottom: 4px; }
-.sf-row { display: flex; gap: 8px; }
-.sf-row input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid #999; border-radius: 6px; }
-.sf-row button { cursor: pointer; border: 1px solid #666; border-radius: 6px; padding: 6px 12px; background: #f0f0f0; }
-#sites { display: grid; gap: 6px; }
-#sites label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
-.sf-hint { opacity: .75; font-size: 12px; }
+/* Shadowfenced popup + shared square Windows 3.11 look.
+ * Hard 2px ink outlines, paper background, system fonts, square corners
+ * everywhere (never rounded). State colours: safety orange
+ * = blocked, steel blue = allowed, amber = review. In-page overlay/card
+ * styling lives inside content.js's closed shadow root so site CSS can
+ * never clash; it repeats this same palette. */
+:root {
+  color-scheme: light;
+  --sf-paper: #f4f1e8;
+  --sf-ink: #1a1a1a;
+  --sf-blocked: #d9480f;
+  --sf-allowed: #2f6f9f;
+  --sf-review: #b97f00;
+  --sf-title: #2f5d8a;
+}
+body { margin: 0; background: var(--sf-paper); color: var(--sf-ink);
+  font: 13px/1.45 "Segoe UI", system-ui, Tahoma, Verdana, sans-serif; }
+.sf-popup { width: 340px; padding: 0 0 12px; }
+.sf-titlebar { background: var(--sf-title); color: #fff; font-weight: 700;
+  font-size: 14px; padding: 6px 10px; border-bottom: 2px solid var(--sf-ink); }
+.sf-statusrow { display: flex; gap: 8px; align-items: center;
+  margin: 10px 12px 0; padding: 8px 10px;
+  background: #fffdf6; border: 2px solid var(--sf-ink); }
+.sf-dot { flex: none; width: 12px; height: 12px; border: 2px solid var(--sf-ink); }
+.sf-unknown { background: #c9c4b4; }
+.sf-ok { background: var(--sf-allowed); }
+.sf-warn { background: var(--sf-review); }
+.sf-bad { background: var(--sf-blocked); }
+.sf-popup h2 { font-size: 13px; margin: 14px 12px 6px; }
+.sf-label { display: block; font-weight: 700; margin: 12px 12px 4px; }
+.sf-row { display: flex; gap: 8px; margin: 0 12px; }
+.sf-row input { flex: 1; min-width: 0; padding: 6px 8px; color: var(--sf-ink);
+  background: #fffdf6; border: 2px solid var(--sf-ink); }
+.sf-popup button { cursor: pointer; color: var(--sf-ink); background: #e8e2d2;
+  border: 2px solid var(--sf-ink);
+  box-shadow: inset -2px -2px 0 #a39d8a, inset 2px 2px 0 #fffdf6;
+  padding: 6px 12px; font: inherit; }
+.sf-popup button:active { box-shadow: inset 2px 2px 0 #a39d8a; }
+.sf-popup button:disabled { opacity: .55; cursor: default; }
+#sites { display: grid; gap: 6px; margin: 0 12px; }
+#sites label { display: flex; gap: 8px; align-items: center; cursor: pointer;
+  background: #fffdf6; border: 2px solid var(--sf-ink); padding: 5px 8px; }
+#sites input[type="checkbox"] { width: 16px; height: 16px; margin: 0;
+  accent-color: var(--sf-allowed); }
+.sf-result { margin: 8px 12px 0; padding: 8px 10px;
+  background: #fffdf6; border: 2px solid var(--sf-ink); }
+.sf-hint { opacity: .8; font-size: 12px; margin: 8px 12px 0; }
