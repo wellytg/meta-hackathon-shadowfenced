@@ -122,12 +122,24 @@ def _log_outcome(hold: Hold, outcome: str) -> None:
     hold.updated_at = time.time()
 
 
-def _log_decision(decision: Decision, text: str) -> None:
-    """Append one review outcome to the hash-chained log; never fail."""
+def _log_decision(
+    decision: Decision, text: str, log_path: str | None = None,
+) -> None:
+    """Append one review outcome to the hash-chained log; never fail.
+
+    ``log_path`` pins the file the review was spawned for. Callers that
+    outlive their spawning context (background review threads) must pass
+    the path captured at spawn: resolving the configured path lazily at
+    write time would let a late write land in another context's log.
+    """
     try:
         from . import ecs_log
 
-        ecs_log.append_decision(get_settings().log_path, decision, text)
+        ecs_log.append_decision(
+            log_path if log_path is not None else get_settings().log_path,
+            decision,
+            text,
+        )
     except Exception:
         pass
 
@@ -451,16 +463,21 @@ def run_review(
     sender: Sender | None = None,
     policy: Policy | None = None,
     registry: CanaryRegistry | None = None,
+    log_path: str | None = None,
 ) -> Hold | None:
     """Review one hold synchronously: judge the message once, verify spans.
 
     Thread-safe entry point used directly by tests (with a
     ``MockTransport`` judge and a stub sender) and via
-    :func:`start_review` in production.
+    :func:`start_review` in production. ``log_path`` pins the
+    decision-log file so background reviews log to the file their
+    own context configured, even if they finish late.
     """
     hold = HOLDS.get(hold_id)
     if hold is None or hold.status != "reviewing":
         return hold
+    if log_path is None:
+        log_path = get_settings().log_path
     policy = policy if policy is not None else _default_policy()
     registry = registry if registry is not None else _default_registry()
     text = hold.text
@@ -477,6 +494,7 @@ def run_review(
         _log_decision(
             _hold_decision(hold, "HOLD", 4, ["proven canary -> needs_human"]),
             text,
+            log_path,
         )
         return hold
 
@@ -560,6 +578,7 @@ def run_review(
                 [f"{len(suspicions)} span(s) need human review"],
             ),
             text,
+            log_path,
         )
         return hold
 
@@ -569,8 +588,10 @@ def run_review(
         return hold
 
     if confirmed:
-        return _auto_redact_send(hold, proven, confirmed, sender, text)
-    return _auto_release(hold, proven, sender, text)
+        return _auto_redact_send(
+            hold, proven, confirmed, sender, text, log_path,
+        )
+    return _auto_release(hold, proven, sender, text, log_path)
 
 
 def _send_or_hold(
@@ -617,7 +638,7 @@ def _send_or_hold(
 
 def _auto_redact_send(
     hold: Hold, proven: list[Span], confirmed: list[Span],
-    sender: Sender | None, text: str,
+    sender: Sender | None, text: str, log_path: str | None = None,
 ) -> Hold:
     """All pending spans code-confirmed: redact and auto-send."""
     from .redact import redact as _redact
@@ -635,12 +656,14 @@ def _auto_redact_send(
                 [f"{len(combined)} span(s) confirmed and redacted -> auto-send"],
             ),
             text,
+            log_path,
         )
     return result
 
 
 def _auto_release(
     hold: Hold, proven: list[Span], sender: Sender | None, text: str,
+    log_path: str | None = None,
 ) -> Hold:
     """Every pending span model-benign and confident: release and send.
 
@@ -658,6 +681,7 @@ def _auto_release(
         _log_decision(
             _hold_decision(hold, "HOLD", 4, ["proven secret -> needs_human"]),
             text,
+            log_path,
         )
         return hold
     if proven:
@@ -674,16 +698,23 @@ def _auto_release(
                 ["model cleared every ambiguous span -> release"],
             ),
             text,
+            log_path,
         )
     return result
 
 
-def start_review(hold_id: str, **kwargs: Any) -> "threading.Thread":
-    """Review one hold in a background daemon thread."""
+def start_review(
+    hold_id: str, log_path: str | None = None, **kwargs: Any
+) -> "threading.Thread":
+    """Review one hold in a background daemon thread.
+
+    ``log_path`` pins the decision-log file captured by the spawner so
+    a late write from this thread cannot land in another context's log.
+    """
     thread = threading.Thread(
         target=run_review,
         args=(hold_id,),
-        kwargs=kwargs,
+        kwargs={**kwargs, "log_path": log_path},
         name=f"sf-hold-review-{hold_id[:8]}",
         daemon=True,
     )

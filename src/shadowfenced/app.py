@@ -1189,6 +1189,9 @@ def _register_hold(
                     [m for m in messages if isinstance(m, dict)], provider
                 ),
                 meta_transport=_transport(),
+                # Pin the log path now: the review thread may outlive
+                # this request and must not resolve it lazily later.
+                log_path=get_settings().log_path,
             )
     except Exception:
         pass
