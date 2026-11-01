@@ -208,6 +208,23 @@ _SCREEN_UNC_RE = re.compile(r"\\\\[A-Za-z0-9_.$-]+")
 MESSAGE_PENDING_CHARS = 2000
 
 
+def cue_word(text: str) -> str | None:
+    """Name the sensitivity cue that fired, without echoing message text.
+
+    Returns the matched cue word lowercased with internal whitespace
+    collapsed (``"born"`` for the Ada Lovelace message), ``"unc path"``
+    for a bare UNC server path, or None when nothing fired. Only this
+    cue fragment may appear in a user-facing reason: never any other
+    part of the message.
+    """
+    match = _SCREEN_CUE_RE.search(text)
+    if match is not None:
+        return re.sub(r"\s+", " ", match.group(0)).strip().lower()
+    if _SCREEN_UNC_RE.search(text) is not None:
+        return "unc path"
+    return None
+
+
 def has_sensitivity_cue(text: str) -> bool:
     """True when text holds a sensitivity cue word or UNC server path."""
     return (
@@ -261,7 +278,13 @@ def _gate_send(
                 f"{len(ambiguous)} ambiguous span(s) need Glimmer review -> HOLD"
             )
         else:
-            reasons.append("sensitivity cue word needs Glimmer review -> HOLD")
+            cue = cue_word(text)
+            if cue is not None:
+                reasons.append(
+                    f"sensitivity cue word needs Glimmer review (cue='{cue}') -> HOLD"
+                )
+            else:
+                reasons.append("sensitivity cue word needs Glimmer review -> HOLD")
         pending: list[dict[str, Any]] = [
             {"kind": "message", "text": text[:MESSAGE_PENDING_CHARS]}
         ]

@@ -147,6 +147,16 @@ one loads the turn into the details drawer.
 Buttons disable the moment one is clicked (no double ruling). A failed
 poll retries silently; the spinner keeps counting.
 
+Cue-word background review (T57) shows a compact CHECKING card instead:
+title "CHECKING", Sending = the message text, Why = "Contains a word that
+can point to personal data ('cue'); Muse Glimmer is checking it on this PC",
+What = "Checking... (Ns)". No choice buttons appear unless the review ends
+in a real hold (`needs_human`), when the card switches to the normal HOLD
+card with its choices. On release the card is removed and the receipt
+becomes the quiet receipt "✓ Checked by Muse Glimmer · nothing sensitive"
+(Why still available); the details drawer moves from HOLD to the final
+decision.
+
 ## 12. Generalise and Send-anyway choices
 
 - Person-search WARN: note in the receipt + "Generalise"
@@ -220,4 +230,8 @@ done (Replaced with placeholders / Blocked — not sent / Waiting for
 you: Generalise · Send anyway · Cancel). Compact by default (one line
 per row; "Show details" expands the full trace); single column at
 390px. HOLD review renders the same card (`evidence-card` hook kept)
-with its live review section inside.
+with its live review section inside. A cue-word background review (T57)
+renders a compact CHECKING card instead (message text as Sending, the
+named cue in Why, "Checking... (Ns)" as What, no choice buttons); on
+release it is replaced by the quiet receipt and on `needs_human` it
+switches to the normal HOLD card with its choices.
