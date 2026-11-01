@@ -14,6 +14,29 @@
   var fileInput = document.getElementById("file-input");
   var fileChips = document.getElementById("file-chips");
   var attachedFiles = []; // {file_id, name, kind, status, summary_text, spans}
+  var originalImages = {}; // file_id -> original data URL (this PC only, never sent)
+  var redactedCache = {}; // file_id -> object URL for the full redacted PNG
+  var pendingOriginals = {}; // name:size -> original data URL until the upload lands
+  var sending = false;
+  var sendSeq = 0; // latest send; the 2 s status timer only fires for it
+  var composerError = document.getElementById("composer-error");
+
+  // One-line composer error next to the control that failed; it
+  // clears on the next action (typing, sending, attaching).
+  function showComposerError(text) {
+    if (!composerError) return;
+    composerError.textContent = text;
+    composerError.hidden = !text;
+  }
+  function clearComposerError() {
+    showComposerError("");
+  }
+
+  // Send stays disabled while the box is empty (no text, no attachments).
+  function paintSend() {
+    if (!sendBtn) return;
+    sendBtn.disabled = sending || (!composer.value && !attachedFiles.length);
+  }
 
   var PROVIDER_LABELS = {
     meta: "Meta Muse Spark (cloud)",
@@ -25,6 +48,10 @@
   }
 
   var HEADER_PILL = "Local check \u00b7 code + Muse Glimmer (30B, this PC)";
+  var GUARD_FULL = "Guard: on \u00b7 checking locally (code + Muse Glimmer)";
+  var GUARD_CODE_ONLY = "Guard: on \u00b7 code checks only";
+  var guardDot = document.querySelector('[data-testid="guard-dot"]');
+  var modelStatus = document.querySelector('[data-testid="model-status"]');
 
   // Live model hints are experimental and off by default: the server
   // says whether they are on (GET /api/health returns live_hints).
@@ -33,6 +60,33 @@
   function setPill() {
     if (!headerPill) return;
     headerPill.textContent = HEADER_PILL;
+  }
+
+  function shortModelLabel(id, label) {
+    if (id === "meta") return "Muse Spark \u00b7 cloud";
+    return String(label || id)
+      .replace(/^Meta /, "")
+      .replace(/ \((cloud|local[^)]*)\)$/i, " \u00b7 $1");
+  }
+
+  function paintModelStatus() {
+    if (!modelStatus || !providerSel) return;
+    var opt = providerSel.options[providerSel.selectedIndex];
+    var label = opt ? opt.textContent : providerSel.value;
+    modelStatus.textContent = "Model: " + shortModelLabel(providerSel.value, label);
+  }
+
+  function paintGuard(glimmer) {
+    if (guardDot) guardDot.setAttribute("data-state", glimmer ? "on" : "limited");
+    if (!headerPill) return;
+    headerPill.textContent = glimmer ? GUARD_FULL : GUARD_CODE_ONLY;
+  }
+
+  function loadGuard() {
+    fetch("/api/guard")
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) { paintGuard(!!(body && body.glimmer)); })
+      .catch(function () { paintGuard(false); });
   }
 
   // Hosted demo (SF_HOSTED=1): reveal the fixed public-demo banner.
@@ -79,18 +133,24 @@
           if (fallback) providerSel.value = fallback.id;
         }
         setPill();
+        paintModelStatus();
       })
       .catch(function () { /* static options stay as the fallback */ });
   }
 
   providerSel.addEventListener("change", function () {
+    providerSel.disabled = true;
     fetch("/api/provider", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: providerSel.value })
     })
-      .then(function () { setPill(); })
-      .catch(function () { /* default stays server-side */ });
+      .then(function () {
+        providerSel.disabled = false;
+        setPill();
+        paintModelStatus();
+      })
+      .catch(function () { providerSel.disabled = false; });
   });
 
   var scanSeq = 0;       // latest scan request id; stale responses are dropped
@@ -346,7 +406,95 @@
     return "Held for review: possible pointer to sensitive data.";
   }
 
-  var KIND_ICONS = { text: "T", markdown: "M", csv: "#", docx: "W", pdf: "P", unknown: "?" };
+  var KIND_ICONS = { text: "T", markdown: "M", csv: "#", docx: "W", pdf: "P", image: "I", unknown: "?" };
+
+  /* T43 image redaction: thumbnail chips, a local before/after compare,
+     and the opt-in consent card. Square Classic: no rounded corners. */
+  function stashOriginalImage(file) {
+    var name = (file && file.name) || "";
+    if (!file || (!/^image\//.test(file.type || "") && !/\.(png|jpe?g)$/i.test(name))) return;
+    var key = name + ":" + file.size;
+    try {
+      var reader = new FileReader();
+      reader.onload = function () { pendingOriginals[key] = String(reader.result || ""); };
+      reader.onerror = function () { pendingOriginals[key] = ""; };
+      reader.readAsDataURL(file);
+    } catch (e) { pendingOriginals[key] = ""; }
+  }
+
+  function showImageCompare(box, f) {
+    box.innerHTML = "";
+    box.hidden = false;
+    var wrap = document.createElement("div");
+    wrap.className = "img-compare-row";
+    function cell(label, src) {
+      var fig = document.createElement("figure");
+      fig.className = "img-cell";
+      var img = document.createElement("img");
+      img.alt = label + " " + f.name;
+      img.src = src;
+      var cap = document.createElement("figcaption");
+      cap.textContent = label;
+      fig.appendChild(img);
+      fig.appendChild(cap);
+      return { fig: fig, img: img };
+    }
+    var before = cell("Before (this PC only)", originalImages[f.file_id] || "");
+    var after = cell("After (redacted)", "");
+    wrap.appendChild(before.fig);
+    wrap.appendChild(after.fig);
+    box.appendChild(wrap);
+    if (redactedCache[f.file_id]) { after.img.src = redactedCache[f.file_id]; return; }
+    fetch("/api/uploads/" + encodeURIComponent(f.file_id) + "/image")
+      .then(function (resp) {
+        if (!resp.ok) throw new Error("redacted image unavailable");
+        return resp.blob();
+      })
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        redactedCache[f.file_id] = url;
+        after.img.src = url;
+      })
+      .catch(function () { after.img.alt = "Redacted image unavailable"; });
+  }
+
+  function showImageConsent(body, file) {
+    var card = document.createElement("div");
+    card.className = "banner";
+    card.setAttribute("data-testid", "image-consent");
+    var msg = document.createElement("p");
+    msg.textContent = body.notice || "";
+    card.appendChild(msg);
+    var row = document.createElement("div");
+    row.className = "consent-row";
+    [["on", "Turn on"], ["local", "Keep images local"], ["off", "Don't attach"]].forEach(function (opt) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "consent-btn";
+      btn.textContent = opt[1];
+      btn.setAttribute("data-choice", opt[0]);
+      btn.addEventListener("click", function () {
+        fetch("/api/image-redaction/consent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ choice: opt[0] })
+        }).then(function () {
+          card.remove();
+          if (opt[0] === "off") return;
+          try {
+            var dt = new DataTransfer();
+            dt.items.add(file);
+            fileInput.files = dt.files;
+            fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+          } catch (e) { /* user re-attaches manually */ }
+        });
+      });
+      row.appendChild(btn);
+    });
+    card.appendChild(row);
+    thread.appendChild(card);
+    updateEmptyHint();
+  }
 
   function renderChips() {
     if (!fileChips) return;
@@ -362,9 +510,15 @@
       var name = document.createElement("button");
       name.type = "button";
       name.className = "chip-name";
-      name.textContent = f.name + " · " + (f.summary_text || f.status);
+      name.textContent = f.name + " · " + (f.summary_text || f.status) +
+        (f.method_label ? " · " + f.method_label : "");
       name.addEventListener("click", function () {
         details.hidden = !details.hidden;
+        var cmp = chip.querySelector(".img-compare");
+        if (cmp) {
+          if (cmp.hidden) { showImageCompare(cmp, f); }
+          else { cmp.hidden = true; }
+        }
       });
       var remove = document.createElement("button");
       remove.type = "button";
@@ -372,9 +526,22 @@
       remove.setAttribute("aria-label", "Remove " + f.name);
       remove.textContent = "x";
       remove.addEventListener("click", function () {
+        var gone = attachedFiles[index];
+        if (gone && gone.file_id) { delete originalImages[gone.file_id]; delete redactedCache[gone.file_id]; }
         attachedFiles.splice(index, 1);
         renderChips();
       });
+      if (f.kind === "image" && f.thumbnail) {
+        var thumb = document.createElement("img");
+        thumb.className = "img-thumb";
+        thumb.src = f.thumbnail;
+        thumb.alt = "Redacted preview of " + f.name;
+        chip.appendChild(thumb);
+        var compare = document.createElement("div");
+        compare.className = "img-compare";
+        compare.hidden = true;
+        chip.appendChild(compare);
+      }
       var details = document.createElement("ul");
       details.className = "chip-findings";
       details.hidden = true;
@@ -396,13 +563,28 @@
       chip.appendChild(details);
       fileChips.appendChild(chip);
     });
+    paintSend();
   }
 
   if (paperclip && fileInput) {
     paperclip.addEventListener("click", function () { fileInput.click(); });
     fileInput.addEventListener("change", function () {
+      clearComposerError();
       var file = fileInput.files && fileInput.files[0];
       if (!file) return;
+      stashOriginalImage(file);
+      var isImage = (/^image\//.test(file.type || "")) ||
+        (/\.(png|jpe?g)$/i.test(file.name || ""));
+      if (isImage && checking) {
+        checking.textContent = "Checking image locally…";
+        checking.hidden = false;
+      }
+      var doneCheckingImage = function () {
+        if (isImage && checking) {
+          checking.textContent = "Checking locally…";
+          if (!sending) checking.hidden = true;
+        }
+      };
       var form = new FormData();
       form.append("file", file, file.name);
       fetch("/api/upload", { method: "POST", body: form })
@@ -413,8 +595,17 @@
         })
         .then(function (res) {
           if (res.ok) {
-            attachedFiles.push(res.body);
-            renderChips();
+            if (res.body && res.body.consent_required) {
+              showImageConsent(res.body, file);
+            } else {
+              attachedFiles.push(res.body);
+              var okey = file.name + ":" + file.size;
+              if (res.body && res.body.file_id && pendingOriginals[okey]) {
+                originalImages[res.body.file_id] = pendingOriginals[okey];
+                delete pendingOriginals[okey];
+              }
+              renderChips();
+            }
           } else {
             var err = document.createElement("div");
             err.className = "banner";
@@ -427,8 +618,9 @@
             updateEmptyHint();
           }
           fileInput.value = "";
+          doneCheckingImage();
         })
-        .catch(function () { fileInput.value = ""; });
+        .catch(function () { fileInput.value = ""; doneCheckingImage(); });
     });
   }
 
@@ -488,6 +680,45 @@
       .catch(function () { /* badge keeps its last state */ });
   }
 
+  /* T40 system status: per-component OK / Degraded / Down / Off labels
+     in the details drawer, from GET /api/health/components. Text labels
+     carry the meaning (never colour alone); details stay advisory. */
+  function refreshSystemStatus() {
+    var box = document.getElementById("system-status");
+    if (!box) return;
+    var labels = { ok: "OK", degraded: "Degraded", down: "Down", off: "Off" };
+    fetch("/api/health/components")
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        var items = (body && body.components) || [];
+        box.innerHTML = "";
+        if (!items.length) {
+          box.textContent = "no component data";
+          return;
+        }
+        items.forEach(function (entry) {
+          var status = (entry && entry.status) || "down";
+          if (!labels[status]) status = "down";
+          var row = document.createElement("div");
+          row.className = "sys-row";
+          var name = document.createElement("span");
+          name.className = "sys-name";
+          name.textContent = (entry && entry.name) || "?";
+          var badge = document.createElement("span");
+          badge.className = "sys-badge sys-" + status;
+          badge.textContent = labels[status];
+          row.appendChild(name);
+          row.appendChild(badge);
+          var detail = document.createElement("span");
+          detail.className = "sys-detail";
+          detail.textContent = (entry && entry.detail) || "";
+          row.appendChild(detail);
+          box.appendChild(row);
+        });
+      })
+      .catch(function () { /* badge keeps its last state */ });
+  }
+
   function clearComposer() {
     composer.value = "";
     spans = [];
@@ -495,6 +726,7 @@
     renderBackdrop("", []);
     renderIssues([], null);
     syncScroll();
+    paintSend();
   }
 
   function clearAttachments() {
@@ -502,9 +734,29 @@
     renderChips();
   }
 
+  // Failure keeps the sent text: restore it when the box is empty,
+  // otherwise keep the new typing and offer a one-click Restore.
+  function showComposerErrorWithRestore(sentText) {
+    showComposerError("Not sent — couldn't reach the checker. ");
+    var restore = document.createElement("button");
+    restore.type = "button";
+    restore.className = "composer-restore";
+    restore.setAttribute("data-testid", "composer-restore");
+    restore.textContent = "Restore";
+    restore.addEventListener("click", function () {
+      composer.value = sentText + (composer.value ? "\n" + composer.value : "");
+      composer.dispatchEvent(new Event("input", { bubbles: true }));
+      composer.focus();
+      clearComposerError();
+    });
+    composerError.appendChild(restore);
+  }
   function sendNow() {
+    if (sending) return; // one request in flight at a time
     var text = composer.value;
     if (!text && !attachedFiles.length) return;
+    clearComposerError();
+    var sentText = text;
     // Only spans the user explicitly clicked Redact/Keep on are sent;
     // anything untouched redacts by default without a recorded choice.
     var choiceList = spans
@@ -519,9 +771,19 @@
     userBubble.textContent = text;
     thread.appendChild(userBubble);
     noteUserMessage(text);
+    // The text is already in its bubble: clear the box now so anything
+    // typed while the reply loads is kept.
+    clearComposer();
     setMembrane("inspecting");
     checking.hidden = false;
-    sendBtn.disabled = true;
+    var mySend = ++sendSeq;
+    setTimeout(function () {
+      if (mySend === sendSeq && sending && checking && !checking.hidden) {
+        checking.textContent = "Muse Glimmer is checking on this PC…";
+      }
+    }, 2000);
+    sending = true;
+    paintSend();
 
     fetch("/api/send", {
       method: "POST",
@@ -554,7 +816,7 @@
         }
         thread.appendChild(banner);
         renderReceipt(decision, body, banner);
-        noteTurn(decision, body);
+        var turnEntry = noteTurn(decision, body);
         setMembrane(membraneFor(decision));
         if (body && body.evidence && body.evidence.person_search && body.evidence.person_search.banner) {
           var personHost = (banner.querySelector && banner.querySelector(".receipt-notes")) || banner;
@@ -581,6 +843,12 @@
 
         var toggle = document.createElement("button");
         toggle.type = "button";
+        var riskModel = riskCardModel(body);
+        if (riskModel && decision !== "HOLD") {
+          var riskCard = renderRiskCard(riskModel, body, "risk-card");
+          if (decision === "WARN") appendWarnChoices(riskCard, body, banner);
+          thread.appendChild(riskCard);
+        }
         toggle.className = "ai-toggle";
         toggle.setAttribute("data-testid", "ai-saw-toggle");
         toggle.textContent = "What the AI saw";
@@ -611,10 +879,13 @@
           thread.appendChild(src);
         }
         if (decision === "HOLD" && body.decision_id) {
-          renderHoldCard(body.decision_id, banner);
+          renderHoldCard(body.decision_id, banner, body, turnEntry);
         }
         updateEmptyHint();
         refreshStats();
+        // The composer was already cleared on send, so typing that landed
+        // while the reply was in flight is kept as-is.
+        clearAttachments();
       })
       .catch(function () {
         var banner = document.createElement("details");
@@ -626,21 +897,171 @@
         noteTurn("UNKNOWN", null);
         setMembrane("unknown");
         updateEmptyHint();
+        if (!composer.value && sentText) {
+          composer.value = sentText;
+          composer.dispatchEvent(new Event("input", { bubbles: true }));
+          showComposerError("Not sent \u2014 couldn't reach the checker. " +
+            "Your text was kept; try again.");
+        } else if (sentText) {
+          showComposerErrorWithRestore(sentText);
+        } else {
+          showComposerError("Not sent \u2014 couldn't reach the checker. " +
+            "Try again.");
+        }
       })
       .then(function () {
-        clearComposer();
-        clearAttachments();
         checking.hidden = true;
-        sendBtn.disabled = false;
+        sending = false;
+        paintSend();
       });
   }
 
   // Evidence card for one HOLD: two columns (proven vs suspicion),
   // a reviewing spinner with elapsed seconds, then the final outcome.
-  function renderHoldCard(holdId, banner) {
+  var QUIET_RELEASE_LABEL = "✓ Checked by Muse Glimmer · nothing sensitive";
+
+  function holdCueWord(resp) {
+    var reasons = [];
+    if (resp && resp.evidence && Array.isArray(resp.evidence.reasons)) {
+      reasons = resp.evidence.reasons;
+    } else if (resp && Array.isArray(resp.reasons)) {
+      reasons = resp.reasons;
+    }
+    for (var i = 0; i < reasons.length; i++) {
+      var m = String(reasons[i]).match(/cue='([^']+)'/);
+      if (m) return m[1];
+    }
+    return "";
+  }
+
+  function holdPendingMessage(resp) {
+    var pending = resp && resp.evidence && resp.evidence.pending;
+    if (Array.isArray(pending)) {
+      for (var i = 0; i < pending.length; i++) {
+        var item = pending[i];
+        if (item && typeof item === "object" && item.kind === "message" &&
+            typeof item.text === "string") {
+          return item.text;
+        }
+        if (typeof item === "string" && item) return item;
+      }
+    }
+    return "";
+  }
+
+  function isCueCheckingHold(resp) {
+    if (!resp || String(resp.decision || "").toUpperCase() !== "HOLD") return false;
+    var spans = (resp.evidence && resp.evidence.spans) || resp.spans || [];
+    if (Array.isArray(spans)) {
+      for (var i = 0; i < spans.length; i++) {
+        if (spans[i] && spans[i].status === "ambiguous") return false;
+      }
+    }
+    var reasons = (resp.evidence && resp.evidence.reasons) || resp.reasons || [];
+    if (!Array.isArray(reasons)) return false;
+    return reasons.some(function (r) {
+      return /sensitivity cue word/i.test(String(r));
+    });
+  }
+
+  function checkingCardModel(resp, elapsedSec) {
+    var cue = holdCueWord(resp);
+    var why = cue
+      ? "Contains a word that can point to personal data ('" + cue + "'); " +
+        "Muse Glimmer is checking it on this PC"
+      : "Contains a word that can point to personal data; " +
+        "Muse Glimmer is checking it on this PC";
+    var sending = holdPendingMessage(resp);
+    if (typeof resp.sent_text === "string" && resp.sent_text) sending = resp.sent_text;
+    var action = "Checking… (" + (elapsedSec || 0) + "s)";
+    return {
+      decision: "CHECKING",
+      title: "CHECKING",
+      sending: sending,
+      why: [why],
+      action: action,
+      trace: [],
+      rows: [
+        { id: "sending", label: "Sending", text: sending },
+        { id: "why", label: "Why", text: why },
+        { id: "action", label: "What", text: action }
+      ]
+    };
+  }
+
+  function updateHoldTurn(turn, banner, finalDecision, labelText, releaseBody) {
+    if (banner && banner.setAttribute) {
+      banner.setAttribute("data-decision", finalDecision);
+      var headLabel = banner.querySelector ? banner.querySelector(".receipt-label") : null;
+      if (headLabel) headLabel.textContent = labelText;
+      var headWhy = banner.querySelector ? banner.querySelector(".receipt-why") : null;
+      if (headWhy) {
+        var whyBits = [];
+        if (releaseBody && typeof releaseBody.user_message === "string" && releaseBody.user_message) {
+          whyBits.push(releaseBody.user_message);
+        }
+        whyBits.push("resolved at tier 3");
+        headWhy.textContent = whyBits.join(" · ");
+      }
+    }
+    if (turn) {
+      var key = KNOWN_DECISIONS.indexOf(finalDecision) >= 0 ? finalDecision : "UNKNOWN";
+      turn.decision = key;
+      turn.label = labelText;
+      turn.userMessage = (releaseBody && typeof releaseBody.user_message === "string")
+        ? releaseBody.user_message : "";
+      turn.labels = describePlaceholders(releaseBody);
+      if (selectedTurn === turn) paintTurn(turn);
+    }
+  }
+
+  function paintHoldModel(card, model) {
+    card.setAttribute("data-decision", model.decision);
+    card.setAttribute("aria-label", model.title + " risk card");
+    var titleEl = card.querySelector ? card.querySelector(".risk-title") : null;
+    if (titleEl) titleEl.textContent = model.title;
+    var rowsEl = card.querySelector ? card.querySelector(".risk-rows") : null;
+    if (rowsEl) {
+      rowsEl.innerHTML = "";
+      model.rows.forEach(function (row) {
+        var line = document.createElement("div");
+        line.className = "risk-row risk-row-" + row.id;
+        var name = document.createElement("span");
+        name.className = "risk-label";
+        name.textContent = row.label;
+        var value = document.createElement("span");
+        value.className = "risk-value";
+        value.setAttribute("data-testid", "risk-" + row.id);
+        if (row.id === "sending") {
+          if (row.text) value.innerHTML = highlightPlaceholders(row.text);
+          else value.textContent = "(nothing left to send)";
+        } else {
+          value.textContent = row.text;
+        }
+        line.appendChild(name);
+        line.appendChild(value);
+        rowsEl.appendChild(line);
+      });
+    }
+    var colsEl = card.querySelector ? card.querySelector(".ev-cols") : null;
+    if (colsEl) colsEl.hidden = false;
+    var previewEl = card.querySelector ? card.querySelector(".ev-preview") : null;
+    if (previewEl) previewEl.hidden = false;
+  }
+
+  function renderHoldCard(holdId, banner, body, turnEntry) {
+    var holdBody = (body && typeof body === "object") ? body : { decision: "HOLD" };
+    var checkingCue = isCueCheckingHold(holdBody);
+    var holdModel = checkingCue
+      ? checkingCardModel(holdBody, 0)
+      : (riskCardModel(holdBody) || riskCardModel({ decision: "HOLD" }));
     var card = document.createElement("div");
-    card.className = "evidence-card";
+    card.className = "evidence-card risk-card";
     card.setAttribute("data-testid", "evidence-card");
+    card.setAttribute("data-decision", holdModel.decision);
+    card.setAttribute("role", "group");
+    card.setAttribute("aria-label", holdModel.title + " risk card");
+    riskCardHead(card, holdModel);
 
     var status = document.createElement("div");
     status.className = "ev-status";
@@ -648,7 +1069,7 @@
     spinner.className = "spinner";
     var label = document.createElement("span");
     label.className = "ev-label";
-    label.textContent = "Local Muse Glimmer (30B, on this PC) is reviewing\u2026 ";
+    label.textContent = checkingCue ? "Muse Glimmer is checking it on this PC… " : "Local Muse Glimmer (30B, on this PC) is reviewing\u2026 ";
     var elapsed = document.createElement("span");
     elapsed.className = "ev-elapsed";
     elapsed.textContent = "0s";
@@ -673,6 +1094,7 @@
     }
     var provenList = makeCol("Proven by code");
     var suspList = makeCol("Model suspicion only");
+    cols.hidden = !!checkingCue;
     card.appendChild(cols);
 
     var previewWrap = document.createElement("div");
@@ -683,18 +1105,26 @@
     preview.className = "ev-preview-text";
     previewWrap.appendChild(previewHead);
     previewWrap.appendChild(preview);
+    previewWrap.hidden = !!checkingCue;
     card.appendChild(previewWrap);
 
     var actions = document.createElement("div");
     actions.className = "ev-actions";
     card.appendChild(actions);
 
+    riskCardTail(card, holdModel);
     thread.appendChild(card);
 
     var startedAt = Date.now();
+    var checkingWhat = checkingCue ? card.querySelector(".risk-row-action .risk-value") : null;
+    function paintCheckingSecs() {
+      if (!checkingCue || !checkingWhat) return;
+      checkingWhat.textContent = "Checking… (" + Math.floor((Date.now() - startedAt) / 1000) + "s)";
+    }
     var polls = 0;
     var timer = setInterval(function () {
       elapsed.textContent = Math.floor((Date.now() - startedAt) / 1000) + "s";
+      paintCheckingSecs();
     }, 1000);
 
     // Redacted preview with suspicion spans in purple and proven
@@ -806,6 +1236,20 @@
     }
 
     function offerChoice() {
+      var holdGeneralised = riskGeneralisedText(holdBody);
+      if (holdGeneralised) {
+        var holdGen = document.createElement("button");
+        holdGen.type = "button";
+        holdGen.className = "reid-generalise";
+        holdGen.setAttribute("data-testid", "reid-generalise");
+        holdGen.textContent = "Generalise";
+        holdGen.addEventListener("click", function () {
+          composer.value = holdGeneralised;
+          composer.dispatchEvent(new Event("input", { bubbles: true }));
+          composer.focus();
+        });
+        actions.appendChild(holdGen);
+      }
       var approveBtn = document.createElement("button");
       approveBtn.type = "button";
       approveBtn.setAttribute("data-testid", "btn-approve");
@@ -823,6 +1267,10 @@
     function poll() {
       if (polls++ > 180) {
         stop();
+        if (checkingCue) {
+          checkingCue = false;
+          paintHoldModel(card, riskCardModel(holdBody) || riskCardModel({ decision: "HOLD" }));
+        }
         label.textContent = "Review timed out. Decide below.";
         offerChoice();
         return;
@@ -837,8 +1285,8 @@
           fillList(suspList, suspicions.map(function (m) { return m.span || ""; }));
           renderPreview(preview, body.redacted_preview || "", body.preview_marks);
           var st = body.status;
-          if (body.title) label.textContent = body.title;
-          if (st === "reviewing") {
+          if (body.title && !checkingCue) label.textContent = body.title;
+          if (st === "reviewing") { paintCheckingSecs();
             setTimeout(poll, 1000);
             return;
           }
@@ -847,15 +1295,23 @@
             finishBanner("REDACT", body.user_message || "Sent with redactions.");
             if (body.answer != null) showHoldAnswer(body.answer, body.provider);
             label.textContent = body.title || body.user_message || "Sent with redactions.";
+            updateHoldTurn(turnEntry, banner, "REDACT", body.user_message || "Sent with redactions.", body);
           } else if (st === "released") {
             var sent = body.sent_text || "";
+            var releaseFinal = sent.indexOf("[") >= 0 ? "REDACT" : "ALLOW";
+            var releaseLabel = releaseFinal === "ALLOW" ? QUIET_RELEASE_LABEL : (body.user_message || "Sent.");
+            if (card.parentNode) card.parentNode.removeChild(card);
             finishBanner(
               sent.indexOf("[") >= 0 ? "REDACT" : "ALLOW",
               body.user_message || "Sent."
             );
             if (body.answer != null) showHoldAnswer(body.answer, body.provider);
-            label.textContent = body.title || body.user_message || "Sent.";
+            updateHoldTurn(turnEntry, banner, releaseFinal, releaseLabel, body);
           } else if (st === "needs_human") {
+            if (checkingCue) {
+              checkingCue = false;
+              paintHoldModel(card, riskCardModel(holdBody) || riskCardModel({ decision: "HOLD" }));
+            }
             label.textContent = body.title || "Glimmer could not clear this \u2014 your call.";
             suspicions.forEach(function (m) {
               var judgement = m.judgement || {};
@@ -879,6 +1335,7 @@
             );
             if (body.answer != null) showHoldAnswer(body.answer, body.provider);
             label.textContent = body.user_message || "Sent.";
+            updateHoldTurn(turnEntry, banner, (body.sent_text || "").indexOf("[") >= 0 ? "REDACT" : "ALLOW", body.user_message || "Sent.", body);
           }
           updateEmptyHint();
           refreshStats();
@@ -893,16 +1350,22 @@
   }
 
   composer.addEventListener("input", function () {
+    clearComposerError();
     setMembrane("idle");
     liveSpans = [];
     liveSeq++; // drop any in-flight live response
     renderBackdrop(composer.value, spans.filter(function () { return false; }));
+    paintSend();
     queueScan();
   });
   composer.addEventListener("scroll", syncScroll);
   sendBtn.addEventListener("click", sendNow);
+  // Enter sends; Shift+Enter (or Alt+Enter) keeps the default newline.
   composer.addEventListener("keydown", function (event) {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) sendNow();
+    if (event.isComposing) return;
+    if (event.key !== "Enter" || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    sendNow();
   });
 
   /* T32 layout: only the thread scrolls. New turns stick to the bottom
@@ -957,6 +1420,7 @@
   renderBackdrop("", []);
   updateEmptyHint();
   setPill();
+  paintModelStatus();
   /* T32 chat shell: Classic is the single theme + memory-only sessions. */
   var THEME_KEY = "shadowfenced.theme";
   var THEME_NAMES = ["classic"];
@@ -1073,9 +1537,9 @@
 
   loadLiveHintsFlag();
   /* T31 decision receipts: one compact marker per turn. */
-  var KNOWN_DECISIONS = ["ALLOW", "REDACT", "BLOCK", "HOLD"];
+  var KNOWN_DECISIONS = ["ALLOW", "REDACT", "WARN", "HOLD", "BLOCK"];
 
-  var RECEIPT_ICONS = { ALLOW: "○", REDACT: "◐", HOLD: "△", BLOCK: "✕", UNKNOWN: "?" };
+  var RECEIPT_ICONS = { ALLOW: "○", REDACT: "◐", WARN: "△", HOLD: "△", BLOCK: "✕", UNKNOWN: "?" };
 
   function receiptIcon(decision) {
     var key = KNOWN_DECISIONS.indexOf(decision) >= 0 ? decision : "UNKNOWN";
@@ -1083,7 +1547,7 @@
   }
 
   function receiptLabel(decision, body) {
-    if (decision === "ALLOW") return "Sent";
+    if (decision === "ALLOW") return "✓ Checked · nothing sensitive"; // T45 quiet receipt (legacy "Sent" lives on in "Sent clean" below)
     if (decision === "REDACT") {
       var n = 0;
       if (body && body.sent_text) {
@@ -1092,6 +1556,7 @@
       }
       return n > 0 ? n + " sensitive details protected" : "Sent with redactions";
     }
+    if (decision === "WARN") return "Waiting for you — review";
     if (decision === "HOLD") return "Review required" + " — nothing sent";
     if (decision === "BLOCK") return "Blocked" + " — not sent";
     return "Not sent" + " — couldn't check";
@@ -1100,6 +1565,7 @@
   function membraneFor(decision) {
     if (decision === "ALLOW") return "released";
     if (decision === "REDACT") return "redacted";
+    if (decision === "WARN") return "review";
     if (decision === "HOLD") return "review";
     if (decision === "BLOCK") return "blocked";
     return "unknown";
@@ -1111,6 +1577,400 @@
   // attributes, or the membrane state. Unknown -> neutral, never "sent".
   // The receipt keeps the legacy "banner" hook via its class so recorders
   // and the descriptive trace pairing still find it.
+  function riskPlaceholderBase(placeholder) {
+    var inner = String(placeholder).replace(/^\[/, "").replace(/\]$/, "");
+    var cut = inner.lastIndexOf("_");
+    if (cut > 0 && /^\d+$/.test(inner.slice(cut + 1))) return inner.slice(0, cut);
+    return inner;
+  }
+  var RISK_PLACEHOLDER_LABELS = {
+    SECRET: "secret", PII_EMAIL: "email address", PII_PHONE: "phone number",
+    PII_ACCOUNT: "account number", PII_ROUTING: "routing number",
+    PII_IBAN: "IBAN", PII_SWIFT: "SWIFT code", PII_SORT_CODE: "sort code",
+    PII_HOLDER_NAME: "account holder name", PII_NAME: "name", NAME: "name",
+    PII_ADDRESS: "street address", ADDRESS: "street address",
+    PII_DOB: "date of birth", DOB: "date of birth",
+    PII_SSN: "social security number", SSN: "social security number",
+    PII_CARD: "card number", CARD: "card number",
+    PII_EMPLOYEE_ID: "employee ID", EMPLOYEE_ID: "employee ID",
+    PII_ACCOUNT: "account number", ACCOUNT: "account number",
+    PII_ROUTING: "routing number", ROUTING: "routing number",
+    PII_IBAN: "IBAN", IBAN: "IBAN",
+    PII_SWIFT: "SWIFT code", SWIFT: "SWIFT code", SWIFT_CODE: "SWIFT code",
+    PII_SORT_CODE: "sort code", SORT_CODE: "sort code",
+    PROVIDER_KEY: "API key", API_KEY: "API key",
+    PASSWORD: "password", PASSWORD_ASSIGNMENT: "password",
+    ENTROPY: "possible secret",
+    CONTRACT: "contract clause", CUSTOM_PATTERN: "contract clause",
+    CODENAME: "project codename", CLIENT: "client name",
+    FIGURE: "unreleased figure", BEACON: "possible sensitive pointer"
+  };
+  var RISK_REID_LABELS = {
+    name: "name", dob: "date of birth", age: "age", street: "street address",
+    postcode: "postcode", city: "city", employer: "employer",
+    jobtitle: "job title", school: "school", gender: "gender",
+    medical: "medical details", plate: "vehicle plate", vehicle: "vehicle",
+    phone: "phone number", email: "email address", dated_event: "dates"
+  };
+  function riskLabelForBase(base) {
+    if (RISK_PLACEHOLDER_LABELS[base]) return RISK_PLACEHOLDER_LABELS[base];
+    return riskHumanLabel(base);
+  }
+  function riskArticle(word, first) {
+    var an = /^[aeiou]/i.test(word || "");
+    if (first) return an ? "An" : "A";
+    return an ? "an" : "a";
+  }
+  function riskJoinLabels(labels) {
+    var out = "";
+    for (var i = 0; i < labels.length; i++) {
+      if (i > 0) out += (i === labels.length - 1) ? " and " : ", ";
+      out += riskArticle(labels[i], i === 0) + " " + labels[i];
+    }
+    return out;
+  }
+  // One human label per finding class, shared by placeholder bases and
+  // span classes so the same finding never appears twice under two names.
+  // Plain words only: never internal class names ("pii", "cls", ...).
+  var RISK_HUMAN_LABELS = {
+    "secret": "secret",
+    "canary": "canary token", "canary token": "canary token",
+    "provider key": "API key", "api key": "API key",
+    "password": "password", "password assignment": "password",
+    "entropy": "possible secret",
+    "email": "email address", "email address": "email address",
+    "phone": "phone number", "phone number": "phone number",
+    "address": "street address", "street": "street address",
+    "street address": "street address",
+    "dob": "date of birth", "date of birth": "date of birth",
+    "name": "name", "holder name": "account holder name",
+    "account holder name": "account holder name",
+    "codename": "project codename", "project codename": "project codename",
+    "client": "client name", "client name": "client name",
+    "custom pattern": "contract clause", "contract": "contract clause",
+    "contract clause": "contract clause",
+    "figure": "unreleased figure", "unreleased figure": "unreleased figure",
+    "beacon": "possible sensitive pointer",
+    "beacon cue": "possible sensitive pointer",
+    "possible sensitive pointer": "possible sensitive pointer",
+    "account": "account number", "account number": "account number",
+    "routing": "routing number", "routing number": "routing number",
+    "iban": "IBAN", "swift": "SWIFT code", "swift code": "SWIFT code",
+    "sort code": "sort code",
+    "card": "card number", "card number": "card number",
+    "employee id": "employee ID",
+    "ssn": "social security number",
+    "social security number": "social security number"
+  };
+  function riskHumanLabel(raw) {
+    var key = String(raw || "").toLowerCase().replace(/_/g, " ")
+      .replace(/\s+/g, " ").trim();
+    if (RISK_HUMAN_LABELS[key]) return RISK_HUMAN_LABELS[key];
+    var short = key.replace(/^pii\s+/, "");
+    if (RISK_HUMAN_LABELS[short]) return RISK_HUMAN_LABELS[short];
+    if (!short || short === "pii" || short === "business" ||
+        short === "beacon" || short === "secret" || short === "unknown") {
+      return "sensitive detail";
+    }
+    return short;
+  }
+  function riskSpanLabel(span) {
+    var cls = String((span && span.cls) || "").toLowerCase();
+    var sub = String((span && span.subclass) || "").toLowerCase();
+    if (sub.indexOf("canary") >= 0) return "canary token";
+    var label = riskHumanLabel(sub);
+    if (label === "sensitive detail" || label === "secret") {
+      label = riskHumanLabel(cls);
+    }
+    if (label === "sensitive detail" || label === "secret") {
+      label = riskHumanLabel((sub + " " + cls).trim());
+    }
+    return label;
+  }
+  function riskActionFor(decision) {
+    if (decision === "REDACT") return "Replaced with placeholders";
+    if (decision === "BLOCK") return "Blocked — not sent";
+    if (decision === "HOLD" || decision === "WARN") {
+      return "Waiting for you: Generalise · Send anyway · Cancel";
+    }
+    if (decision === "UNKNOWN") return "Not sent — couldn't check";
+    return "Sent";
+  }
+  function riskCardModel(resp) {
+    if (!resp || typeof resp !== "object") return null;
+    var decision = String(resp.decision || "UNKNOWN").toUpperCase();
+    var evidence = (resp.evidence && typeof resp.evidence === "object") ? resp.evidence : {};
+    var spans = evidence.spans || resp.spans || [];
+    if (!Array.isArray(spans)) spans = [];
+    var placeholders = (resp.placeholders && typeof resp.placeholders === "object") ? resp.placeholders : {};
+    var names = Object.keys(placeholders);
+    var sending = (typeof resp.sent_text === "string") ? resp.sent_text : "";
+    var i;
+    if (!names.length && sending) {
+      var seen = sending.match(/\[[A-Z0-9 _-]*\d[^\]]*\]/g) || [];
+      for (i = 0; i < seen.length; i++) {
+        if (names.indexOf(seen[i]) < 0) names.push(seen[i]);
+      }
+    }
+    var reid = evidence.reid || {};
+    var person = evidence.person_search || {};
+    var combination = reid.combination || [];
+    if (!Array.isArray(combination)) combination = [];
+    var banner = person.banner || reid.banner || "";
+    var inferred = person.inferred_labels || person.inferred || [];
+    if (!Array.isArray(inferred)) inferred = [];
+    var reasons = evidence.reasons || resp.reasons || [];
+    if (!Array.isArray(reasons)) reasons = [];
+    var liveReasons = reasons.filter(function (r) {
+      return !/no spans\s*->\s*ALLOW/i.test(String(r));
+    });
+    var hasFindings = names.length > 0 || spans.length > 0 ||
+      combination.length > 0 || !!banner || inferred.length > 0 ||
+      liveReasons.length > 0 || /\[[A-Z0-9 _-]*\d[^\]]*\]/.test(sending);
+    if (decision === "ALLOW" && !hasFindings) return null;
+    var labels = [];
+    var seenLabels = {};
+    function addLabel(label) {
+      if (!label || seenLabels[label]) return;
+      seenLabels[label] = true;
+      labels.push(label);
+    }
+    names.forEach(function (ph) { addLabel(riskLabelForBase(riskPlaceholderBase(ph))); });
+    spans.forEach(function (s) { addLabel(riskSpanLabel(s)); });
+    var why = [];
+    var canary = spans.some(function (s) {
+      return String((s && s.subclass) || "").toLowerCase().indexOf("canary") >= 0;
+    }) || liveReasons.some(function (r) { return /canary/i.test(String(r)); });
+    if (decision === "BLOCK" && canary) {
+      why.push("A planted canary token was found.");
+    }
+    var otherLabels = labels.filter(function (l) { return l !== "canary token"; });
+    var specificLabels = otherLabels.filter(function (l) {
+      return l !== "secret" && l !== "sensitive detail";
+    });
+    if (specificLabels.length) otherLabels = specificLabels;
+    if (otherLabels.length) {
+      why.push(riskJoinLabels(otherLabels) + ".");
+    } else if (decision === "BLOCK" && !why.length) {
+      why.push("A secret that must never leave this PC was found.");
+    }
+    if (combination.length) {
+      var comboLabels = combination.map(function (k) {
+        return RISK_REID_LABELS[String(k)] || String(k).replace(/_/g, " ");
+      });
+      why.push("Together these identify you: " + comboLabels.join(" + ") + ".");
+    } else if (banner && decision !== "BLOCK") {
+      why.push(String(banner));
+    }
+    if (decision === "HOLD" && !why.length) {
+      why.push("A possible pointer to sensitive data needs review.");
+    }
+    if (!why.length) {
+      why.push((typeof resp.user_message === "string" && resp.user_message) ||
+        "Sensitive content was found.");
+    }
+    var traceLines = [];
+    (Array.isArray(resp.trace) ? resp.trace : []).forEach(function (entry) {
+      var step = String((entry && entry.step) || "?");
+      var result = entry && entry.result ? " · " + String(entry.result) : "";
+      traceLines.push(step + result);
+    });
+    var action = riskActionFor(decision);
+    return {
+      decision: decision,
+      title: decision,
+      sending: sending,
+      why: why,
+      action: action,
+      trace: traceLines,
+      rows: [
+        { id: "sending", label: "Sending", text: sending },
+        { id: "why", label: "Why it's risky", text: why.join(" ") },
+        { id: "action", label: "What was done", text: action }
+      ]
+    };
+  }
+  function riskCardHead(card, model) {
+    var title = document.createElement("div");
+    title.className = "risk-title";
+    title.textContent = model.title;
+    card.appendChild(title);
+    var rows = document.createElement("div");
+    rows.className = "risk-rows";
+    model.rows.forEach(function (row) {
+      var line = document.createElement("div");
+      line.className = "risk-row risk-row-" + row.id;
+      var name = document.createElement("span");
+      name.className = "risk-label";
+      name.textContent = row.label;
+      var value = document.createElement("span");
+      value.className = "risk-value";
+      value.setAttribute("data-testid", "risk-" + row.id);
+      if (row.id === "sending") {
+        if (row.text) value.innerHTML = highlightPlaceholders(row.text);
+        else value.textContent = "(nothing left to send)";
+      } else {
+        value.textContent = row.text;
+      }
+      line.appendChild(name);
+      line.appendChild(value);
+      rows.appendChild(line);
+    });
+    card.appendChild(rows);
+  }
+  function riskCardTail(card, model) {
+    var toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "risk-toggle";
+    toggle.setAttribute("data-testid", "risk-toggle");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = "Show details";
+    var trace = document.createElement("div");
+    trace.className = "risk-trace";
+    trace.setAttribute("data-testid", "risk-trace");
+    trace.hidden = true;
+    if (model.trace.length) {
+      var list = document.createElement("ol");
+      model.trace.forEach(function (step) {
+        var item = document.createElement("li");
+        item.textContent = step;
+        list.appendChild(item);
+      });
+      trace.appendChild(list);
+    } else {
+      trace.textContent = "No further details.";
+    }
+    toggle.addEventListener("click", function () {
+      var open = trace.hidden;
+      trace.hidden = !open;
+      card.setAttribute("data-expanded", open ? "true" : "false");
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      toggle.textContent = open ? "Hide details" : "Show details";
+    });
+    card.appendChild(toggle);
+    card.appendChild(trace);
+  }
+  function renderRiskCard(model, body, testid) {
+    var card = document.createElement("div");
+    card.className = "risk-card";
+    card.setAttribute("data-testid", testid || "risk-card");
+    card.setAttribute("data-decision", model.decision);
+    card.setAttribute("role", "group");
+    card.setAttribute("aria-label", model.title + " risk card");
+    riskCardHead(card, model);
+    riskCardTail(card, model);
+    return card;
+  }
+  function riskGeneralisedText(body) {
+    if (!body || !body.evidence) return "";
+    var person = body.evidence.person_search || {};
+    var reid = body.evidence.reid || {};
+    return person.generalised_text || reid.generalised_text || "";
+  }
+  function riskLockChoices(holder) {
+    var btns = holder.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
+  }
+  function riskUnlockChoices(holder) {
+    var btns = holder.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+  }
+  function riskConfirmWarn(card, banner, body, url, choice) {
+    var finalText = choice === "send_generalised" ?
+      "Sent generalised" : "Sent anyway — you chose to send";
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ choice: choice })
+    })
+      .then(function (resp) {
+        return resp.json().then(function (b) { return { ok: resp.ok, body: b }; });
+      })
+      .then(function (res) {
+        var holder = card.querySelector(".risk-choices");
+        var actionVal = card.querySelector(".risk-row-action .risk-value");
+        if (res.ok) {
+          if (actionVal) actionVal.textContent = finalText;
+          if (holder) holder.remove();
+          if (banner) {
+            renderReceipt(res.body.decision || "WARN", res.body, banner);
+            var receiptLabelEl = banner.querySelector ? banner.querySelector(".receipt-label") : null;
+            if (receiptLabelEl) receiptLabelEl.textContent = finalText;
+          }
+          var oldLabel = receiptLabel(body.decision || "WARN", body);
+          for (var i = turns.length - 1; i >= 0; i--) {
+            if (turns[i].label === oldLabel) {
+              turns[i].label = finalText;
+              if (selectedTurn === turns[i]) paintTurn(turns[i]);
+              break;
+            }
+          }
+          if (res.body && res.body.answer != null) {
+            var bubble = document.createElement("div");
+            bubble.className = "bubble answer";
+            bubble.setAttribute("data-testid", "answer");
+            bubble.innerHTML = highlightRanges(res.body.answer, res.body.answer_highlights);
+            thread.appendChild(bubble);
+            var src = document.createElement("div");
+            src.className = "answer-src";
+            src.textContent = "via " + providerLabel(res.body.provider || (providerSel && providerSel.value));
+            thread.appendChild(src);
+          }
+          refreshStats();
+        } else {
+          if (holder) riskUnlockChoices(holder);
+          if (actionVal) actionVal.textContent = "Something went wrong; try again.";
+        }
+        updateEmptyHint();
+      })
+      .catch(function () {
+        var holder = card.querySelector(".risk-choices");
+        if (holder) riskUnlockChoices(holder);
+        var actionVal = card.querySelector(".risk-row-action .risk-value");
+        if (actionVal) actionVal.textContent = "Something went wrong; try again.";
+      });
+  }
+  function appendWarnChoices(card, body, banner) {
+    var holder = document.createElement("div");
+    holder.className = "risk-choices";
+    var generalised = riskGeneralisedText(body);
+    var warnUrl = (body && body.confirm_url) ||
+      ("/api/warns/" + encodeURIComponent((body && body.decision_id) || "") + "/confirm");
+    if (generalised) {
+      var gen = document.createElement("button");
+      gen.type = "button";
+      gen.className = "reid-generalise";
+      gen.setAttribute("data-testid", "reid-generalise");
+      gen.textContent = "Generalise";
+      gen.addEventListener("click", function () {
+        riskLockChoices(holder);
+        riskConfirmWarn(card, banner, body, warnUrl, "send_generalised");
+      });
+      holder.appendChild(gen);
+    }
+    var sendBtn2 = document.createElement("button");
+    sendBtn2.type = "button";
+    sendBtn2.setAttribute("data-testid", "risk-send-anyway");
+    sendBtn2.textContent = "Send anyway";
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.setAttribute("data-testid", "risk-cancel");
+    cancel.textContent = "Cancel";
+    sendBtn2.addEventListener("click", function () {
+      riskLockChoices(holder);
+      riskConfirmWarn(card, banner, body, warnUrl, "send_anyway");
+    });
+    cancel.addEventListener("click", function () {
+      riskLockChoices(holder);
+      var actionVal = card.querySelector(".risk-row-action .risk-value");
+      if (actionVal) actionVal.textContent = "Cancelled — nothing was sent.";
+    });
+    holder.appendChild(sendBtn2);
+    holder.appendChild(cancel);
+    var toggle = card.querySelector(".risk-toggle");
+    if (toggle) card.insertBefore(holder, toggle);
+    else card.appendChild(holder);
+  }
   function renderReceipt(decision, body, anchor) {
     var key = KNOWN_DECISIONS.indexOf(decision) >= 0 ? decision : "UNKNOWN";
     var item = anchor && anchor.classList && anchor.classList.contains("receipt")
@@ -1162,31 +2022,165 @@
   }
 
   loadHostedBanner();
+  var extTokenValue = "";
+  function paintExtToken() {
+    var tokenEl = document.getElementById("ext-token");
+    if (!tokenEl) return;
+    var shown = tokenEl.getAttribute("data-visible") === "true";
+    tokenEl.textContent = !extTokenValue ? "unavailable"
+      : shown ? extTokenValue : "••••••••";
+    var showBtn = document.getElementById("ext-token-show");
+    if (showBtn) showBtn.textContent = shown ? "Hide" : "Show";
+  }
+  function tokenMsg(text, isError) {
+    var el = document.getElementById("ext-token-msg");
+    if (!el) return;
+    el.textContent = text;
+    el.hidden = !text;
+    el.setAttribute("data-error", isError ? "true" : "false");
+  }
   function loadExtToken() {
     var tokenEl = document.getElementById("ext-token");
     if (!tokenEl) return;
     fetch("/api/ext/pairing")
       .then(function (resp) { return resp.json(); })
       .then(function (body) {
-        if (body && body.token) tokenEl.textContent = body.token;
-        else tokenEl.textContent = "unavailable";
+        extTokenValue = (body && body.token) || "";
+        paintExtToken();
       })
-      .catch(function () { tokenEl.textContent = "unavailable"; });
+      .catch(function () {
+        extTokenValue = "";
+        paintExtToken();
+      });
+    var showBtn = document.getElementById("ext-token-show");
+    if (showBtn && !showBtn.dataset.wired) {
+      showBtn.dataset.wired = "1";
+      showBtn.addEventListener("click", function () {
+        var shown = tokenEl.getAttribute("data-visible") === "true";
+        tokenEl.setAttribute("data-visible", shown ? "false" : "true");
+        paintExtToken();
+      });
+    }
     var copyBtn = document.getElementById("ext-token-copy");
     if (copyBtn && !copyBtn.dataset.wired) {
       copyBtn.dataset.wired = "1";
       copyBtn.addEventListener("click", function () {
-        var value = tokenEl.textContent || "";
-        if (navigator.clipboard && value) {
-          navigator.clipboard.writeText(value).catch(function () {});
+        if (navigator.clipboard && extTokenValue) {
+          navigator.clipboard.writeText(extTokenValue).catch(function () {});
         }
+      });
+    }
+    var regenBtn = document.getElementById("ext-token-regenerate");
+    if (regenBtn && !regenBtn.dataset.wired) {
+      regenBtn.dataset.wired = "1";
+      regenBtn.addEventListener("click", function () {
+        if (regenBtn.disabled) return;
+        tokenMsg("");
+        regenBtn.disabled = true;
+        fetch("/api/ext/pairing/regenerate", {
+          method: "POST",
+          headers: { "X-Ext-Token": extTokenValue }
+        })
+          .then(function (resp) {
+            return resp.json().then(function (body) {
+              return { ok: resp.ok, body: body };
+            });
+          })
+          .then(function (res) {
+            if (res.ok && res.body && res.body.token) {
+              extTokenValue = res.body.token;
+              paintExtToken();
+              regenBtn.disabled = false;
+              tokenMsg("New token ready. Update the extension.");
+            } else {
+              regenBtn.disabled = false;
+              tokenMsg("Could not regenerate the token.", true);
+            }
+          })
+          .catch(function () {
+            regenBtn.disabled = false;
+            tokenMsg("Could not regenerate the token.", true);
+          });
       });
     }
   }
 
+  // Decision log viewer: time, outcome, tier, reasons and fingerprints
+  // only (the endpoint never returns raw values); plus chain status.
+  function loadLogViewer() {
+    var viewBtn = document.getElementById("log-view");
+    var list = document.getElementById("log-events");
+    if (!viewBtn || !list || viewBtn.dataset.wired) return;
+    viewBtn.dataset.wired = "1";
+    viewBtn.addEventListener("click", function () {
+      if (viewBtn.disabled) return;
+      if (!list.hidden) {
+        list.hidden = true;
+        viewBtn.textContent = "View log";
+        return;
+      }
+      viewBtn.disabled = true;
+      viewBtn.textContent = "Loading\u2026";
+      fetch("/api/log/events?limit=50")
+        .then(function (resp) { return resp.json(); })
+        .then(function (body) {
+          list.innerHTML = "";
+          var events = (body && body.events) || [];
+          if (!events.length) {
+            var empty = document.createElement("li");
+            empty.textContent = body && body.ok
+              ? "No decisions logged yet."
+              : "Log unavailable: chain could not be verified.";
+            list.appendChild(empty);
+          }
+          events.slice().reverse().forEach(function (entry) {
+            var item = document.createElement("li");
+            var bits = [
+              entry.ts || "—",
+              entry.decision || "—",
+              "tier " + (entry.tier != null ? entry.tier : "—")
+            ];
+            if (entry.reasons && entry.reasons.length) {
+              bits.push(entry.reasons.join(", "));
+            }
+            if (entry.fingerprints && entry.fingerprints.length) {
+              bits.push("prints " + entry.fingerprints.join(" "));
+            }
+            item.textContent = bits.join(" · ");
+            list.appendChild(item);
+          });
+          viewBtn.disabled = false;
+          list.hidden = false;
+          viewBtn.textContent = "Hide log";
+        })
+        .catch(function () {
+          list.innerHTML = "";
+          var failed = document.createElement("li");
+          failed.textContent = "Could not load the log.";
+          list.appendChild(failed);
+          viewBtn.disabled = false;
+          list.hidden = false;
+          viewBtn.textContent = "Hide log";
+        });
+    });
+  }
+
   loadProviders();
   loadExtToken();
+  loadLogViewer();
+  loadGuard();
+  paintSend();
   refreshStats();
+  refreshSystemStatus();
+  /* T40: re-check components whenever the drawer is opened. */
+  (function () {
+    var drawer = document.getElementById("details-drawer");
+    if (drawer) {
+      drawer.addEventListener("toggle", function () {
+        if (drawer.open) refreshSystemStatus();
+      });
+    }
+  })();
 
   /* T31b details drawer: per-turn decision, reasons, redaction summary,
      descriptive trace, model and timing; plus session counts (kept above).
@@ -1280,4 +2274,45 @@
     }
     paintTurn(selectedTurn);
   });
+
+  /* T38b states: one Escape closes the topmost panel first, then the
+     phone panels. Panels never take the typed text with them. */
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape" && event.key !== "Esc") return;
+    var providersPanel = document.getElementById("providers-panel");
+    if (providersPanel && !providersPanel.hidden) {
+      providersPanel.hidden = true;
+      var opener = document.getElementById("providers-open");
+      if (opener) opener.focus();
+      return;
+    }
+    var settingsMenu = document.getElementById("settings-menu");
+    if (settingsMenu && settingsMenu.open) {
+      settingsMenu.open = false;
+      return;
+    }
+    if (document.body.classList.contains("show-chats")) {
+      document.body.classList.remove("show-chats");
+      return;
+    }
+    if (document.body.classList.contains("show-details")) {
+      document.body.classList.remove("show-details");
+      return;
+    }
+  });
+
+  // Pure state helpers, exported for tests (no DOM inside).
+  window.ShadowfencedUI = {
+    receiptLabel: receiptLabel,
+    riskCardModel: riskCardModel,
+    holdCueWord: holdCueWord,
+    isCueCheckingHold: isCueCheckingHold,
+    checkingCardModel: checkingCardModel,
+    holdPendingMessage: holdPendingMessage,
+    receiptIcon: receiptIcon,
+    membraneFor: membraneFor,
+    isSendEnabled: function (text, hasAttachments, busy) {
+      return !busy && !!(text || hasAttachments);
+    }
+  };
 })();

@@ -156,7 +156,7 @@ def test_timeouts_come_from_env(monkeypatch, live_mode):
     monkeypatch.setattr(httpx, "Client", spy)
     transport = _transport_for(json.dumps(_judgement_payload()))
     monkeypatch.setenv("SF_LIVE_TIMEOUT_S", "4")
-    monkeypatch.setenv("SF_JUDGE_TIMEOUT_S", "20")
+    monkeypatch.setenv("SF_GLIMMER_TIMEOUT_S", "20")
     judge.judge(WINDOW, "m", live=True, transport=transport)
     assert seen["timeout"] == 4.0
     judge.judge(WINDOW, "m", live=False, transport=transport)
@@ -212,10 +212,10 @@ def test_send_judge_asks_for_80_tokens(live_mode):
     assert body["options"]["num_predict"] == 80
 
 
-def test_send_timeout_defaults_to_60_seconds():
+def test_send_timeout_defaults_to_45_seconds():
     from shadowfenced.config import get_settings
 
-    assert get_settings({}).judge_timeout_s == 60.0
+    assert get_settings({}).glimmer_timeout_s == 45.0
 
 
 def test_replay_mode_reads_fixture(monkeypatch):

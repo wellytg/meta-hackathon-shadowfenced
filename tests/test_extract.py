@@ -160,7 +160,7 @@ def test_garbage_pdf_is_unscannable():
 
 def test_handle_upload_unsupported_is_415():
     with pytest.raises(HTTPException) as exc_info:
-        handle_upload("photo.png", b"data")
+        handle_upload("photo.bmp", b"data")
     assert exc_info.value.status_code == 415
     assert (
         exc_info.value.detail["code"] == "shadowfenced_unsupported_file"

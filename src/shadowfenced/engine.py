@@ -1,6 +1,6 @@
 """Tier-1-only gate: code findings in, a typed decision out.
 
-Severity ordering is BLOCK > HOLD > WARN > REDACT > ALLOW. A proven canary
+Severity ordering is BLOCK > HOLD > REDACT > WARN > ALLOW. A proven canary
 blocks; ambiguous spans or sensitivity cue words hold instantly for
 asynchronous Glimmer whole-message review (see ``holds``); other
 proven spans redact and clean text allows. Any internal failure holds
@@ -42,6 +42,7 @@ PLACEHOLDER_DESCRIPTIONS = {
     "CLIENT": "client name",
     "FIGURE": "unreleased figure",
     "BEACON": "possible sensitive pointer",
+    "CONTRACT_CLAUSE": "contract clause",
 }
 
 _PLURALS = {
@@ -89,6 +90,20 @@ def user_message(decision: Decision) -> str:
     decision line.
     """
     if decision.decision == "BLOCK":
+        ordered = sorted(
+            decision.spans, key=lambda span: (span.cp_start, span.cp_end)
+        )
+        if not any(
+            span.subclass == "canary" and span.status == "proven"
+            for span in ordered
+        ):
+            for span in ordered:
+                if (
+                    span.subclass == "provider_key"
+                    and span.status == "proven"
+                    and span.message
+                ):
+                    return span.message
         base = (
             "A planted canary token was found (proven by code). "
             "Nothing was sent."
@@ -154,6 +169,31 @@ def _hold(
     )
 
 
+def _confidential_contract_marker(text: str) -> str | None:
+    """Stamp name when a classified contract must hold for review.
+
+    Returns the handling-caveat stamp (``confidential``,
+    ``do-not-distribute`` or ``privileged``; fixed vocabulary, never
+    raw text) when the document classifier says contract AND the
+    text carries such a stamp, else None. The gate raises the
+    decision to HOLD with the reason "Confidential contract text"
+    so a human picks Redact-and-send; redaction itself still
+    replaces every proven span with a placeholder.
+    """
+    try:
+        from . import contract as contract_module
+        from . import docclass as docclass_module
+
+        info = docclass_module.classify(text)
+    except Exception:
+        return None
+    if not isinstance(info, dict) or info.get("doc_type") != "contract":
+        return None
+    try:
+        return contract_module.confidential_marker_of(text)
+    except Exception:
+        return None
+
 # Sensitivity cue words for the send-time hold rule. Tier-1-clean text
 # holding none of these (and no ambiguous spans) is decided from Tier 1
 # alone; anything else holds for asynchronous Glimmer review.
@@ -166,6 +206,23 @@ _SCREEN_CUE_RE = re.compile(
 _SCREEN_UNC_RE = re.compile(r"\\\\[A-Za-z0-9_.$-]+")
 
 MESSAGE_PENDING_CHARS = 2000
+
+
+def cue_word(text: str) -> str | None:
+    """Name the sensitivity cue that fired, without echoing message text.
+
+    Returns the matched cue word lowercased with internal whitespace
+    collapsed (``"born"`` for the Ada Lovelace message), ``"unc path"``
+    for a bare UNC server path, or None when nothing fired. Only this
+    cue fragment may appear in a user-facing reason: never any other
+    part of the message.
+    """
+    match = _SCREEN_CUE_RE.search(text)
+    if match is not None:
+        return re.sub(r"\s+", " ", match.group(0)).strip().lower()
+    if _SCREEN_UNC_RE.search(text) is not None:
+        return "unc path"
+    return None
 
 
 def has_sensitivity_cue(text: str) -> bool:
@@ -221,7 +278,13 @@ def _gate_send(
                 f"{len(ambiguous)} ambiguous span(s) need Glimmer review -> HOLD"
             )
         else:
-            reasons.append("sensitivity cue word needs Glimmer review -> HOLD")
+            cue = cue_word(text)
+            if cue is not None:
+                reasons.append(
+                    f"sensitivity cue word needs Glimmer review (cue='{cue}') -> HOLD"
+                )
+            else:
+                reasons.append("sensitivity cue word needs Glimmer review -> HOLD")
         pending: list[dict[str, Any]] = [
             {"kind": "message", "text": text[:MESSAGE_PENDING_CHARS]}
         ]
@@ -409,6 +472,31 @@ def _gate_impl(
                 latency_ms=latency_ms,
                 reasons=reasons,
             )
+        provider_hit = sorted(
+            (
+                span for span in enforced
+                if span.subclass == "provider_key"
+                and span.status == "proven"
+            ),
+            key=lambda span: (span.cp_start, span.cp_end),
+        )
+        if provider_hit:
+            reasons.append(
+                f"proven provider key -> BLOCK ({provider_hit[0].why})"
+            )
+            if mode == "send":
+                latency_ms["tier2"] = 0.0
+                latency_ms["tier3"] = 0.0
+            return Decision(
+                decision="BLOCK",
+                decision_id=uuid.uuid4().hex,
+                spans=spans,
+                sent_text=None,
+                placeholders={},
+                resolved_tier=1,
+                latency_ms=latency_ms,
+                reasons=reasons,
+            )
         custom_block = [
             s for s in enforced
             if s.status == "proven" and s.proof == "custom"
@@ -465,6 +553,46 @@ def _gate_impl(
                                 "text": text[:MESSAGE_PENDING_CHARS],
                             }
                         ],
+                    },
+                    status="reviewing",
+                )
+            return _hold(spans, latency_ms, reasons)
+        contract_marker = _confidential_contract_marker(text)
+        if contract_marker is not None:
+            reasons.append(
+                "Confidential contract text "
+                f"({contract_marker} marker) -> HOLD"
+            )
+            if trace_out is not None:
+                trace_out.append(
+                    {"step": "contract.hold", "tool": "gate",
+                     "detail": f"contract doc + {contract_marker} marker -> HOLD",
+                     "result": "HOLD", "ms": 0.0}
+                )
+            if mode == "send":
+                latency_ms["tier2"] = 0.0
+                latency_ms["tier3"] = 0.0
+                latency_ms["total"] = (
+                    time.perf_counter() - total_started
+                ) * 1000
+                return Decision(
+                    decision="HOLD",
+                    decision_id=uuid.uuid4().hex,
+                    spans=spans,
+                    sent_text=None,
+                    placeholders={},
+                    resolved_tier=4,
+                    latency_ms=latency_ms,
+                    reasons=reasons,
+                    evidence={
+                        "proven_by_code": [s.span_id for s in proven],
+                        "pending": [
+                            {
+                                "kind": "message",
+                                "text": text[:MESSAGE_PENDING_CHARS],
+                            }
+                        ],
+                        "confidential_contract": True,
                     },
                     status="reviewing",
                 )
@@ -590,6 +718,90 @@ def _append_gate_trace(
     )
 
 
+def _is_cue_only_hold(decision: Decision) -> bool:
+    """True when a HOLD came only from a sensitivity cue (no ambiguous spans).
+
+    A classified-contract HOLD is never cue-only: the handling-caveat
+    stamp plus the contract classification require human review, so
+    re-id or person-search noise must not downgrade them to WARN.
+    """
+    if decision.decision != "HOLD":
+        return False
+    if (decision.evidence or {}).get("confidential_contract"):
+        return False
+    return not any(s.status == "ambiguous" for s in decision.spans)
+
+
+def _drop_business_name_overlaps(
+    decision: Decision, current: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Drop re-id person-name findings over Tier 1 proven business spans.
+
+    A proven codename or client name (e.g. an internal project name) is
+    not a private person: counting the same characters as a ``name``
+    quasi-identifier would turn routine business redaction into a
+    re-identification hold. Other kinds and PII overlaps (holder names
+    really are person names) are kept.
+    """
+    biz = [(s.cp_start, s.cp_end) for s in decision.spans
+           if s.cls == "business" and s.status == "proven"]
+    if not biz or not current:
+        return current
+    kept: list[dict[str, Any]] = []
+    for item in current:
+        if item.get("kind") != "name":
+            kept.append(item)
+            continue
+        span = item.get("span", (0, 0))
+        try:
+            start, end = int(span[0]), int(span[1])
+        except (TypeError, ValueError, IndexError):
+            kept.append(item)
+            continue
+        if any(start < bend and bstart < end for bstart, bend in biz):
+            continue
+        kept.append(item)
+    return kept
+
+
+def _warn_from_hold(
+    text: str,
+    decision: Decision,
+    evidence: dict[str, Any],
+    reasons: list[str],
+) -> Decision:
+    """Build a WARN from a cue-only HOLD base (send mode user review)."""
+    evidence = {k: v for k, v in (evidence or {}).items()
+                if k != "pending"}
+    proven = [s for s in decision.spans if s.status == "proven"]
+    if proven:
+        sent_text, mapping = redact(text, proven)
+        decision_id = uuid.uuid4().hex
+        save_mapping(decision_id, mapping)
+        return Decision(
+            decision="WARN",
+            decision_id=decision_id,
+            spans=decision.spans,
+            sent_text=sent_text,
+            placeholders=dict(mapping),
+            resolved_tier=1,
+            latency_ms=dict(decision.latency_ms),
+            reasons=reasons,
+            evidence=evidence,
+        )
+    return Decision(
+        decision="WARN",
+        decision_id=uuid.uuid4().hex,
+        spans=decision.spans,
+        sent_text=text,
+        placeholders={},
+        resolved_tier=1,
+        latency_ms=dict(decision.latency_ms),
+        reasons=reasons,
+        evidence=evidence,
+    )
+
+
 def _apply_reid(
     text: str,
     decision: Decision,
@@ -612,10 +824,44 @@ def _apply_reid(
     redacted-or-plain text. Evidence carries kinds, scores and
     fingerprints only: raw values stay out of traces and logs.
     """
-    current = tier1.scan_reid(text, trace_out=trace_out)
-    result = reid_module.assess(
-        text, conversation=conversation, current_findings=current
-    )
+    try:
+        current = tier1.scan_reid(text, trace_out=trace_out)
+        current = _drop_business_name_overlaps(decision, current)
+    except Exception:
+        current = []
+        if trace_out is not None:
+            trace_out.append(
+                {"step": "reid.extract", "tool": "tier1",
+                 "detail": "extraction failed", "result": "error",
+                 "ms": 0.0}
+            )
+    try:
+        result = reid_module.assess(
+            text, conversation=conversation, current_findings=current
+        )
+    except Exception as exc:
+        if decision.decision == "BLOCK":
+            decision.reasons.append(
+                f"reid error ({type(exc).__name__}); keeping BLOCK"
+            )
+            return _apply_person_search(
+                text, decision, conversation, current,
+                person_search_judge_fn, trace_out, mode,
+            )
+        reasons = list(decision.reasons) + [
+            f"reid error ({type(exc).__name__}) -> HOLD"
+        ]
+        return Decision(
+            decision="HOLD",
+            decision_id=uuid.uuid4().hex,
+            spans=decision.spans,
+            sent_text=None,
+            placeholders={},
+            resolved_tier=1,
+            latency_ms=dict(decision.latency_ms),
+            reasons=reasons,
+            evidence=dict(decision.evidence or {}),
+        )
     reid_module.trace_combine(
         trace_out, result.score, result.combination, result.outcome
     )
@@ -635,12 +881,29 @@ def _apply_reid(
     score_line = "reid: score={} kinds={} -> {}".format(
         result.score, "+".join(result.combination), result.outcome
     )
-    if decision.decision in ("BLOCK", "HOLD"):
+    if decision.decision == "BLOCK":
         decision.reasons.append(score_line)
         decision.evidence.update(evidence)
         return _apply_person_search(
             text, decision, conversation, current,
-            person_search_judge_fn, trace_out,
+            person_search_judge_fn, trace_out, mode,
+        )
+    if decision.decision == "HOLD":
+        if mode == "send" and _is_cue_only_hold(decision):
+            reasons = list(decision.reasons) + [
+                score_line,
+                "specific re-id finding replaces generic cue hold -> WARN",
+            ]
+            warn_decision = _warn_from_hold(text, decision, evidence, reasons)
+            return _apply_person_search(
+                text, warn_decision, conversation, current,
+                person_search_judge_fn, trace_out, mode,
+            )
+        decision.reasons.append(score_line)
+        decision.evidence.update(evidence)
+        return _apply_person_search(
+            text, decision, conversation, current,
+            person_search_judge_fn, trace_out, mode,
         )
     if residual and mode != "send":
         candidate = result.generalised_text or decision.sent_text or text
@@ -676,6 +939,34 @@ def _apply_reid(
     elif residual:
         decision.reasons.append("reid residual check deferred in send mode")
     if result.outcome == "HOLD":
+        if mode == "send":
+            reasons = list(decision.reasons) + [
+                score_line,
+                "reid combination needs user review -> WARN",
+            ]
+            if decision.decision == "REDACT":
+                decision.reasons.extend(reasons[len(decision.reasons):])
+                decision.evidence.update(evidence)
+                return _apply_person_search(
+                    text, decision, conversation, current,
+                    person_search_judge_fn, trace_out, mode,
+                )
+            warn_decision = Decision(
+                decision="WARN",
+                decision_id=uuid.uuid4().hex,
+                spans=decision.spans,
+                sent_text=(decision.sent_text
+                           if decision.decision == "REDACT" else text),
+                placeholders=dict(decision.placeholders or {}),
+                resolved_tier=1,
+                latency_ms=dict(decision.latency_ms),
+                reasons=reasons,
+                evidence=evidence,
+            )
+            return _apply_person_search(
+                text, warn_decision, conversation, current,
+                person_search_judge_fn, trace_out, mode,
+            )
         reasons = list(decision.reasons) + [
             score_line,
             "reid combination can identify or locate -> HOLD",
@@ -693,29 +984,19 @@ def _apply_reid(
         )
         return _apply_person_search(
             text, hold_decision, conversation, current,
-            person_search_judge_fn, trace_out,
+            person_search_judge_fn, trace_out, mode,
         )
     reasons = list(decision.reasons) + [
         score_line,
         "reid combination needs user review -> WARN",
     ]
     if decision.decision == "REDACT":
-        # Keep the base decision id: its placeholder map is already saved
-        # under it, so re-hydration keeps working.
-        warn_decision = Decision(
-            decision="WARN",
-            decision_id=decision.decision_id,
-            spans=decision.spans,
-            sent_text=decision.sent_text,
-            placeholders=dict(decision.placeholders),
-            resolved_tier=1,
-            latency_ms=dict(decision.latency_ms),
-            reasons=reasons,
-            evidence=evidence,
-        )
+        # REDACT outranks WARN: keep the redaction with re-id evidence.
+        decision.reasons.extend(reasons[len(decision.reasons):])
+        decision.evidence.update(evidence)
         return _apply_person_search(
-            text, warn_decision, conversation, current,
-            person_search_judge_fn, trace_out,
+            text, decision, conversation, current,
+            person_search_judge_fn, trace_out, mode,
         )
     warn_decision = Decision(
         decision="WARN",
@@ -730,8 +1011,88 @@ def _apply_reid(
     )
     return _apply_person_search(
         text, warn_decision, conversation, current,
-        person_search_judge_fn, trace_out,
+        person_search_judge_fn, trace_out, mode,
     )
+
+
+def _downgrade_verified_public_figure(
+    text: str,
+    decision: Decision,
+    conversation: list[str] | None,
+    current: list[dict[str, Any]] | None,
+    result: Any,
+    trace_out: list[dict[str, Any]] | None,
+) -> Decision | None:
+    """ALLOW when Glimmer verifies a public figure in encyclopedic framing.
+
+    Tier 3 coordination for T48 rule 2, extended in T53 to pure cue-word
+    HOLDs with no re-id case: the layer may still warn on a published
+    birthday plus a name, but when Glimmer has
+    verified (exact-substring subject, confidence >= 0.6) that the
+    subject is a public figure, the question uses encyclopedic framing
+    and no current contact detail or ID number is present, there is no
+    private person to protect. Never touches BLOCK or REDACT, and never
+    downgrades while Tier 1 review is still pending (ambiguous spans).
+    """
+    if decision.decision not in ("WARN", "HOLD"):
+        return None
+    reid_info = (decision.evidence or {}).get("reid")
+    if reid_info is not None and reid_info.get("outcome") not in ("WARN", "HOLD"):
+        return None
+    if reid_info is None:
+        if not decision.reasons or not all(
+            "sensitivity cue word" in reason for reason in decision.reasons
+        ):
+            return None
+        if any(getattr(span, "proof", "") == "custom" for span in decision.spans):
+            return None
+    if result.warn or not result.triggered:
+        return None
+    if result.subject_public is not True or not result.verified_subject:
+        return None
+    try:
+        confidence = float(result.confidence)
+    except (TypeError, ValueError):
+        return None
+    if confidence < 0.6:
+        return None
+    if any(getattr(span, "status", "") == "ambiguous"
+           for span in decision.spans):
+        return None
+    if any(getattr(span, "status", "") == "proven"
+           and getattr(span, "cls", "") in ("pii", "secret")
+           for span in decision.spans):
+        return None
+    combo = set(reid_info.get("combination") or []) if reid_info is not None else {str(item.get("kind", "")) for item in (current or [])}
+    if combo & set(reid_module.CONTACT_KINDS):
+        return None
+    if not reid_module.has_encyclopedic_framing(text, conversation):
+        return None
+    reasons = list(decision.reasons) + [
+        "verified public figure in encyclopedic framing -> ALLOW",
+    ]
+    evidence = dict(decision.evidence or {})
+    sent_text = decision.sent_text if decision.decision == "WARN" else text
+    downgraded = Decision(
+        decision="ALLOW",
+        decision_id=uuid.uuid4().hex,
+        spans=decision.spans,
+        sent_text=sent_text,
+        placeholders=dict(decision.placeholders or {}),
+        resolved_tier=1,
+        latency_ms=dict(decision.latency_ms),
+        reasons=reasons,
+        evidence=evidence,
+    )
+    downgraded.doc_type = decision.doc_type
+    downgraded.doc_warning = decision.doc_warning
+    if trace_out is not None:
+        trace_out.append(
+            {"step": "intent.public_figure", "tool": "glimmer",
+             "detail": "verified public figure, encyclopedic framing",
+             "result": "OK", "ms": 0.0}
+        )
+    return downgraded
 
 
 def _apply_person_search(
@@ -741,13 +1102,16 @@ def _apply_person_search(
     current: list[dict[str, Any]] | None,
     person_search_judge_fn: Any,
     trace_out: list[dict[str, Any]] | None,
+    mode: str = "tier1",
 ) -> Decision:
     """Layer person-search intent over a finished re-id decision (T33).
 
     Runs the local-Glimmer intent check and upgrades to WARN when the
     verified claim meets the bar. Never blocks and never downgrades a
-    BLOCK or HOLD: those keep their decision with the person-search
-    payload attached. Evidence carries labels and fingerprints only.
+    BLOCK; HOLD keeps its decision with the person-search payload
+    attached, except a cue-only HOLD in send mode which becomes WARN so
+    the user can review it. REDACT outranks WARN and keeps its
+    redaction. Evidence carries labels and fingerprints only.
     """
     try:
         from . import person_search as person_search_module
@@ -764,6 +1128,11 @@ def _apply_person_search(
     except Exception:
         return decision
     if not result.warn:
+        downgraded = _downgrade_verified_public_figure(
+            text, decision, conversation, current, result, trace_out,
+        )
+        if downgraded is not None:
+            return downgraded
         return decision
     evidence: dict[str, Any] = dict(decision.evidence or {})
     evidence["person_search"] = {
@@ -775,7 +1144,18 @@ def _apply_person_search(
         "generalised_text": result.generalised_text,
     }
     score_line = "intent.person_search: private-person search -> WARN"
-    if decision.decision in ("BLOCK", "HOLD"):
+    if decision.decision == "BLOCK":
+        decision.reasons.append(score_line)
+        decision.evidence.update(evidence)
+        return decision
+    if decision.decision == "HOLD":
+        if mode == "send" and _is_cue_only_hold(decision):
+            reasons = list(decision.reasons) + [
+                score_line,
+                "person-search intent needs user review -> WARN",
+            ]
+            warn_decision = _warn_from_hold(text, decision, evidence, reasons)
+            return warn_decision
         decision.reasons.append(score_line)
         decision.evidence.update(evidence)
         return decision
@@ -784,17 +1164,9 @@ def _apply_person_search(
         "person-search intent needs user review -> WARN",
     ]
     if decision.decision == "REDACT":
-        return Decision(
-            decision="WARN",
-            decision_id=decision.decision_id,
-            spans=decision.spans,
-            sent_text=decision.sent_text,
-            placeholders=dict(decision.placeholders),
-            resolved_tier=1,
-            latency_ms=dict(decision.latency_ms),
-            reasons=reasons,
-            evidence=evidence,
-        )
+        decision.reasons.extend(reasons[len(decision.reasons):])
+        decision.evidence.update(evidence)
+        return decision
     if decision.decision == "WARN":
         return Decision(
             decision="WARN",
@@ -831,17 +1203,19 @@ def gate_reid(
     trace_out: list[dict[str, Any]] | None = None,
     person_search_judge_fn: Any = None,
 ) -> Decision:
-    """Gate with re-identification scoring layered on top.
+    """Gate with re-identification scoring layered on top (alias of gate).
 
-    Runs the plain :func:`gate` first (unchanged behaviour), then scores
-    quasi-identifier combinations in ``text`` plus ``conversation``
-    (earlier messages, oldest first). ``residual`` also runs the
-    residual-context check with ``judge_fn`` (default: local Muse
-    Glimmer, never a cloud model); judge errors hold fail-closed.
+    Kept for backwards compatibility: :func:`gate` now runs the full
+    check itself, so this forwards to it with the same arguments.
+    ``residual`` runs the residual-context check with ``judge_fn``
+    (default: local Muse Glimmer, never a cloud model); judge errors
+    hold fail-closed, except person-search which falls back to the
+    code-only result.
     """
-    decision = gate(text, policy, registry, mode=mode, trace_out=trace_out)
-    return _apply_reid(
-        text, decision, conversation, residual, judge_fn, mode, trace_out,
+    return gate(
+        text, policy, registry,
+        mode=mode, trace_out=trace_out,
+        conversation=conversation, residual=residual, judge_fn=judge_fn,
         person_search_judge_fn=person_search_judge_fn,
     )
 
@@ -853,6 +1227,10 @@ def gate(
     choices: list[dict[str, Any]] | None = None,
     mode: str = "tier1",
     trace_out: list[dict[str, Any]] | None = None,
+    conversation: list[str] | None = None,
+    residual: bool = False,
+    judge_fn: Any = None,
+    person_search_judge_fn: Any = None,
 ) -> Decision:
     """Run the gate over text and return a Decision.
 
@@ -884,6 +1262,37 @@ def gate(
         text, policy, registry, choices, mode, trace_out=trace_out
     )
     _attach_doc_classification(decision, text, trace_out)
+    _doc_type, _doc_warning = decision.doc_type, decision.doc_warning
+    try:
+        decision = _apply_reid(
+            text, decision, conversation, residual, judge_fn, mode,
+            trace_out, person_search_judge_fn=person_search_judge_fn,
+        )
+    except Exception as exc:
+        if decision.decision != "BLOCK":
+            decision = Decision(
+                decision="HOLD",
+                decision_id=uuid.uuid4().hex,
+                spans=decision.spans,
+                sent_text=None,
+                placeholders={},
+                resolved_tier=1,
+                latency_ms=dict(decision.latency_ms),
+                reasons=[*decision.reasons,
+                         f"reid layer error ({type(exc).__name__}) -> HOLD"],
+                evidence=dict(decision.evidence or {}),
+                doc_type=_doc_type,
+                doc_warning=_doc_warning,
+            )
+    if decision.doc_type is None:
+        decision.doc_type = _doc_type
+    if decision.doc_warning is None:
+        decision.doc_warning = _doc_warning
+        if _doc_warning and isinstance(decision.evidence, dict):
+            decision.evidence.setdefault("doc_warning",
+                                         _doc_warning)
+            if _doc_type:
+                decision.evidence.setdefault("doc_type", _doc_type)
     _append_gate_trace(
         trace_out, decision, choices,
         (time.perf_counter() - started) * 1000,

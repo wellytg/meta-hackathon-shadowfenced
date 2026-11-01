@@ -26,10 +26,14 @@ _ENV_KEYS = (
     "SF_LOG_PATH",
     "SF_LIVE_MODEL",
     "SF_JUDGE_MODEL",
-    "SF_JUDGE_TIMEOUT_S",
+    "SF_GLIMMER_NUM_CTX",
+    "SF_GLIMMER_TIMEOUT_S",
     "SF_LIVE_TIMEOUT_S",
+    "SF_IMAGE_TIMEOUT_S",
+    "SF_IMAGE_SECOND_PASS",
     "SF_LIVE_NUM_GPU",
     "SF_TIER2_MODE",
+    "SF_IMAGE_REDACTION",
     "SF_LIVE_HINTS",
     "SF_PROTECT_KEYS",
     "SF_HOSTED",
@@ -88,10 +92,14 @@ class Settings(BaseModel):
     log_path: str = DEFAULT_LOG_PATH
     live_model: str = "llama3.2:3b"
     judge_model: str = "muse-glimmer:30b"
-    judge_timeout_s: float = 60.0
+    glimmer_num_ctx: int = 2048
+    glimmer_timeout_s: float = 45.0
     live_timeout_s: float = 4.0
+    image_timeout_s: float = 120.0
+    image_second_pass: bool = True
     live_num_gpu: int = 0
     tier2_mode: str = "live"
+    image_redaction: str = "off"
     live_hints: bool = False
     protect_keys: str = "META_API_KEY,MODEL_API_KEY"
     hosted: bool = False
@@ -117,6 +125,12 @@ def _collect(env: dict[str, str] | None = None) -> dict[str, str]:
 def _tier2_mode(raw: str | None) -> str:
     mode = (raw or "live").strip().lower()
     return mode if mode in ("live", "replay", "off") else "live"
+
+
+def _image_redaction(raw: str | None) -> str:
+    """Image redaction mode: ``off`` (default), ``local``, or ``on``."""
+    mode = (raw or "off").strip().lower()
+    return mode if mode in ("off", "local", "on") else "off"
 
 
 def _parse_float(raw: str | None, default: float) -> float:
@@ -180,10 +194,14 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
         log_path=merged.get("SF_LOG_PATH", DEFAULT_LOG_PATH),
         live_model=merged.get("SF_LIVE_MODEL", "llama3.2:3b"),
         judge_model=merged.get("SF_JUDGE_MODEL", "muse-glimmer:30b"),
-        judge_timeout_s=_parse_float(merged.get("SF_JUDGE_TIMEOUT_S"), 60.0),
+        glimmer_num_ctx=_parse_int(merged.get("SF_GLIMMER_NUM_CTX"), 2048),
+        glimmer_timeout_s=_parse_float(merged.get("SF_GLIMMER_TIMEOUT_S"), 45.0),
         live_timeout_s=_parse_float(merged.get("SF_LIVE_TIMEOUT_S"), 4.0),
+        image_timeout_s=_parse_float(merged.get("SF_IMAGE_TIMEOUT_S"), 120.0),
+        image_second_pass=_parse_flag(merged.get("SF_IMAGE_SECOND_PASS"), True),
         live_num_gpu=_parse_int(merged.get("SF_LIVE_NUM_GPU"), 0),
         tier2_mode=_tier2_mode(merged.get("SF_TIER2_MODE")),
+        image_redaction=_image_redaction(merged.get("SF_IMAGE_REDACTION")),
         live_hints=_parse_flag(merged.get("SF_LIVE_HINTS"), False),
         protect_keys=merged["SF_PROTECT_KEYS"] if "SF_PROTECT_KEYS" in merged else "META_API_KEY,MODEL_API_KEY",
         hosted=_parse_flag(merged.get("SF_HOSTED"), False),
@@ -216,6 +234,42 @@ def ext_token_path(settings=None) -> "Path":
     return Path.home() / ".shadowfenced" / "ext_token"
 
 
+_MEMORY_EXT_TOKEN: str | None = None
+
+
+def reset_ext_token_override() -> None:
+    """Forget the in-process pairing-token override (tests only)."""
+    global _MEMORY_EXT_TOKEN
+    _MEMORY_EXT_TOKEN = None
+
+
+def rotate_ext_token(settings=None) -> str:
+    """Create a fresh pairing token, invalidating the previous one.
+
+    The new token takes precedence immediately (in-process override)
+    and is also written to the token file so it survives restarts. The
+    token value itself is never logged.
+    """
+    import secrets as _secrets
+
+    global _MEMORY_EXT_TOKEN
+    fresh = _secrets.token_urlsafe(24)
+    _MEMORY_EXT_TOKEN = fresh
+    path = ext_token_path(settings)
+    try:
+        import os as _os
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(fresh + "\n", encoding="utf-8")
+        try:
+            _os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        pass
+    return fresh
+
+
 def load_or_create_ext_token(settings=None) -> str:
     """Return the pairing token, generating and persisting it on first run.
 
@@ -230,6 +284,8 @@ def load_or_create_ext_token(settings=None) -> str:
             settings = get_settings()
         except Exception:
             settings = None
+    if _MEMORY_EXT_TOKEN:
+        return _MEMORY_EXT_TOKEN
     if settings is not None and (settings.ext_token or "").strip():
         return settings.ext_token.strip()
     path = ext_token_path(settings)

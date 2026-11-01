@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 # Extends the plan regex with FIGURE (a listed placeholder with no other
 # spelling), matched case-insensitively.
 PLACEHOLDER_RE = re.compile(
-    r"\[\s*(SECRET|PII_[A-Z]+(?:_[A-Z]+)*|CODENAME|CLIENT|FIGURE|BEACON)[\s_-]*(\d+)\s*\]",
+    r"\[\s*(SECRET|PII_[A-Z]+(?:_[A-Z]+)*|CODENAME|CLIENT|FIGURE|BEACON|CONTRACT_CLAUSE)[\s_-]*(\d+)\s*\]",
     re.IGNORECASE,
 )
 

@@ -388,6 +388,7 @@
     function open() {
       overlay.hidden = false;
       refresh();
+      close.focus();
     }
     function shut() { overlay.hidden = true; }
     close.addEventListener("click", shut);
@@ -420,8 +421,9 @@
     descBtn.setAttribute("data-testid", "sf-descriptive-toggle");
     descBtn.setAttribute("aria-pressed", descriptiveOn ? "true" : "false");
     function paint() {
-      descBtn.textContent = "Descriptive mode: " + (descriptiveOn ? "on" : "off");
+      descBtn.textContent = "Show more detail: " + (descriptiveOn ? "on" : "off");
       descBtn.setAttribute("aria-pressed", descriptiveOn ? "true" : "false");
+      descBtn.setAttribute("aria-label", "Descriptive mode");
     }
     descBtn.addEventListener("click", function () {
       descriptiveOn = !descriptiveOn;

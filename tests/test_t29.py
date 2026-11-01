@@ -311,9 +311,19 @@ def test_corpus_documents_classified_and_redacted(policy):
         info = docclass.classify(text)
         assert info["doc_type"] == doc_type, (name, info["scores"])
         decision = gate(text, policy, None)
-        assert decision.decision == "REDACT", (name, decision.reasons)
+        # Unified gate (T37): re-identification HOLD outranks Tier 1
+        # REDACT (BLOCK > HOLD > REDACT > WARN > ALLOW); the document
+        # warning still rides along and nothing is sent.
+        assert decision.decision == "HOLD", (name, decision.reasons)
+        assert decision.sent_text is None
         assert decision.doc_type == doc_type, name
-        assert decision.sent_text is not None
+        assert (decision.evidence or {}).get("doc_type") == doc_type
+        assert (decision.evidence or {}).get("reid", {}).get(
+            "combination"), (name, decision.evidence)
+        proven_slices = [text[s.cp_start:s.cp_end] for s in decision.spans
+                         if s.status == "proven"]
         for secret in secrets:
-            assert secret not in decision.sent_text, (name, secret)
-            assert secret in decision.placeholders.values(), (name, secret)
+            assert any(secret in sl or sl in secret
+                       for sl in proven_slices), (name, secret)
+        for secret in secrets:
+            assert secret not in " ".join(decision.reasons), (name, secret)

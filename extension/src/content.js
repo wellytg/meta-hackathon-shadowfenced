@@ -1,11 +1,21 @@
 'use strict';
 
-/* Shadowfenced content script. Runs on the four supported chat sites.
+/* Shadowfenced content script. Runs on the supported chat sites (plus the
+ * local test page under the dev build).
  * - Finds the message box, debounces (~400ms) and asks the background
  *   worker to POST /api/ext/scan.
- * - Draws underlines in an overlay layer inside a CLOSED shadow root
+ * - Draws underlines in an overlay mirror inside a CLOSED shadow root
  *   positioned over the editor; never rewrites site DOM while typing.
+ *   Scan hits use a wavy amber (review) line; spans whose label looks
+ *   high-risk (password/secret/key/token/credential) use wavy safety
+ *   orange (blocked). Lines vanish as soon as the text is fixed.
  * - Hover card: what was found + "Replace with placeholder" + "Ignore".
+ * - Send-time card: "Blocked — not sent" / "N details protected" /
+ *   "Review: reason" with "Send anyway" + "Cancel"; a separate
+ *   not-running card appears when the local app is unreachable.
+ * - Every card lives in the closed shadow root, has a title bar, takes
+ *   keyboard focus, closes on Escape, is parked clear of the site's send
+ *   button, and auto-dismisses so it never covers the button permanently.
  * - Intercepts send (Enter key + send-button capture) and calls
  *   /api/ext/redact first. Fail-safe: any failure blocks the send.
  * - File-attachment presence shows a warning badge (warning only).
@@ -45,7 +55,16 @@
     return { action: 'BLOCK', reason: d.reason || FAILSAFE_MESSAGE };
   }
 
+  /* Underline tone per span: high-risk labels read as blocked (safety
+   * orange), everything else as review (amber). */
+  function spanTone(span) {
+    var label = String((span && span.label) || '');
+    if (/pass|secret|key|token|credential|ssn|card number/i.test(label)) return 'block';
+    return 'review';
+  }
+
   var DEBOUNCE_MS = 400;
+  var NOTICE_TIMEOUT_MS = 15000;
   var state = {
     adapter: null,
     editor: null,
@@ -104,156 +123,326 @@
     });
   }
 
-  /* ---------- overlay (closed shadow root) ---------- */
-  var overlayHost = null, overlayShadow = null, overlayInner = null;
-  var hoverCard = null, bannerBar = null, attachBadge = null;
+  /* ---------- closed shadow root: overlay + cards + badge ---------- */
+  var overlayHost = null, overlayShadow = null;
+  var mirrorBox = null, mirrorInner = null;
+  var card = null, cardBar = null, cardTitle = null, cardClose = null;
+  var cardBody = null, cardBtns = null;
+  var badge = null;
+  var cardMode = null; // 'hover' | 'notice' | null
+  var cardAnchor = null; // last anchor rect for repositioning notices
+  var hideTimer = null, noticeTimer = null;
+
+  var SHADOW_CSS =
+    '.sf-box{position:absolute;display:none;overflow:hidden;pointer-events:none;}' +
+    '.sf-mirror{width:100%;height:100%;overflow:hidden;color:transparent;pointer-events:none;' +
+    'white-space:pre-wrap;word-wrap:break-word;box-sizing:border-box;}' +
+    '.sf-mirror u{pointer-events:auto;cursor:help;' +
+    'text-decoration-thickness:2px;text-underline-offset:3px;}' +
+    '.sf-mirror u[data-tone="review"]{text-decoration:underline wavy #b97f00;background:rgba(185,127,0,.10);}' +
+    '.sf-mirror u[data-tone="block"]{text-decoration:underline wavy #d9480f;background:rgba(217,72,15,.12);}' +
+    '.sf-card{position:absolute;display:none;min-width:220px;max-width:300px;' +
+    'pointer-events:auto;background:#f4f1e8;color:#1a1a1a;border:2px solid #1a1a1a;' +
+    'box-shadow:4px 4px 0 rgba(0,0,0,.35);font:13px/1.45 "Segoe UI",system-ui,Tahoma,Verdana,sans-serif;}' +
+    '.sf-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;' +
+    'padding:4px 4px 4px 8px;font-weight:700;border-bottom:2px solid #1a1a1a;}' +
+    '.sf-bar[data-tone="block"]{background:#d9480f;color:#fff;}' +
+    '.sf-bar[data-tone="review"]{background:#e8a800;color:#1a1a1a;}' +
+    '.sf-bar[data-tone="allow"]{background:#2f6f9f;color:#fff;}' +
+    '.sf-x{flex:none;cursor:pointer;border:2px solid currentColor;background:transparent;color:inherit;' +
+    'font:inherit;line-height:1;padding:0 6px;}' +
+    '.sf-cbody{padding:8px;}' +
+    '.sf-cbtns{display:flex;gap:8px;padding:0 8px 8px;}' +
+    '.sf-cbtns button{flex:1;cursor:pointer;color:#1a1a1a;background:#e8e2d2;border:2px solid #1a1a1a;' +
+    'box-shadow:inset -2px -2px 0 #a39d8a,inset 2px 2px 0 #fffdf6;padding:6px 8px;font:inherit;}' +
+    '.sf-cbtns button:active{box-shadow:inset 2px 2px 0 #a39d8a;}' +
+    '.sf-badge{position:absolute;display:none;pointer-events:auto;max-width:70vw;' +
+    'background:#f7e6ad;color:#1a1a1a;border:2px solid #1a1a1a;padding:4px 8px;' +
+    'font:12px/1.4 "Segoe UI",system-ui,Tahoma,Verdana,sans-serif;}';
 
   function ensureOverlay() {
     if (overlayHost) return;
     overlayHost = document.createElement('div');
     overlayHost.setAttribute('data-sf', 'overlay');
-    overlayHost.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;display:none;overflow:hidden;';
+    overlayHost.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;' +
+      'z-index:2147483646;pointer-events:none;margin:0;padding:0;';
     document.documentElement.appendChild(overlayHost);
     overlayShadow = overlayHost.attachShadow({ mode: 'closed' });
     var style = document.createElement('style');
-    style.textContent =
-      '.sf-mirror{white-space:pre-wrap;word-wrap:break-word;color:transparent;pointer-events:none;}' +
-      '.sf-mirror u{text-decoration:underline wavy #e5484d;text-decoration-thickness:2px;text-underline-offset:3px;background:rgba(229,72,77,.12);pointer-events:auto;cursor:help;}';
+    style.textContent = SHADOW_CSS;
     overlayShadow.appendChild(style);
-    overlayInner = document.createElement('div');
-    overlayInner.className = 'sf-mirror';
-    overlayShadow.appendChild(overlayInner);
+    mirrorBox = document.createElement('div');
+    mirrorBox.className = 'sf-box';
+    mirrorInner = document.createElement('div');
+    mirrorInner.className = 'sf-mirror';
+    mirrorInner.setAttribute('aria-hidden', 'true');
+    mirrorBox.appendChild(mirrorInner);
+    overlayShadow.appendChild(mirrorBox);
+    badge = document.createElement('div');
+    badge.className = 'sf-badge';
+    badge.setAttribute('role', 'status');
+    badge.textContent = '\u26a0 Attachment present \u2014 files are not scanned, only this warning is shown.';
+    overlayShadow.appendChild(badge);
+    card = document.createElement('div');
+    card.className = 'sf-card';
+    card.setAttribute('tabindex', '-1');
+    card.setAttribute('role', 'dialog');
+    cardBar = document.createElement('div');
+    cardBar.className = 'sf-bar';
+    cardBar.setAttribute('data-tone', 'review');
+    cardTitle = document.createElement('span');
+    cardClose = document.createElement('button');
+    cardClose.className = 'sf-x';
+    cardClose.setAttribute('type', 'button');
+    cardClose.setAttribute('aria-label', 'Close');
+    cardClose.textContent = '\u00d7';
+    cardClose.addEventListener('click', hideCard);
+    cardBar.appendChild(cardTitle);
+    cardBar.appendChild(cardClose);
+    cardBody = document.createElement('div');
+    cardBody.className = 'sf-cbody';
+    cardBtns = document.createElement('div');
+    cardBtns.className = 'sf-cbtns';
+    card.appendChild(cardBar);
+    card.appendChild(cardBody);
+    card.appendChild(cardBtns);
+    card.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') { ev.stopPropagation(); hideCard(); }
+    });
+    overlayShadow.appendChild(card);
   }
 
-  function positionOverlay() {
-    if (!state.editor || !overlayHost) return;
-    var r = state.editor.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) { overlayHost.style.display = 'none'; return; }
+  /* Copy the editor's text metrics so the mirror lines up exactly. */
+  function syncMirrorStyle() {
+    if (!state.editor || !mirrorInner) return;
     var cs = getComputedStyle(state.editor);
-    overlayHost.style.display = 'block';
-    overlayHost.style.left = (r.left + window.scrollX) + 'px';
-    overlayHost.style.top = (r.top + window.scrollY) + 'px';
-    overlayHost.style.width = r.width + 'px';
-    overlayHost.style.height = r.height + 'px';
-    overlayInner.style.font = cs.font;
-    overlayInner.style.padding = cs.padding;
-    overlayInner.style.lineHeight = cs.lineHeight;
-    overlayInner.style.letterSpacing = cs.letterSpacing;
+    var props = ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight',
+      'letterSpacing', 'wordSpacing', 'textTransform', 'textIndent', 'textAlign',
+      'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+      'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth'];
+    for (var i = 0; i < props.length; i++) {
+      try { mirrorInner.style[props[i]] = cs[props[i]]; } catch (e) { /* ignore */ }
+    }
+    mirrorInner.style.borderStyle = 'solid';
+    mirrorInner.style.borderColor = 'transparent';
+    var ws = cs.whiteSpace;
+    mirrorInner.style.whiteSpace = (ws && ws.indexOf('pre') === 0) ? ws : 'pre-wrap';
+  }
+
+  function syncOverlay() {
+    ensureOverlay();
+    if (!state.editor || !document.contains(state.editor)) {
+      mirrorBox.style.display = 'none';
+      return;
+    }
+    var r = state.editor.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) { mirrorBox.style.display = 'none'; return; }
+    mirrorBox.style.display = 'block';
+    mirrorBox.style.left = r.left + 'px';
+    mirrorBox.style.top = r.top + 'px';
+    mirrorBox.style.width = r.width + 'px';
+    mirrorBox.style.height = r.height + 'px';
+    syncMirrorStyle();
+    try {
+      mirrorInner.scrollTop = state.editor.scrollTop || 0;
+      mirrorInner.scrollLeft = state.editor.scrollLeft || 0;
+    } catch (e) { /* ignore */ }
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   function renderOverlay() {
     ensureOverlay();
     if (!state.editor || !state.spans.length) {
-      if (overlayHost) overlayHost.style.display = 'none';
+      mirrorBox.style.display = 'none';
       return;
     }
     var text = editorText(state.editor);
-    var ranges = toRanges(state.spans.map(function (s, i) {
-      return { start: s.start, end: s.end, idx: i };
-    }), text.length).map(function (r) { return r; });
-    // Pair ranges back to span metadata by overlap.
-    positionOverlay();
+    var ranges = toRanges(state.spans.map(function (s) {
+      return { start: s.start, end: s.end };
+    }), text.length);
+    syncOverlay();
     var html = '', pos = 0, k;
-    var esc = function (t) {
-      return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    };
     var sorted = ranges.slice().sort(function (a, b) { return a.start - b.start; });
     for (k = 0; k < sorted.length; k++) {
       var r = sorted[k];
       if (r.start < pos) continue;
-      // Skip ranges the user ignored.
       var isIgnored = state.ignored.some(function (g) { return r.start >= g.start && r.end <= g.end; });
-      html += esc(text.slice(pos, r.start));
+      html += escHtml(text.slice(pos, r.start));
       if (isIgnored) {
-        html += esc(text.slice(r.start, r.end));
+        html += escHtml(text.slice(r.start, r.end));
       } else {
         var meta = null;
         for (var m = 0; m < state.spans.length; m++) {
           var sp = state.spans[m];
           if (sp.start < r.end && sp.end > r.start) { meta = sp; break; }
         }
-        html += '<u data-sf-idx="' + (meta ? state.spans.indexOf(meta) : -1) + '">' +
-          esc(text.slice(r.start, r.end)) + '</u>';
+        var idx = meta ? state.spans.indexOf(meta) : -1;
+        var tone = meta ? spanTone(meta) : 'review';
+        html += '<u tabindex="0" data-sf-idx="' + idx + '" data-tone="' + tone + '">' +
+          escHtml(text.slice(r.start, r.end)) + '</u>';
       }
       pos = r.end;
     }
-    html += esc(text.slice(pos));
-    overlayInner.innerHTML = html;
-    var underlines = overlayShadow.querySelectorAll('u');
+    html += escHtml(text.slice(pos));
+    mirrorInner.innerHTML = html;
+    var underlines = mirrorInner.querySelectorAll('u');
     underlines.forEach(function (u) {
-      u.addEventListener('mouseenter', function () {
+      var open = function () {
         var idx = Number(u.getAttribute('data-sf-idx'));
         showHoverCard(u, state.spans[idx]);
+      };
+      u.addEventListener('mouseenter', open);
+      u.addEventListener('focus', open);
+      u.addEventListener('mouseleave', scheduleHideCard);
+      u.addEventListener('blur', scheduleHideCard);
+      u.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape') { ev.stopPropagation(); hideCard(); }
+        else if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); }
       });
-      u.addEventListener('mouseleave', function () { scheduleHideCard(); });
     });
   }
 
-  /* ---------- hover card ---------- */
-  var hideTimer = null;
-  function ensureHoverCard() {
-    if (hoverCard) return hoverCard;
-    hoverCard = document.createElement('div');
-    hoverCard.setAttribute('data-sf', 'hovercard');
-    hoverCard.style.cssText = 'position:fixed;z-index:2147483647;display:none;max-width:280px;' +
-      'background:#1c1c1f;color:#f5f5f5;border:1px solid #444;border-radius:8px;' +
-      'padding:10px 12px;font:13px/1.4 system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.4);';
-    hoverCard.addEventListener('mouseenter', function () {
-      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-    });
-    hoverCard.addEventListener('mouseleave', function () { hideHoverCard(); });
-    document.documentElement.appendChild(hoverCard);
-    return hoverCard;
+  /* ---------- cards (all inside the closed shadow root) ---------- */
+  function sendButtonRect() {
+    try {
+      var btn = state.adapter ? qs(state.adapter.sendButton, document) : null;
+      if (btn && document.contains(btn)) return btn.getBoundingClientRect();
+    } catch (e) { /* ignore */ }
+    return null;
   }
-  function showHoverCard(anchor, span) {
-    if (!span) return;
-    var card = ensureHoverCard();
-    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-    var r = anchor.getBoundingClientRect();
-    card.innerHTML = '';
-    var title = document.createElement('div');
-    title.textContent = 'Found: ' + (span.label || 'sensitive detail');
-    title.style.fontWeight = '600';
-    title.style.marginBottom = '4px';
-    var sub = document.createElement('div');
-    sub.textContent = span.placeholder ? ('Placeholder: ' + span.placeholder) : 'This text looks sensitive.';
-    sub.style.opacity = '0.85';
-    sub.style.marginBottom = '8px';
-    var row = document.createElement('div');
-    row.style.display = 'flex';
-    row.style.gap = '8px';
-    var btnReplace = document.createElement('button');
-    btnReplace.textContent = 'Replace with placeholder';
-    var btnIgnore = document.createElement('button');
-    btnIgnore.textContent = 'Ignore';
-    [btnReplace, btnIgnore].forEach(function (b) {
-      b.style.cssText = 'flex:1;cursor:pointer;border:1px solid #666;background:#2d2d30;color:#fff;border-radius:6px;padding:6px 8px;';
-    });
-    btnReplace.addEventListener('click', function () {
-      replaceSpanWithPlaceholder(span);
-      hideHoverCard();
-    });
-    btnIgnore.addEventListener('click', function () {
-      state.ignored.push({ start: span.start, end: span.end });
-      hideHoverCard();
-      renderOverlay();
-    });
-    row.appendChild(btnReplace);
-    row.appendChild(btnIgnore);
-    card.appendChild(title);
-    card.appendChild(sub);
-    card.appendChild(row);
+
+  function rectsOverlap(a, b) {
+    return a && b && a.left < b.right && a.right > b.left &&
+      a.top < b.bottom && a.bottom > b.top;
+  }
+
+  function placeCard(anchorRect) {
+    // Measure first, then park the card clear of the send button.
+    card.style.visibility = 'hidden';
     card.style.display = 'block';
-    card.style.left = Math.min(window.innerWidth - 296, r.left + window.scrollX) + 'px';
-    card.style.top = (r.bottom + window.scrollY + 6) + 'px';
+    var w = card.offsetWidth || 260, h = card.offsetHeight || 120;
+    var x = Math.max(8, Math.min(window.innerWidth - w - 8, anchorRect.left));
+    var y = anchorRect.top - h - 8;
+    if (y < 8) y = anchorRect.bottom + 8;
+    var btn = sendButtonRect();
+    var guess = { left: x, right: x + w, top: y, bottom: y + h };
+    if (rectsOverlap(guess, btn)) {
+      var below = anchorRect.bottom + 8;
+      if (!rectsOverlap({ left: x, right: x + w, top: below, bottom: below + h }, btn)) {
+        y = below;
+      } else {
+        x = Math.max(8, (btn.left || 0) - w - 8);
+        guess = { left: x, right: x + w, top: y, bottom: y + h };
+        if (rectsOverlap(guess, btn)) y = (btn.bottom || 0) + 8;
+      }
+    }
+    y = Math.max(8, Math.min(window.innerHeight - h - 8, y));
+    card.style.left = x + 'px';
+    card.style.top = y + 'px';
+    card.style.visibility = '';
   }
-  function scheduleHideCard() {
-    if (hideTimer) clearTimeout(hideTimer);
-    hideTimer = setTimeout(hideHoverCard, 350);
+
+  function showCard(opts) {
+    ensureOverlay();
+    hideCard(true);
+    cardMode = opts.mode || 'notice';
+    cardAnchor = opts.anchor || null;
+    cardBar.setAttribute('data-tone', opts.tone || 'review');
+    cardTitle.textContent = opts.title || 'Shadowfenced';
+    card.setAttribute('aria-label', opts.title || 'Shadowfenced');
+    cardBody.innerHTML = '';
+    if (opts.bodyEl) cardBody.appendChild(opts.bodyEl);
+    else cardBody.textContent = opts.body || '';
+    cardBtns.innerHTML = '';
+    (opts.buttons || []).forEach(function (def) {
+      var b = document.createElement('button');
+      b.setAttribute('type', 'button');
+      b.textContent = def.label;
+      b.addEventListener('click', function () {
+        if (def.keepOpen !== true) hideCard();
+        if (def.onClick) def.onClick();
+      });
+      cardBtns.appendChild(b);
+    });
+    cardBtns.style.display = (opts.buttons && opts.buttons.length) ? '' : 'none';
+    var anchor = cardAnchor || { left: window.innerWidth / 2 - 130, top: window.innerHeight / 2, bottom: window.innerHeight / 2 };
+    placeCard(anchor);
+    card.style.display = 'block';
+    try { card.focus(); } catch (e) { /* ignore */ }
+    if (cardMode === 'notice') {
+      if (noticeTimer) clearTimeout(noticeTimer);
+      noticeTimer = setTimeout(hideCard, NOTICE_TIMEOUT_MS);
+    }
   }
-  function hideHoverCard() {
+
+  function hideCard(silent) {
     if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-    if (hoverCard) hoverCard.style.display = 'none';
+    if (noticeTimer && !silent) { clearTimeout(noticeTimer); noticeTimer = null; }
+    else if (noticeTimer && silent) { clearTimeout(noticeTimer); noticeTimer = null; }
+    if (!card || card.style.display === 'none') { cardMode = null; return; }
+    var stealBack = false;
+    try { stealBack = card.contains(document.activeElement); } catch (e) { stealBack = false; }
+    card.style.display = 'none';
+    cardMode = null;
+    cardAnchor = null;
+    if (stealBack && state.editor && document.contains(state.editor)) {
+      try { state.editor.focus(); } catch (e2) { /* ignore */ }
+    }
+  }
+
+  function scheduleHideCard() {
+    if (cardMode !== 'hover') return;
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(function () { if (cardMode === 'hover') hideCard(); }, 300);
+  }
+
+  function showHoverCard(anchorEl, span) {
+    if (!span || cardMode === 'notice') return;
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    var label = span.label || 'sensitive detail';
+    var text = editorText(state.editor);
+    var match = '';
+    try { match = text.slice(Math.max(0, span.start), Math.max(0, span.end)); } catch (e) { match = ''; }
+    if (match.length > 80) match = match.slice(0, 80) + '\u2026';
+    var body = document.createElement('div');
+    var what = document.createElement('div');
+    what.textContent = match ? ('"' + match + '" looks sensitive.') : 'This text looks sensitive.';
+    var sub = document.createElement('div');
+    sub.textContent = span.placeholder ? ('Suggested placeholder: ' + span.placeholder) : '';
+    body.appendChild(what);
+    if (span.placeholder) body.appendChild(sub);
+    // Hover card follows the underline, so anchor on its rect.
+    var r = anchorEl.getBoundingClientRect();
+    cardMode = 'hover';
+    showCard({
+      mode: 'hover',
+      tone: spanTone(span),
+      title: 'Found: ' + label,
+      bodyEl: body,
+      anchor: r,
+      buttons: [
+        {
+          label: 'Replace with placeholder',
+          onClick: function () { replaceSpanWithPlaceholder(span); }
+        },
+        {
+          label: 'Ignore',
+          onClick: function () {
+            state.ignored.push({ start: span.start, end: span.end });
+            renderOverlay();
+          }
+        }
+      ]
+    });
+    cardMode = 'hover';
+    // Hovering the card itself keeps it open.
+    card.onmouseenter = function () {
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    };
+    card.onmouseleave = function () { scheduleHideCard(); };
   }
 
   function replaceSpanWithPlaceholder(span) {
@@ -266,59 +455,13 @@
     scheduleScan();
   }
 
-  /* ---------- banner / notices ---------- */
-  function ensureBanner() {
-    if (bannerBar) return bannerBar;
-    bannerBar = document.createElement('div');
-    bannerBar.setAttribute('data-sf', 'banner');
-    bannerBar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:2147483647;' +
-      'display:none;max-width:min(560px,90vw);background:#1c1c1f;color:#fff;border:1px solid #555;' +
-      'border-radius:10px;padding:10px 14px;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.5);';
-    document.documentElement.appendChild(bannerBar);
-    return bannerBar;
-  }
-  function showBanner(html, buttons) {
-    var bar = ensureBanner();
-    bar.innerHTML = '';
-    var msg = document.createElement('span');
-    msg.innerHTML = html;
-    bar.appendChild(msg);
-    (buttons || []).forEach(function (def) {
-      var b = document.createElement('button');
-      b.textContent = def.label;
-      b.style.cssText = 'margin-left:8px;cursor:pointer;border:1px solid #777;background:#2d2d30;color:#fff;border-radius:6px;padding:5px 10px;';
-      b.addEventListener('click', function () { hideBanner(); if (def.onClick) def.onClick(); });
-      bar.appendChild(b);
-    });
-    var x = document.createElement('button');
-    x.textContent = '\u00d7';
-    x.setAttribute('aria-label', 'Dismiss');
-    x.style.cssText = 'margin-left:8px;cursor:pointer;border:none;background:transparent;color:#aaa;font-size:15px;';
-    x.addEventListener('click', hideBanner);
-    bar.appendChild(x);
-    bar.style.display = 'block';
-    clearTimeout(showBanner._t);
-    showBanner._t = setTimeout(hideBanner, 12000);
-  }
-  function hideBanner() { if (bannerBar) bannerBar.style.display = 'none'; }
-  function escHtml(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-
-  /* ---------- attachment badge (warning only) ---------- */
-  function ensureAttachBadge() {
-    if (attachBadge) return attachBadge;
-    attachBadge = document.createElement('div');
-    attachBadge.setAttribute('data-sf', 'attachbadge');
-    attachBadge.style.cssText = 'position:fixed;z-index:2147483646;display:none;background:#3a2b00;color:#ffd666;' +
-      'border:1px solid #8a6d00;border-radius:8px;padding:6px 10px;font:12px/1.4 system-ui,sans-serif;';
-    attachBadge.textContent = '\u26a0 Attachment present \u2014 files are not scanned, only this warning is shown.';
-    document.documentElement.appendChild(attachBadge);
-    return attachBadge;
-  }
+  /* ---------- attachment badge (warning only, inside shadow root) ---------- */
   function updateAttachBadge() {
-    if (!state.adapter || !state.editor) return;
-    var badge = ensureAttachBadge();
+    ensureOverlay();
+    if (!state.adapter || !state.editor || !document.contains(state.editor)) {
+      badge.style.display = 'none';
+      return;
+    }
     var found = null;
     for (var i = 0; i < state.adapter.attachment.length; i++) {
       try {
@@ -335,8 +478,8 @@
     if (found) {
       var r = state.editor.getBoundingClientRect();
       badge.style.display = 'block';
-      badge.style.left = (r.left + window.scrollX) + 'px';
-      badge.style.top = Math.max(0, (r.top + window.scrollY - 34)) + 'px';
+      badge.style.left = Math.max(8, r.left) + 'px';
+      badge.style.top = Math.max(8, r.top - 34) + 'px';
     } else {
       badge.style.display = 'none';
     }
@@ -363,6 +506,13 @@
   }
 
   /* ---------- send interception ---------- */
+  function editorAnchor() {
+    try {
+      if (state.editor && document.contains(state.editor)) return state.editor.getBoundingClientRect();
+    } catch (e) { /* ignore */ }
+    return { left: window.innerWidth / 2 - 130, top: 200, bottom: 200, right: window.innerWidth / 2 + 130 };
+  }
+
   function handleRedactResult(res) {
     var d = decide(res);
     if (d.action === 'ALLOW') {
@@ -376,19 +526,49 @@
       renderOverlay();
       state.redactedArmed = true; // user must press send again to send the safe text
       var n = d.count || 0;
-      showBanner(escHtml(n + ' detail' + (n === 1 ? '' : 's') + ' protected \u2014 press send again to send the protected text.'));
+      showCard({
+        tone: 'allow',
+        title: 'Shadowfenced',
+        body: n + ' detail' + (n === 1 ? '' : 's') +
+          ' protected \u2014 press send again to send the protected text.',
+        anchor: editorAnchor(),
+        buttons: [{ label: 'OK' }]
+      });
       return;
     }
     if (d.action === 'HOLD') {
-      showBanner(escHtml(d.reason || 'Please review before sending.'), [
-        { label: 'Send anyway', onClick: function () { state.redactedArmed = true; doSend(); } },
-        { label: 'Cancel', onClick: function () { /* stay; user edits */ } }
-      ]);
+      showCard({
+        tone: 'review',
+        title: 'Review before sending',
+        body: d.reason || 'Please review before sending.',
+        anchor: editorAnchor(),
+        buttons: [
+          { label: 'Send anyway', onClick: function () { state.redactedArmed = true; doSend(); } },
+          { label: 'Cancel' }
+        ]
+      });
       return;
     }
     // BLOCK (including fail-safe when the app is unreachable)
     var reason = d.reason || FAILSAFE_MESSAGE;
-    showBanner('<strong>Blocked \u2014 not sent.</strong> ' + escHtml(reason));
+    if (reason === FAILSAFE_MESSAGE) {
+      showCard({
+        tone: 'block',
+        title: "Shadowfenced isn't running",
+        body: 'Start the Shadowfenced app, then press send again. ' +
+          'Nothing was sent. ' + reason,
+        anchor: editorAnchor(),
+        buttons: [{ label: 'OK' }]
+      });
+      return;
+    }
+    showCard({
+      tone: 'block',
+      title: 'Blocked \u2014 not sent',
+      body: reason,
+      anchor: editorAnchor(),
+      buttons: [{ label: 'OK' }]
+    });
   }
 
   function requestSendCheck() {
@@ -465,7 +645,7 @@
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
     var node;
     while ((node = walker.nextNode())) {
-      if (node.nodeValue && node.nodeValue.indexOf('\u3010') !== -1) out.push(node);
+      if (node.nodeValue && node.nodeValue.indexOf('[') !== -1) out.push(node);
     }
     return out;
   }
@@ -482,7 +662,7 @@
     });
     if (!scopes.length) return;
     var texts = scopes.map(function (el) { return el.innerText || ''; }).join('\n');
-    if (texts.indexOf('\u3010') === -1) return; // no placeholders on screen
+    if (texts.indexOf('[') === -1) return; // no placeholders on screen
     sendToBg({ type: 'SF_REHYDRATE', text: texts, host: location.hostname }).then(function (res) {
       if (!res || !res.ok || !res.data || !res.data.replacements) return;
       var reps = res.data.replacements; // [{placeholder, value}]
@@ -499,7 +679,7 @@
             var frag = document.createElement('span');
             frag.textContent = v;
             frag.setAttribute('data-sf', 'rehydrated');
-            frag.style.cssText = 'background:rgba(90,140,255,.15);border-bottom:1px dotted #5a8cff;';
+            frag.style.cssText = 'background:rgba(185,127,0,.15);border-bottom:2px dotted #b97f00;';
             node.parentNode.replaceChild(frag, node);
           }
         });
@@ -513,7 +693,8 @@
     state.editor = editor;
     state.ignored = [];
     state.spans = [];
-    editor.addEventListener('input', scheduleScan);
+    editor.addEventListener('input', function () { syncOverlay(); scheduleScan(); });
+    editor.addEventListener('scroll', syncOverlay);
     scheduleScan();
     renderOverlay();
     updateAttachBadge();
@@ -534,14 +715,37 @@
     if (editor && editor !== state.editor) attachToEditor(editor);
     if (state.editor && !document.contains(state.editor)) {
       state.editor = null;
-      if (overlayHost) overlayHost.style.display = 'none';
+      if (mirrorBox) mirrorBox.style.display = 'none';
     }
-    if (state.editor) { positionOverlay(); updateAttachBadge(); }
+    if (state.editor) {
+      syncOverlay();
+      updateAttachBadge();
+      if (cardMode === 'notice' && cardAnchor) {
+        // Follow the composer; hover cards hide instead of chasing.
+        cardAnchor = editorAnchor();
+        placeCard(cardAnchor);
+      }
+    }
   }
 
   bindSendInterception();
   setInterval(tick, 1500);
   tick();
-  window.addEventListener('resize', positionOverlay);
-  window.addEventListener('scroll', positionOverlay, true);
+  window.addEventListener('resize', function () {
+    syncOverlay();
+    if (cardMode === 'hover') hideCard();
+    else if (cardMode === 'notice' && cardAnchor) {
+      cardAnchor = editorAnchor();
+      placeCard(cardAnchor);
+    }
+  });
+  // Scrolling moves the composer: keep the mirror glued, park hover away.
+  window.addEventListener('scroll', function () {
+    syncOverlay();
+    if (cardMode === 'hover') hideCard();
+    else if (cardMode === 'notice' && cardAnchor) {
+      cardAnchor = editorAnchor();
+      placeCard(cardAnchor);
+    }
+  }, true);
 })();

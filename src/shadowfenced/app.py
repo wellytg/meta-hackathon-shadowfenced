@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -138,14 +138,82 @@ def get_registry() -> CanaryRegistry:
 
 def reset_state() -> None:
     """Forget cached policy/registry (tests only)."""
-    global _POLICY, _REGISTRY
+    global _POLICY, _REGISTRY, _IMAGE_REDACTION_OVERRIDE
     _POLICY = None
     _REGISTRY = None
+    _IMAGE_REDACTION_OVERRIDE = None
 
 
 # In-memory default provider override set by POST /api/provider
 # (reset between tests via reset_provider_override()).
 _PROVIDER_OVERRIDE: str | None = None
+
+# In-memory image-redaction choice from the consent card
+# ("on" = Glimmer + cloud SAM masks, "local" = Glimmer + local box fill,
+# "off" = ask first). Set by POST /api/image-redaction/consent, default
+# from SF_IMAGE_REDACTION ("off"); reset between tests via reset_state().
+_IMAGE_REDACTION_OVERRIDE: str | None = None
+
+
+def image_redaction_mode(settings: Settings | None = None) -> str:
+    """Effective image-redaction mode: consent override, else settings."""
+    if _IMAGE_REDACTION_OVERRIDE in ("on", "local", "off"):
+        return _IMAGE_REDACTION_OVERRIDE
+    try:
+        cfg = settings or get_settings()
+    except Exception:
+        return "off"
+    mode = (cfg.image_redaction or "off").strip().lower()
+    return mode if mode in ("on", "local") else "off"
+
+
+def reset_image_redaction() -> None:
+    """Forget the consent-card override (tests only)."""
+    global _IMAGE_REDACTION_OVERRIDE
+    _IMAGE_REDACTION_OVERRIDE = None
+
+# --- WARN confirmations (T37) -------------------------------------------------
+# WARN decisions send nothing upstream. The warning (banner, combination,
+# inferred labels, generalised option) is returned with the decision id;
+# a follow-up POST /api/warns/{id}/confirm with the same id forwards
+# either the original text ("send_anyway") or the generalised text
+# ("send_generalised"). Entries expire after 15 minutes like holds/uploads.
+import threading as _threading
+
+_WARNS: dict[str, dict[str, Any]] = {}
+_WARNS_LOCK = _threading.Lock()
+WARN_TTL_S = 15 * 60
+
+
+def _warn_store_save(
+    decision: "engine.Decision", text: str,
+    messages: list[Any], provider: str | None,
+) -> None:
+    record = {
+        "decision": decision,
+        "text": text,
+        "messages": [m for m in messages if isinstance(m, dict)],
+        "provider": provider,
+        "created_at": time.time(),
+    }
+    with _WARNS_LOCK:
+        _WARNS[decision.decision_id] = record
+
+
+def _warn_store_load(decision_id: str) -> dict[str, Any] | None:
+    with _WARNS_LOCK:
+        record = _WARNS.get(decision_id)
+        if record is None:
+            return None
+        if time.time() - record.get("created_at", 0) > WARN_TTL_S:
+            _WARNS.pop(decision_id, None)
+            return None
+        return record
+
+
+def _warn_store_clear() -> None:
+    with _WARNS_LOCK:
+        _WARNS.clear()
 
 
 def reset_provider_override() -> None:
@@ -255,12 +323,15 @@ def extract_user_text(messages: list[Any]) -> tuple[str, bool]:
 
 
 def _shadowfenced_field(decision: engine.Decision) -> dict[str, Any]:
-    return {
+    field: dict[str, Any] = {
         "decision": decision.decision,
         "decision_id": decision.decision_id,
         "resolved_tier": decision.resolved_tier,
         "latency_ms": decision.latency_ms,
     }
+    if decision.decision == "WARN":
+        field["warning"] = _warn_payload(decision)
+    return field
 
 
 def _forward_messages(
@@ -396,7 +467,7 @@ def _gate_chat_messages(
 
     policy = get_policy()
     registry = get_registry()
-    order = {"ALLOW": 0, "REDACT": 1, "HOLD": 2, "BLOCK": 3}
+    order = {"ALLOW": 0, "WARN": 1, "REDACT": 2, "HOLD": 3, "BLOCK": 4}
 
     roles: list[str] = []
     raw_messages: list[Any] = list(messages)
@@ -464,12 +535,16 @@ def _gate_chat_messages(
     arg_redacted_all: list[dict[int, str]] = [{} for _ in raw_messages]
     content_redacted_all: list[list[str]] = [[] for _ in raw_messages]
 
-    for record in records:
+    for rec_index, record in enumerate(records):
         text = record["text"]
         info_index = record["info"]
         role = roles[info_index]
         hit = keyguard_module.find_in_text(text)
-        string_decision = engine.gate(text, policy, registry, mode="send")
+        prior_texts = [r["text"] for r in records[:rec_index]]
+        string_decision = engine.gate(
+            text, policy, registry, mode="send",
+            conversation=prior_texts or None,
+        )
         latency_total += float(
             (string_decision.latency_ms or {}).get("total", 0.0)
         )
@@ -484,7 +559,7 @@ def _gate_chat_messages(
             )
             reasons_all.append(f"{variable} appeared in a {role} message")
             outcome = "BLOCK"
-        elif outcome == "REDACT":
+        elif outcome in ("REDACT", "WARN"):
             redacted = string_decision.sent_text or ""
             for placeholder, value in (
                 string_decision.placeholders or {}
@@ -515,6 +590,7 @@ def _gate_chat_messages(
         if order[outcome] > order[worst]:
             worst = outcome
         reasons_all.extend(string_decision.reasons)
+        record["evidence"] = dict(string_decision.evidence or {})
         for span in string_decision.spans:
             shifted = dataclasses.replace(
                 span,
@@ -571,6 +647,11 @@ def _gate_chat_messages(
                 "role": key_hits[0][1],
                 "left_machine": False,
             }
+        for record in records:
+            record_evidence = record.get("evidence") or {}
+            for key in ("reid", "person_search"):
+                if key in record_evidence and key not in evidence:
+                    evidence[key] = record_evidence[key]
         return (
             engine.Decision(
                 decision="BLOCK",
@@ -615,6 +696,12 @@ def _gate_chat_messages(
                 evidence={
                     "proven_by_code": proven_ids,
                     "pending": pending,
+                    **{
+                        key: (record.get("evidence") or {})[key]
+                        for record in records
+                        for key in ("reid", "person_search")
+                        if key in (record.get("evidence") or {})
+                    },
                 },
                 status="reviewing",
             ),
@@ -633,6 +720,36 @@ def _gate_chat_messages(
                     arg_redacted_all[index],
                 )
             )
+    def _merged_warn_evidence() -> dict[str, Any]:
+        merged_evidence: dict[str, Any] = {}
+        for record in records:
+            evidence = record.get("evidence") or {}
+            for key in ("reid", "person_search", "doc_type",
+                        "doc_warning", "doc_signals"):
+                if key in evidence and key not in merged_evidence:
+                    merged_evidence[key] = evidence[key]
+        return merged_evidence
+
+    if worst == "WARN":
+        if merged:
+            save_mapping(decision_id, merged)
+        return (
+            engine.Decision(
+                decision="WARN",
+                decision_id=decision_id,
+                spans=spans_all,
+                sent_text="\n".join(
+                    record.get("redacted") or "" for record in records
+                ),
+                placeholders=dict(merged),
+                resolved_tier=1,
+                latency_ms=latency_ms,
+                reasons=reasons_all,
+                evidence=_merged_warn_evidence(),
+            ),
+            items,
+            full,
+        )
     if worst == "REDACT":
         save_mapping(decision_id, merged)
         return (
@@ -647,6 +764,7 @@ def _gate_chat_messages(
                 resolved_tier=1,
                 latency_ms=latency_ms,
                 reasons=reasons_all,
+                evidence=_merged_warn_evidence(),
             ),
             items,
             full,
@@ -732,6 +850,21 @@ def health() -> dict[str, Any]:
     return {"status": "ok", "live_hints": get_settings().live_hints}
 
 
+@app.get("/api/health/components")
+def health_components() -> dict[str, Any]:
+    """Per-component status from cheap local checks only.
+
+    Never calls a paid API and never returns secrets: the Meta and
+    Voice checks report key presence only, and the Ollama check only
+    asks loopback ``/api/version`` and ``/api/tags``. Tests inject an
+    httpx transport via ``app.state.components_transport``.
+    """
+    from . import health as health_module
+
+    transport = getattr(app.state, "components_transport", None)
+    return {"components": health_module.collect_components(transport=transport)}
+
+
 @app.get("/api/hosted")
 def hosted_status() -> dict[str, Any]:
     """Hosted demo flag plus the public-demo banner (shown when hosted)."""
@@ -788,6 +921,14 @@ def scan(request: ScanRequest) -> dict[str, Any]:
                 "ms": 0.0,
             }
         )
+    try:
+        reid_payload = _reid_scan_payload(request.text, trace)
+    except Exception:
+        reid_payload = {
+            "score": 0, "combination": [], "outcome": "OK",
+            "banner": "", "generalised_text": "",
+            "findings": [],
+        }
     trace.append(
         {
             "step": "scan.complete",
@@ -799,8 +940,52 @@ def scan(request: ScanRequest) -> dict[str, Any]:
     )
     return {
         "spans": [span_to_dict(s) for s in spans],
+        "reid": reid_payload,
         "latency_ms": latency_ms,
         "trace": trace,
+    }
+
+
+def _reid_scan_payload(
+    text: str, trace_out: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Re-identification findings for the live composer (no raw values).
+
+    Returns score, kind combination, outcome, banner, generalised text
+    plus offset-only findings ``[{kind, start, end}]`` (UTF-16 units, the
+    scan contract) so the composer can underline combinations as you
+    type. Raw values never leave this payload, the trace, or the log.
+    """
+    from . import reid as reid_module
+    from . import tier1 as tier1_module
+
+    findings = tier1_module.scan_reid(text, trace_out=trace_out)
+    result = reid_module.assess(
+        text, current_findings=findings, generalise_offer=True,
+    )
+    reid_module.trace_combine(
+        trace_out, result.score, result.combination, result.outcome,
+    )
+    from .spans import cp_to_utf16 as _cp_to_utf16
+    offset_findings: list[dict[str, Any]] = []
+    for item in findings:
+        try:
+            start, end = item.get("span", (0, 0))
+            kind = str(item.get("kind", ""))
+            offset_findings.append({
+                "kind": kind,
+                "start": _cp_to_utf16(text, int(start)),
+                "end": _cp_to_utf16(text, int(end)),
+            })
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return {
+        "score": result.score,
+        "combination": list(result.combination),
+        "outcome": result.outcome,
+        "banner": result.banner,
+        "generalised_text": result.generalised_text,
+        "findings": offset_findings,
     }
 
 
@@ -902,9 +1087,11 @@ def send(body: SendRequest) -> dict[str, Any]:
         )
         return _send_response(decision, None, [], [], provider, trace)
     _log_decision(decision, text)
-    if decision.decision in ("BLOCK", "HOLD"):
+    if decision.decision in ("BLOCK", "HOLD", "WARN"):
         if decision.decision == "HOLD":
             _register_hold(decision, text, body.messages, provider)
+        if decision.decision == "WARN":
+            _warn_store_save(decision, text, body.messages, provider)
         return _send_response(decision, None, [], [], provider, trace)
     try:
         answer = _send_upstream(
@@ -940,6 +1127,12 @@ def _file_sections(file_ids: list[str]) -> tuple[list[str], str | None]:
         record = UPLOADS.load(file_id)
         if record is None:
             return [], f"unknown or expired file {file_id}"
+        if record.kind == "image":
+            if record.status == "unscannable" or not record.image_png:
+                return [], f"file {record.name} is unscannable and needs review"
+            note = record.text.strip() or f"({record.regions} regions redacted)"
+            sections.append(f"\nAttached image {record.name}:\n{note}")
+            continue
         if record.status == "unscannable" or not record.text.strip():
             return [], f"file {record.name} is unscannable and needs review"
         sections.append(f"\nAttached file {record.name}:\n{record.text}")
@@ -956,7 +1149,10 @@ def _hold_for(decision: engine.Decision, reason: str) -> engine.Decision:
         resolved_tier=decision.resolved_tier,
         latency_ms=decision.latency_ms,
         reasons=[*decision.reasons, reason],
+        evidence=dict(decision.evidence or {}),
         status=decision.status,
+        doc_type=decision.doc_type,
+        doc_warning=decision.doc_warning,
     )
 
 
@@ -993,9 +1189,33 @@ def _register_hold(
                     [m for m in messages if isinstance(m, dict)], provider
                 ),
                 meta_transport=_transport(),
+                # Pin the log path now: the review thread may outlive
+                # this request and must not resolve it lazily later.
+                log_path=get_settings().log_path,
             )
     except Exception:
         pass
+
+
+def _warn_payload(decision: engine.Decision) -> dict[str, Any]:
+    """User-facing WARN details without raw values (banner, kinds, options)."""
+    evidence = decision.evidence or {}
+    reid = evidence.get("reid") or {}
+    person = evidence.get("person_search") or {}
+    banner = person.get("banner") or reid.get("banner") or engine.user_message(
+        decision
+    )
+    generalised = person.get("generalised_text") or reid.get(
+        "generalised_text"
+    ) or ""
+    return {
+        "banner": banner,
+        "combination": list(reid.get("combination") or []),
+        "inferred": list(person.get("inferred") or []),
+        "generalised_text": generalised,
+        "has_generalise_option": bool(generalised),
+        "confirm_url": f"/api/warns/{decision.decision_id}/confirm",
+    }
 
 
 def _send_response(
@@ -1029,21 +1249,37 @@ def _send_response(
     }
     if decision.decision == "HOLD":
         response["review_url"] = f"/api/holds/{decision.decision_id}"
+    if decision.decision == "WARN":
+        response["warn"] = _warn_payload(decision)
+        response["confirm_url"] = (
+            f"/api/warns/{decision.decision_id}/confirm"
+        )
     return response
 
 
 @app.post("/v1/chat/completions")
-def chat_completions(body: ChatRequest) -> Any:
+def chat_completions(
+    body: ChatRequest,
+    x_shadowfenced_accept_warn: str | None = Header(default=None),
+) -> Any:
     """OpenAI-compatible completions behind the Shadowfenced gate.
 
     Every forwarded message role (system, user, assistant, tool) and
     assistant tool-call arguments are gated, not only user messages.
     Messages forward in their original order with their original roles;
     redaction rewrites only the sensitive spans inside each message. A
-    BLOCK in any message blocks the request.
+    BLOCK in any message blocks the request. WARN proceeds only when
+    the client sets ``X-Shadowfenced-Accept-Warn: 1``; otherwise it
+    returns 409 with the warning, like a hold.
     """
     decision, redacted, text = _gate_chat_messages(body.messages)
     _log_decision(decision, text)
+    if decision.decision == "WARN":
+        accept_raw = (x_shadowfenced_accept_warn
+                      if isinstance(x_shadowfenced_accept_warn, str)
+                      else "")
+        if accept_raw.strip() != "1":
+            return _warn_response(decision)
     if decision.decision == "HOLD":
         if "non-text content parts need review" in decision.reasons:
             _register_hold(
@@ -1109,7 +1345,34 @@ def chat_completions(body: ChatRequest) -> Any:
     )
 
 
+def _warn_response(decision: engine.Decision) -> JSONResponse:
+    evidence: dict[str, Any] = {
+        "spans": [span_to_dict(s) for s in decision.spans],
+        "reasons": decision.reasons,
+    }
+    evidence.update(decision.evidence or {})
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error": {
+                "code": "shadowfenced_warn",
+                "type": "shadowfenced_warn",
+                "message": engine.user_message(decision),
+            },
+            "warning": _warn_payload(decision),
+            "evidence": evidence,
+            "shadowfenced": _shadowfenced_field(decision),
+        },
+        headers={"X-Shadowfenced-Decision": "WARN"},
+    )
+
+
 def _hold_response(decision: engine.Decision, message: str) -> JSONResponse:
+    evidence: dict[str, Any] = {
+        "spans": [span_to_dict(s) for s in decision.spans],
+        "reasons": decision.reasons,
+    }
+    evidence.update(decision.evidence or {})
     return JSONResponse(
         status_code=409,
         content={
@@ -1119,6 +1382,7 @@ def _hold_response(decision: engine.Decision, message: str) -> JSONResponse:
                 "message": message,
             },
             "review_url": f"/api/holds/{decision.decision_id}",
+            "evidence": evidence,
             "shadowfenced": _shadowfenced_field(decision),
         },
         headers={"X-Shadowfenced-Decision": "HOLD"},
@@ -1213,6 +1477,130 @@ def hold_rule(hold_id: str, body: RuleRequest) -> Any:
     )
 
 
+class WarnConfirmRequest(BaseModel):
+    choice: str = ""  # send_anyway | send_generalised
+
+
+def confirm_warn(decision_id: str, choice: str) -> dict[str, Any]:
+    """Confirm a WARN: forward the original or generalised text upstream.
+
+    Reuses the WARN decision id so the follow-up is tied to the warning
+    the user saw. ``send_anyway`` forwards the gated ``sent_text``
+    (redacted when placeholders exist); ``send_generalised`` forwards
+    the coarsened generalised text. Nothing is forwarded for any other
+    choice (422). The WARN mapping is consumed once.
+    """
+    record = _warn_store_load((decision_id or "").strip())
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "shadowfenced_unknown_warn",
+                "type": "shadowfenced_unknown_warn",
+                "message": f"unknown or expired warn {decision_id}",
+            },
+        )
+    decision = record["decision"]
+    if decision.decision != "WARN":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "shadowfenced_warn_resolved",
+                "type": "shadowfenced_warn_resolved",
+                "message": f"warn {decision_id} is already {decision.decision}",
+            },
+        )
+    mode = (choice or "").strip().lower()
+    if mode not in ("send_anyway", "send_generalised", "send-generalised",
+                    "sendanyway", "generalised", "generalized"):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "shadowfenced_bad_confirm",
+                "type": "shadowfenced_bad_confirm",
+                "message": "choice must be send_anyway or send_generalised",
+            },
+        )
+    evidence = decision.evidence or {}
+    reid = evidence.get("reid") or {}
+    person = evidence.get("person_search") or {}
+    generalised = person.get("generalised_text") or reid.get(
+        "generalised_text") or ""
+    provider = record.get("provider")
+    generalise_modes = ("send_generalised", "send-generalised",
+                        "generalised", "generalized")
+    send_decision = "WARN"
+    if mode in generalise_modes:
+        if not generalised:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "shadowfenced_no_generalise",
+                    "type": "shadowfenced_no_generalise",
+                    "message": "no generalised text for this warning",
+                },
+            )
+        messages = [{"role": "user", "content": generalised}]
+        send_decision = "WARN"
+        sent_text: str | None = generalised
+        placeholders: dict[str, str] = {}
+        mapping_id = decision.decision_id
+    else:
+        sent_text = decision.sent_text
+        placeholders = dict(decision.placeholders or {})
+        messages = _forward_messages(
+            record.get("messages") or [], sent_text, "REDACT"
+            if placeholders else None,
+        )
+        mapping_id = decision.decision_id
+    try:
+        answer = _send_upstream(messages, provider)
+    except UpstreamError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "shadowfenced_upstream",
+                "type": "shadowfenced_upstream",
+                "message": str(exc),
+            },
+        ) from exc
+    if placeholders:
+        rehydrated, highlights, unmatched = rehydrate(answer, placeholders)
+    else:
+        rehydrated, highlights, unmatched = answer, [], []
+    with _WARNS_LOCK:
+        _WARNS.pop(decision.decision_id, None)
+    confirmed = engine.Decision(
+        decision=send_decision,
+        decision_id=mapping_id,
+        spans=decision.spans,
+        sent_text=sent_text,
+        placeholders=placeholders,
+        resolved_tier=decision.resolved_tier,
+        latency_ms=dict(decision.latency_ms),
+        reasons=[*decision.reasons, f"user confirmed warn -> {mode}"],
+        evidence=dict(evidence),
+        status="complete",
+        doc_type=decision.doc_type,
+        doc_warning=decision.doc_warning,
+    )
+    try:
+        from . import ecs_log
+        ecs_log.append_decision(
+            get_settings().log_path, confirmed, record.get("text") or "")
+    except Exception:
+        pass
+    return _send_response(
+        confirmed, rehydrated, highlights, unmatched, provider, [],
+    )
+
+
+@app.post("/api/warns/{decision_id}/confirm")
+def warn_confirm(decision_id: str, body: WarnConfirmRequest) -> Any:
+    """Confirm a WARN decision: send anyway or send generalised."""
+    return confirm_warn(decision_id, body.choice)
+
+
 @app.get("/api/keyguard")
 def keyguard_status() -> dict[str, Any]:
     """Protected variable names and per-variable hit counts (no values)."""
@@ -1293,7 +1681,14 @@ def _handle_audio_upload(
             "doc_warning": None,
         }
     spans = tier1.scan(text, get_policy(), get_registry())
-    status = "flagged" if spans else "clean"
+    try:
+        audio_reid = _reid_scan_payload(text, None)
+    except Exception:
+        audio_reid = {"score": 0, "combination": [], "outcome": "OK",
+                      "banner": "", "generalised_text": "",
+                      "findings": []}
+    status = ("flagged" if spans or audio_reid.get("outcome") != "OK"
+              else "clean")
     record = UPLOADS.save(filename, "audio", text, status=status)
     summary: dict[str, int] = {}
     for span in spans:
@@ -1305,6 +1700,8 @@ def _handle_audio_upload(
         summary_text = ", ".join(engine.describe_placeholders(mapping))
         if not summary_text:
             summary_text = f"{len(spans)} possible issue(s) need review"
+    elif audio_reid.get("outcome") != "OK" and audio_reid.get("banner"):
+        summary_text = str(audio_reid["banner"])
     else:
         summary_text = "clean"
     return {
@@ -1314,17 +1711,147 @@ def _handle_audio_upload(
         "chars": len(text),
         "status": status,
         "spans": [span_to_dict(s) for s in spans],
+        "reid": audio_reid,
         "summary": summary,
         "summary_text": "Transcribed by Muse Voice · " + summary_text,
         **_doc_fields(text),
     }
 
 
-def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, settings: Settings | None = None) -> dict[str, Any]:
+#: Honest "clean" wording when Glimmer saw text but neither pass found
+#: anything sensitive (T55): an empty region answer must not mean "clean".
+HONEST_CLEAN_TEXT = "clean — checked by Muse Glimmer on this PC"
+
+
+def _handle_image_upload(filename: str, data: bytes, *, settings: Settings | None = None, glimmer_transport: Any | None = None, sam_transport: Any | None = None) -> dict[str, Any]:
+    """Redact one screenshot/photo, or ask for consent first (T43).
+
+    Hosted mode refuses (no local Glimmer). With redaction off, no
+    bytes are analysed or stored: the payload carries the consent
+    notice instead. Otherwise Glimmer finds regions locally, SAM 3.1
+    sharpens them to masks when enabled ("on"), boxes are filled when
+    SAM is off ("local") or fails, and only the redacted PNG is kept.
+    Any text Glimmer read goes through the Tier 1 detectors. Failures
+    store an ``unscannable`` record so the send path HOLDs.
+    """
+    from . import image_redact as image_redact_module
+    from . import tier1
+    from .extract import max_file_bytes
+
+    cfg = settings or get_settings()
+    if hosted_module.is_hosted():
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "shadowfenced_image_unavailable",
+                "type": "shadowfenced_image_unavailable",
+                "message": "image attachments are disabled in hosted demo mode",
+            },
+        )
+    mode = image_redaction_mode(cfg)
+    if mode == "off":
+        return {
+            "file_id": "",
+            "name": filename,
+            "kind": "image",
+            "chars": 0,
+            "status": "consent_required",
+            "consent_required": True,
+            "notice": image_redact_module.NOTICE_TEXT,
+            "choices": ["on", "local", "off"],
+            "spans": [],
+            "summary": {},
+            "summary_text": "image needs your choice before attaching",
+            "regions": 0,
+            "method": "none",
+            "doc_type": None,
+            "doc_warning": None,
+        }
+    if glimmer_transport is None:
+        glimmer_transport = getattr(app.state, "glimmer_transport", None)
+    if sam_transport is None:
+        sam_transport = getattr(app.state, "sam_transport", None)
+    try:
+        if len(data) > max_file_bytes():
+            raise FileTooLarge(f"file exceeds {max_file_bytes()} bytes")
+        redacted = image_redact_module.redact_image(
+            data,
+            settings=cfg,
+            glimmer_transport=glimmer_transport,
+            sam_transport=sam_transport,
+            sam_enabled=(mode == "on"),
+            policy=get_policy(),
+            registry=get_registry(),
+        )
+    except (FileTooLarge, image_redact_module.ImageRedactError) as exc:
+        record = UPLOADS.save(
+            filename, "image", "", status="unscannable",
+        )
+        return {
+            "file_id": record.file_id,
+            "name": filename,
+            "kind": "image",
+            "chars": 0,
+            "status": "unscannable",
+            "spans": [],
+            "summary": {},
+            "summary_text": "could not read image",
+            "error": str(exc),
+            "regions": 0,
+            "method": "none",
+            "doc_type": None,
+            "doc_warning": None,
+        }
+    text = "\n".join(redacted.texts)
+    spans = tier1.scan(text, get_policy(), get_registry())
+    status = "flagged" if spans else "clean"
+    record = UPLOADS.save(filename, "image", text, status=status)
+    record.image_png = redacted.png
+    record.regions = len(redacted.regions)
+    record.method = redacted.method
+    try:
+        record.thumbnail = image_redact_module.png_data_url(
+            image_redact_module.thumbnail_png(redacted.png)
+        )
+    except Exception:
+        record.thumbnail = ""
+    count = len(redacted.regions)
+    region_word = f"{count} region{'s' if count != 1 else ''} hidden"
+    summary: dict[str, int] = {}
+    for span in spans:
+        summary[span.cls] = summary.get(span.cls, 0) + 1
+    if spans:
+        from .redact import redact as _redact
+
+        _, mapping = _redact(text, [s for s in spans if s.status == "proven"])
+        extra = ", ".join(engine.describe_placeholders(mapping))
+        summary_text = region_word + (f" ({extra})" if extra else " (needs review)")
+    else:
+        summary_text = region_word if count else HONEST_CLEAN_TEXT if redacted.saw_text else "clean"
+    return {
+        "file_id": record.file_id,
+        "name": filename,
+        "kind": "image",
+        "chars": len(text),
+        "status": status,
+        "spans": [span_to_dict(s) for s in spans],
+        "summary": summary,
+        "summary_text": summary_text,
+        "regions": count,
+        "method": redacted.method,
+        "method_label": redacted.method_label,
+        "thumbnail": record.thumbnail,
+        "doc_type": None,
+        "doc_warning": None,
+    }
+
+
+def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, settings: Settings | None = None, glimmer_transport: Any | None = None, sam_transport: Any | None = None) -> dict[str, Any]:
     """Validate, extract, scan, and store one uploaded file.
 
     Audio files are transcribed by Muse Voice Transcribe first; the
-    transcript is then scanned like any other document.
+    transcript is then scanned like any other document. Images go
+    through the T43 redaction flow (consent, Glimmer, SAM 3.1).
 
     Returns the ``/api/upload`` payload. Raises ``HTTPException`` 415
     for an unsupported suffix; oversized or unparseable input stores an
@@ -1336,6 +1863,13 @@ def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, s
         if is_audio_file(filename):
             return _handle_audio_upload(
                 filename, data, transport=transport, settings=settings
+            )
+        from . import image_redact as image_redact_module
+        if image_redact_module.is_image_file(filename):
+            return _handle_image_upload(
+                filename, data, settings=settings,
+                glimmer_transport=glimmer_transport,
+                sam_transport=sam_transport,
             )
         kind, text = extract_text(filename, data)
     except UnsupportedType as exc:
@@ -1365,7 +1899,14 @@ def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, s
             "doc_warning": None,
         }
     spans = tier1.scan(text, get_policy(), get_registry())
-    status = "flagged" if spans else "clean"
+    try:
+        upload_reid = _reid_scan_payload(text, None)
+    except Exception:
+        upload_reid = {"score": 0, "combination": [], "outcome": "OK",
+                       "banner": "", "generalised_text": "",
+                       "findings": []}
+    status = ("flagged" if spans or upload_reid.get("outcome") != "OK"
+              else "clean")
     record = UPLOADS.save(filename, kind, text, status=status)
     summary: dict[str, int] = {}
     for span in spans:
@@ -1377,6 +1918,8 @@ def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, s
         summary_text = ", ".join(engine.describe_placeholders(mapping))
         if not summary_text:
             summary_text = f"{len(spans)} possible issue(s) need review"
+    elif upload_reid.get("outcome") != "OK" and upload_reid.get("banner"):
+        summary_text = str(upload_reid["banner"])
     else:
         summary_text = "clean"
     return {
@@ -1386,10 +1929,68 @@ def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, s
         "chars": len(text),
         "status": status,
         "spans": [span_to_dict(s) for s in spans],
+        "reid": upload_reid,
         "summary": summary,
         "summary_text": summary_text,
         **_doc_fields(text),
     }
+
+
+@app.get("/api/image-redaction")
+def image_redaction_status() -> dict[str, Any]:
+    """Current image-redaction mode (T43 opt-in, off by default)."""
+    from . import image_redact as image_redact_module
+
+    hosted = hosted_module.is_hosted()
+    mode = "off" if hosted else image_redaction_mode()
+    return {
+        "mode": mode,
+        "hosted": hosted,
+        "notice": image_redact_module.NOTICE_TEXT,
+        "choices": ["on", "local", "off"],
+    }
+
+
+@app.post("/api/image-redaction/consent")
+def image_redaction_consent(payload: dict[str, Any]) -> dict[str, Any]:
+    """Store the consent-card choice for image attachments.
+
+    ``"on"`` runs Glimmer locally plus cloud SAM 3.1 masks; ``"local"``
+    keeps everything on this PC (Glimmer boxes only); ``"off"`` keeps
+    asking on every image attach.
+    """
+    global _IMAGE_REDACTION_OVERRIDE
+    choice = payload.get("choice") if isinstance(payload, dict) else None
+    if choice not in ("on", "local", "off"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "shadowfenced_bad_choice",
+                "type": "shadowfenced_bad_choice",
+                "message": "choice must be one of: on, local, off",
+            },
+        )
+    _IMAGE_REDACTION_OVERRIDE = choice
+    return {"mode": choice}
+
+
+@app.get("/api/uploads/{file_id}/image")
+def upload_image(file_id: str) -> Response:
+    """Return the redacted PNG bytes for one image upload.
+
+    Only the redacted image is ever served; the original is never kept.
+    """
+    record = UPLOADS.load(file_id)
+    if record is None or record.kind != "image" or not record.image_png:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "shadowfenced_no_image",
+                "type": "shadowfenced_no_image",
+                "message": "no redacted image for this file",
+            },
+        )
+    return Response(content=record.image_png, media_type="image/png")
 
 
 @app.post("/api/upload")
@@ -1739,6 +2340,70 @@ def log_verify() -> dict[str, Any]:
 
     ok, count = ecs_log.verify(get_settings().log_path)
     return {"ok": ok, "events": count}
+
+
+@app.get("/api/log/events")
+def log_events(limit: int = 50) -> dict[str, Any]:
+    """Return recent decision-log entries plus the chain-verified status.
+
+    Each entry carries ``ts``, ``decision_id``, ``decision`` (outcome),
+    ``tier``, ``reasons`` (class labels) and ``fingerprints``
+    (``sha256(value)[:12]``) only -- raw values are never written to
+    the log and never returned here.
+    """
+    import json as _json
+
+    from . import ecs_log
+
+    ok, _count = ecs_log.verify(get_settings().log_path)
+    clamped = max(1, min(int(limit), 200))
+    path = Path(ecs_log.resolve_path(get_settings().log_path))
+    rows: list[dict[str, Any]] = []
+    if path.is_file():
+        try:
+            with path.open(encoding="utf-8") as handle:
+                lines = [line.strip() for line in handle if line.strip()]
+        except OSError:
+            lines = []
+        for line in lines[-clamped:]:
+            try:
+                record = _json.loads(line)
+            except ValueError:
+                continue
+            rows.append(
+                {
+                    "ts": record.get("ts"),
+                    "decision_id": record.get("decision_id"),
+                    "decision": record.get("decision"),
+                    "tier": record.get("tier"),
+                    "reasons": record.get("classes", []),
+                    "fingerprints": record.get("fingerprints", []),
+                }
+            )
+    return {"ok": ok, "events": rows}
+
+
+@app.get("/api/guard")
+def guard_status() -> dict[str, Any]:
+    """Report whether the local guard model is reachable.
+
+    ``glimmer`` is True when the local model endpoint answers for the
+    configured judge model; otherwise the gate still runs its code
+    checks (``glimmer`` False). Never raises: any failure means
+    code-checks-only.
+    """
+    import httpx
+
+    settings = get_settings()
+    reachable = False
+    try:
+        url = settings.ollama_url.rstrip("/") + "/api/show"
+        with httpx.Client(timeout=2.0) as client:
+            response = client.post(url, json={"name": settings.judge_model})
+        reachable = response.status_code == 200
+    except Exception:
+        reachable = False
+    return {"guard": "on", "glimmer": reachable}
 
 
 def _stream_response(
