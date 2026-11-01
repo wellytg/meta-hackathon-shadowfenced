@@ -569,6 +569,7 @@ def _gate_impl(
                                 "text": text[:MESSAGE_PENDING_CHARS],
                             }
                         ],
+                        "confidential_contract": True,
                     },
                     status="reviewing",
                 )
@@ -695,8 +696,15 @@ def _append_gate_trace(
 
 
 def _is_cue_only_hold(decision: Decision) -> bool:
-    """True when a HOLD came only from a sensitivity cue (no ambiguous spans)."""
+    """True when a HOLD came only from a sensitivity cue (no ambiguous spans).
+
+    A classified-contract HOLD is never cue-only: the handling-caveat
+    stamp plus the contract classification require human review, so
+    re-id or person-search noise must not downgrade them to WARN.
+    """
     if decision.decision != "HOLD":
+        return False
+    if (decision.evidence or {}).get("confidential_contract"):
         return False
     return not any(s.status == "ambiguous" for s in decision.spans)
 

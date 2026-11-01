@@ -193,18 +193,38 @@ def _paragraphs(text: str) -> list[tuple[str, int]]:
 
 
 def _split_points(paragraph: str) -> list[tuple[int, bool]]:
-    """Chunk starts as ``(line-relative offset, midline)`` pairs."""
-    points: list[tuple[int, bool]] = [(0, False)]
+    """Chunk starts as ``(line-relative offset, midline)`` pairs.
+
+    Besides headed-clause lines, a defined-party line and a question
+    line each start their own chunk: the heading line above a parties
+    line stays visible instead of being swallowed into the clause,
+    and a trailing question (``Can you explain ...?``) stays visible
+    instead of being glued to (and sinking) the last clause. When
+    several rules fire at the same offset, the line start wins over a
+    mid-line match so a numbered clause keeps its heading.
+    """
+    raw: list[tuple[int, bool]] = [(0, False)]
     cursor = 0
     for line in paragraph.split("\n"):
         stripped = line.strip()
-        if cursor > 0 and _headed_kind(stripped) is not None:
-            points.append((cursor, False))
+        if cursor > 0:
+            if _headed_kind(stripped) is not None:
+                raw.append((cursor, False))
+            if _DEFINED_PARTY_RE.search(stripped) is not None:
+                raw.append((cursor, False))
+            if _is_question(stripped):
+                raw.append((cursor, False))
         for match in _MIDLINE_HEADING_RE.finditer(line):
             if cursor + match.start() > 0:
-                points.append((cursor + match.start(), True))
+                raw.append((cursor + match.start(), True))
         cursor += len(line) + 1
-    return sorted(set(points))
+    merged: dict[int, bool] = {}
+    for offset, midline in raw:
+        if offset in merged:
+            merged[offset] = merged[offset] and midline
+        else:
+            merged[offset] = midline
+    return sorted(merged.items())
 
 
 def scan_contract_clauses(text: str, policy: Policy) -> list:
