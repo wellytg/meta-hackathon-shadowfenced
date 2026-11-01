@@ -417,6 +417,40 @@ body {
 
 .log-badge.broken { background: var(--signal); color: var(--ink); }
 
+/*T40 system status: square Classic rows with hard outlines; the text
+  label (OK / Degraded / Down / Off) carries the meaning, never colour.*/
+.sys-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sys-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  align-items: center;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.sys-name { font-weight: 700; }
+.sys-detail {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.sys-badge {
+  display: inline-block;
+  border: 2px solid var(--line);
+  padding: 1px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.sys-ok { background: var(--steel-pale); color: var(--steel-deep); }
+.sys-degraded { background: var(--hold); color: var(--ink); }
+.sys-down { background: var(--signal); color: var(--ink); }
+.sys-off { background: var(--paper); color: var(--muted); border-style: dashed; }
+
 .evidence-card {
   background: var(--paper-2);
   border: 2px solid var(--line);
