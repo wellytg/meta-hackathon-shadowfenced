@@ -13,6 +13,7 @@ import base64
 import math
 import re
 import time
+from urllib.parse import unquote
 from collections import Counter
 from typing import Any
 
@@ -135,18 +136,135 @@ def _sentences(text: str) -> list[tuple[int, int]]:
     ]
 
 
-def _provider_patterns() -> list[tuple[str, re.Pattern[str]]]:
-    """Provider key shapes; prefixes are joined here at runtime."""
-    cloud = "AK" + "IA" + r"[0-9A-Z]{16}(?![0-9A-Z])"
+def _provider_patterns() -> list[tuple[str, str, re.Pattern[str]]]:
+    """Provider key shapes as (name, provider label, pattern).
+
+    Prefixes are joined here at runtime so no real-format literal ever
+    appears in this file. The label feeds the BLOCK message
+    ("A <provider> API key — not sent").
+    """
+    # AWS access key ID: AKIA (long-term) or ASIA (temporary) + 16 chars.
+    cloud = "(?:AK" + "IA|AS" + "IA)" + r"[0-9A-Z]{16}(?![0-9A-Z])"
+    # GitHub classic token: ghp_ + 36 chars.
     dev = "gh" + "p_" + r"[A-Za-z0-9]{36}(?![A-Za-z0-9])"
+    # GitHub fine-grained PAT: github_pat_ + 22 chars + _ + 59 chars
+    # (the tail stays lenient so rotated lengths still match).
+    github_fine = "github_" + "pat_" + r"[A-Za-z0-9_]{20,}(?![A-Za-z0-9_])"
+    # OpenAI legacy key: sk- + 48 chars (kept lenient at 20+).
     live = "s" + "k-" + r"[A-Za-z0-9]{20,}(?![A-Za-z0-9])"
-    bot = "xox" + "b-" + r"[A-Za-z0-9-]{10,}"
+    # OpenAI project key: sk-proj- + about 150 URL-safe chars.
+    openai_proj = "s" + "k-proj-" + r"[A-Za-z0-9-_]{20,}(?![A-Za-z0-9-_])"
+    # OpenAI service-account key: sk-svcacct- + token body.
+    openai_svc = "s" + "k-svcacct-" + r"[A-Za-z0-9-_]{20,}(?![A-Za-z0-9-_])"
+    # OpenAI admin key: sk-admin- + token body.
+    openai_admin = "s" + "k-admin-" + r"[A-Za-z0-9-_]{20,}(?![A-Za-z0-9-_])"
+    # Anthropic keys: sk-ant-api03- / sk-ant-admin01- + token body.
+    anthropic = (
+        "s" + "k-ant-" + r"(?:api03|admin01)-"
+        + r"[A-Za-z0-9-_]{20,}(?![A-Za-z0-9-_])"
+    )
+    # Google AI Studio key: AIza + 35 chars (39 in total).
+    google = "AI" + "za" + r"[0-9A-Za-z_-]{35}(?![A-Za-z0-9-_])"
+    # Meta / Llama API: no stable public prefix is documented in the
+    # provider registry, so no shape is listed here; stored Meta keys
+    # are still caught through the protected-key store.
+    # Hugging Face token: hf_ + 34 or more chars (classic and fine-grained).
+    huggingface = "h" + "f_" + r"[A-Za-z0-9]{20,}(?![A-Za-z0-9])"
+    # Groq key: gsk_ + token body.
+    groq = "gs" + "k_" + r"[A-Za-z0-9]{20,}(?![A-Za-z0-9])"
+    # Mistral: no stable public prefix is documented, so no shape is
+    # listed here; rely on the entropy check plus the protected-key store.
+    # xAI key: xai- + token body.
+    xai = "xa" + "i-" + r"[A-Za-z0-9]{20,}(?![A-Za-z0-9])"
+    # OpenRouter key: sk-or-v1- + token body (64 hex chars, lenient tail).
+    openrouter = "s" + "k-or-v1-" + r"[A-Za-z0-9]{20,}(?![A-Za-z0-9])"
+    # Stripe keys: sk_live_ / rk_live_ (and the test variants) + secret.
+    stripe = (
+        r"(?:s" + "k|r" + "k)_(?:live|test)_"
+        + r"[A-Za-z0-9]{10,}(?![A-Za-z0-9])"
+    )
+    # Slack tokens: xoxa- / xoxb- / xoxp- / xoxr- + token body.
+    bot = "x" + "ox" + r"[abpr]-" + r"[A-Za-z0-9-]{10,}"
+    # Private key PEM block header (the body that follows is the secret).
+    pem = r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
     return [
-        ("cloud_key", re.compile(r"(?<![0-9A-Z])" + cloud)),
-        ("dev_token", re.compile(r"(?<![A-Za-z0-9])" + dev)),
-        ("live_secret", re.compile(r"(?<![A-Za-z0-9])" + live)),
-        ("bot_token", re.compile(bot)),
+        ("cloud_key", "AWS", re.compile(r"(?<![0-9A-Z])" + cloud)),
+        ("dev_token", "GitHub", re.compile(r"(?<![A-Za-z0-9])" + dev)),
+        ("github_pat", "GitHub",
+         re.compile(r"(?<![A-Za-z0-9])" + github_fine)),
+        ("openai_legacy", "OpenAI",
+         re.compile(r"(?<![A-Za-z0-9])" + live)),
+        ("openai_proj", "OpenAI",
+         re.compile(r"(?<![A-Za-z0-9])" + openai_proj)),
+        ("openai_svcacct", "OpenAI",
+         re.compile(r"(?<![A-Za-z0-9])" + openai_svc)),
+        ("openai_admin", "OpenAI",
+         re.compile(r"(?<![A-Za-z0-9])" + openai_admin)),
+        ("openrouter", "OpenRouter",
+         re.compile(r"(?<![A-Za-z0-9])" + openrouter)),
+        ("anthropic", "Anthropic",
+         re.compile(r"(?<![A-Za-z0-9])" + anthropic)),
+        ("google_ai", "Google",
+         re.compile(r"(?<![A-Za-z0-9])" + google)),
+        ("huggingface", "Hugging Face",
+         re.compile(r"(?<![A-Za-z0-9])" + huggingface)),
+        ("groq", "Groq",
+         re.compile(r"(?<![A-Za-z0-9])" + groq)),
+        ("xai", "xAI",
+         re.compile(r"(?<![A-Za-z0-9])" + xai)),
+        ("stripe", "Stripe",
+         re.compile(r"(?<![A-Za-z0-9])" + stripe)),
+        ("bot_token", "Slack",
+         re.compile(r"(?<![A-Za-z0-9])" + bot)),
+        ("pem_block", "Private key", re.compile(pem)),
     ]
+
+
+_PATTERNS_CACHE: list[tuple[str, str, re.Pattern[str]]] | None = None
+
+
+def _cached_patterns() -> list[tuple[str, str, re.Pattern[str]]]:
+    """Compiled provider patterns, built once per process."""
+    global _PATTERNS_CACHE
+    if _PATTERNS_CACHE is None:
+        _PATTERNS_CACHE = _provider_patterns()
+    return _PATTERNS_CACHE
+
+
+def _provider_message(provider: str) -> str:
+    """BLOCK message naming the key owner (never the raw value)."""
+    return "A " + provider + " API key — not sent"
+
+
+_AWS_ID_RE = re.compile(
+    r"(?<![0-9A-Z])(?:AK" + "IA|AS" + "IA)" + r"[0-9A-Z]{16}(?![0-9A-Z])"
+)
+_AWS_SECRET_RE = re.compile(
+    r"(?<![A-Za-z0-9/+=])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])"
+)
+_HEX_ONLY_RE = re.compile(r"[0-9a-fA-F]{40}")
+
+# An AWS secret only counts when its access key ID is nearby (same text
+# or same decoded blob): a lone 40-char token is too weak and would flag
+# ordinary base64 runs. Hex-only tokens are git SHAs, not secrets.
+_PAIR_WINDOW = 500
+
+
+def _provider_hits(haystack: str) -> list[tuple[int, int, str, str]]:
+    """(start, end, name, provider) for every provider key in haystack."""
+    hits: list[tuple[int, int, str, str]] = []
+    for name, provider, pattern in _cached_patterns():
+        for match in pattern.finditer(haystack):
+            hits.append((match.start(), match.end(), name, provider))
+    ids = [match.start() for match in _AWS_ID_RE.finditer(haystack)]
+    if ids:
+        for match in _AWS_SECRET_RE.finditer(haystack):
+            if _HEX_ONLY_RE.fullmatch(match.group()) is not None:
+                continue
+            if all(abs(match.start() - pos) > _PAIR_WINDOW for pos in ids):
+                continue
+            hits.append((match.start(), match.end(), "aws_secret", "AWS"))
+    return hits
 
 
 def shannon_entropy(token: str) -> float:
@@ -292,15 +410,14 @@ def _password_value_placeholder(match_text: str) -> bool:
 
 def _scan_provider_keys(text: str, policy: Policy) -> list[Span]:
     spans: list[Span] = []
-    for name, pattern in _provider_patterns():
-        for match in pattern.finditer(text):
-            spans.append(
-                _emit(
-                    text, match.start(), match.end(), "secret", "provider_key",
-                    "proven", "Looks like a provider API key.",
-                    f"matches {name} shape", policy, 0.95,
-                )
+    for start, end, name, provider in _provider_hits(text):
+        spans.append(
+            _emit(
+                text, start, end, "secret", "provider_key",
+                "proven", _provider_message(provider),
+                f"provider key matches {name} shape", policy, 0.95,
             )
+        )
     for match in _PASSWORD_RE.finditer(text):
         if _password_value_placeholder(match.group()):
             continue
@@ -313,6 +430,122 @@ def _scan_provider_keys(text: str, policy: Policy) -> list[Span]:
                 policy, 0.9,
             )
         )
+    return spans
+
+
+_B64_STD_RE = re.compile(r"[A-Za-z0-9+/]+={0,2}")
+_B64_URL_RE = re.compile(r"[A-Za-z0-9-_]+={0,2}")
+_HEX_BLOB_RE = re.compile(r"(?:[0-9a-fA-F]{2}){10,}")
+_URL_ESC_RE = re.compile(r"%[0-9A-Fa-f]{2}")
+_TOKEN_RE = re.compile(r"\S{20,}")
+_INNER_TOKEN_RE = re.compile(r"\S{12,}")
+_STRIP_CHARS = ".,;:!?\"'()[]{}<>"
+
+
+def _decode_token(token: str) -> list[tuple[str, str]]:
+    """Decode one token with every applicable method.
+
+    Returns [(encoding, decoded text)] for the methods that decode to
+    UTF-8 text; failures are skipped silently.
+    """
+    body = token.strip(_STRIP_CHARS)
+    if len(body) < 12:
+        return []
+    found: list[tuple[str, str]] = []
+    if _URL_ESC_RE.search(body):
+        try:
+            found.append(("url", unquote(body)))
+        except Exception:
+            pass
+    if len(body) >= 20 and _HEX_BLOB_RE.fullmatch(body) is not None:
+        try:
+            found.append(("hex", bytes.fromhex(body).decode("utf-8")))
+        except Exception:
+            pass
+    if len(body) >= 20 and _B64_STD_RE.fullmatch(body) is not None:
+        try:
+            padded = body + "=" * (-len(body) % 4)
+            raw = base64.b64decode(padded, validate=True)
+            found.append(("base64", raw.decode("utf-8")))
+        except Exception:
+            pass
+    elif (
+        len(body) >= 20
+        and ("-" in body or "_" in body)
+        and _B64_URL_RE.fullmatch(body) is not None
+    ):
+        try:
+            padded = body + "=" * (-len(body) % 4)
+            raw = base64.urlsafe_b64decode(padded)
+            found.append(("base64url", raw.decode("utf-8")))
+        except Exception:
+            pass
+    return [(enc, text) for enc, text in found if text.strip()]
+
+
+def _scan_encoded_providers(text: str, policy: Policy) -> list[Span]:
+    """Provider keys hiding inside encoded runs.
+
+    Each base64 / base64url / hex / URL-encoded run is decoded and the
+    provider patterns run on the decoded text, the same way canary and
+    protected-key checks already cover encoded values. The span points at
+    the encoded run in the original text. One level of nesting (for
+    example hex of base64) is decoded too. Runs that decode to non-key
+    bytes are ignored, so ordinary base64 images or data never flag.
+    """
+    spans: list[Span] = []
+    seen: set[tuple[int, int, str]] = set()
+    for match in _TOKEN_RE.finditer(text):
+        raw = match.group()
+        token = raw.strip(_STRIP_CHARS)
+        start = match.start() + (raw.find(token) if token else 0)
+        if not token or len(token) < 20:
+            continue
+        for encoding, decoded in _decode_token(token):
+            hits = sorted(_provider_hits(decoded), key=lambda item: item[0])
+            if hits:
+                key = (start, start + len(token), encoding)
+                if key not in seen:
+                    seen.add(key)
+                    spans.append(
+                        _emit(
+                            text, start, start + len(token),
+                            "secret", "provider_key", "proven",
+                            _provider_message(hits[0][3]),
+                            f"provider key inside {encoding}",
+                            policy, 0.95,
+                        )
+                    )
+                continue
+            nested_done = False
+            for inner in _INNER_TOKEN_RE.finditer(decoded):
+                if nested_done:
+                    break
+                inner_token = inner.group().strip(_STRIP_CHARS)
+                for inner_enc, inner_text in _decode_token(inner_token):
+                    inner_hits = sorted(
+                        _provider_hits(inner_text), key=lambda item: item[0]
+                    )
+                    if not inner_hits:
+                        continue
+                    key = (
+                        start, start + len(token),
+                        encoding + "+" + inner_enc,
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    spans.append(
+                        _emit(
+                            text, start, start + len(token),
+                            "secret", "provider_key", "proven",
+                            _provider_message(inner_hits[0][3]),
+                            f"provider key inside {encoding}+{inner_enc}",
+                            policy, 0.95,
+                        )
+                    )
+                    nested_done = True
+                    break
     return spans
 
 
@@ -1204,6 +1437,7 @@ def scan(
     counters: dict[str, int] = {}
     _run_traced(trace_out, spans, "tier1.canary_scan", counters, _scan_canaries, text, registry, policy)
     _run_traced(trace_out, spans, "tier1.key_scan", counters, _scan_provider_keys, text, policy)
+    _run_traced(trace_out, spans, "tier1.encoded_key_scan", counters, _scan_encoded_providers, text, policy)
     _run_traced(trace_out, spans, "tier1.pii_scan", counters, _scan_pii, text, policy)
     _run_traced(trace_out, spans, "tier1.name_scan", counters, _scan_names, text, policy)
     _run_traced(trace_out, spans, "tier1.csv_scan", counters, _scan_csv_pii, text, policy)
