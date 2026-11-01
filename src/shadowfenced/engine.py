@@ -1,6 +1,6 @@
 """Tier-1-only gate: code findings in, a typed decision out.
 
-Severity ordering is BLOCK > HOLD > REDACT > ALLOW. A proven canary
+Severity ordering is BLOCK > HOLD > WARN > REDACT > ALLOW. A proven canary
 blocks; ambiguous spans or sensitivity cue words hold instantly for
 asynchronous Glimmer whole-message review (see ``holds``); other
 proven spans redact and clean text allows. Any internal failure holds
@@ -16,13 +16,14 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import reid as reid_module
 from . import tier1
 from .canary import CanaryRegistry
 from .policy import Policy
 from .redact import redact, save_mapping
 from .spans import Span
 
-DECISIONS = ("ALLOW", "REDACT", "BLOCK", "HOLD")
+DECISIONS = ("ALLOW", "REDACT", "BLOCK", "HOLD", "WARN")
 
 # Generic human labels for placeholder bases (e.g. "[PII_EMAIL_1]" ->
 # "PII_EMAIL"). Used only for user-facing text; machine reasons in
@@ -100,10 +101,17 @@ def user_message(decision: Decision) -> str:
             parts = describe_placeholders(decision.placeholders)
             noun = "redaction" if total == 1 else "redactions"
             base = f"Sent with {total} {noun}: " + ", ".join(parts) + "."
-    elif decision.decision == "HOLD":
-        base = "Held for review: possible pointer to sensitive data."
     else:
-        base = "Sent clean"
+        reid_banner = (decision.evidence or {}).get("reid", {}).get("banner")
+        if decision.decision == "WARN":
+            base = reid_banner or (
+                "Possible re-identification risk: the combined details "
+                "could identify someone. You may send anyway."
+            )
+        elif decision.decision == "HOLD":
+            base = reid_banner or "Held for review: possible pointer to sensitive data."
+        else:
+            base = "Sent clean"
     warning = getattr(decision, "doc_warning", None)
     if isinstance(warning, str) and warning:
         return f"{warning} {base}"
@@ -578,6 +586,155 @@ def _append_gate_trace(
         trace_out, "decision", "gate",
         f"resolved tier {decision.resolved_tier}", decision.decision,
         round(total_ms, 3),
+    )
+
+
+def _apply_reid(
+    text: str,
+    decision: Decision,
+    conversation: list[str] | None,
+    residual: bool,
+    judge_fn: Any,
+    mode: str,
+    trace_out: list[dict[str, Any]] | None,
+) -> Decision:
+    """Layer re-identification scoring over a finished gate decision.
+
+    Extraction runs through ``tier1.scan_reid`` (trace step
+    ``reid.extract``); scoring appends ``reid.combine``. BLOCK and
+    existing HOLD decisions are never downgraded: the re-id payload is
+    attached to their evidence instead. Otherwise WARN returns sendable
+    text with the banner, and HOLD sends nothing. The optional residual
+    check runs in tier-1 mode only (the send path never calls a model
+    inline) against the generalised text when offered, else the
+    redacted-or-plain text. Evidence carries kinds, scores and
+    fingerprints only: raw values stay out of traces and logs.
+    """
+    current = tier1.scan_reid(text, trace_out=trace_out)
+    result = reid_module.assess(
+        text, conversation=conversation, current_findings=current
+    )
+    reid_module.trace_combine(
+        trace_out, result.score, result.combination, result.outcome
+    )
+    if result.outcome == "OK":
+        return decision
+    evidence: dict[str, Any] = dict(decision.evidence or {})
+    evidence["reid"] = {
+        "score": result.score,
+        "combination": list(result.combination),
+        "outcome": result.outcome,
+        "banner": result.banner,
+        "generalised_text": result.generalised_text,
+    }
+    score_line = "reid: score={} kinds={} -> {}".format(
+        result.score, "+".join(result.combination), result.outcome
+    )
+    if decision.decision in ("BLOCK", "HOLD"):
+        decision.reasons.append(score_line)
+        decision.evidence.update(evidence)
+        return decision
+    if residual and mode != "send":
+        candidate = result.generalised_text or decision.sent_text or text
+        residual_result = reid_module.residual_check(candidate, judge_fn)
+        reid_module.trace_residual(trace_out, residual_result)
+        if residual_result.hold:
+            reasons = list(decision.reasons) + [
+                score_line,
+                "reid residual clues still identify or locate -> HOLD",
+            ]
+            residual_payload = dict(evidence["reid"])
+            residual_payload["residual"] = {
+                "verified": len(residual_result.verified_clues),
+                "fingerprints": sorted(
+                    {reid_module.fingerprint(c)
+                     for c in residual_result.verified_clues}
+                ),
+                "can_identify": residual_result.can_identify,
+                "can_locate": residual_result.can_locate,
+            }
+            evidence["reid"] = residual_payload
+            return Decision(
+                decision="HOLD",
+                decision_id=uuid.uuid4().hex,
+                spans=decision.spans,
+                sent_text=None,
+                placeholders={},
+                resolved_tier=1,
+                latency_ms=dict(decision.latency_ms),
+                reasons=reasons,
+                evidence=evidence,
+            )
+    elif residual:
+        decision.reasons.append("reid residual check deferred in send mode")
+    if result.outcome == "HOLD":
+        reasons = list(decision.reasons) + [
+            score_line,
+            "reid combination can identify or locate -> HOLD",
+        ]
+        return Decision(
+            decision="HOLD",
+            decision_id=uuid.uuid4().hex,
+            spans=decision.spans,
+            sent_text=None,
+            placeholders={},
+            resolved_tier=1,
+            latency_ms=dict(decision.latency_ms),
+            reasons=reasons,
+            evidence=evidence,
+        )
+    reasons = list(decision.reasons) + [
+        score_line,
+        "reid combination needs user review -> WARN",
+    ]
+    if decision.decision == "REDACT":
+        # Keep the base decision id: its placeholder map is already saved
+        # under it, so re-hydration keeps working.
+        return Decision(
+            decision="WARN",
+            decision_id=decision.decision_id,
+            spans=decision.spans,
+            sent_text=decision.sent_text,
+            placeholders=dict(decision.placeholders),
+            resolved_tier=1,
+            latency_ms=dict(decision.latency_ms),
+            reasons=reasons,
+            evidence=evidence,
+        )
+    return Decision(
+        decision="WARN",
+        decision_id=uuid.uuid4().hex,
+        spans=decision.spans,
+        sent_text=text,
+        placeholders={},
+        resolved_tier=1,
+        latency_ms=dict(decision.latency_ms),
+        reasons=reasons,
+        evidence=evidence,
+    )
+
+
+def gate_reid(
+    text: str,
+    policy: Policy,
+    registry: CanaryRegistry | None = None,
+    conversation: list[str] | None = None,
+    residual: bool = False,
+    judge_fn: Any = None,
+    mode: str = "tier1",
+    trace_out: list[dict[str, Any]] | None = None,
+) -> Decision:
+    """Gate with re-identification scoring layered on top.
+
+    Runs the plain :func:`gate` first (unchanged behaviour), then scores
+    quasi-identifier combinations in ``text`` plus ``conversation``
+    (earlier messages, oldest first). ``residual`` also runs the
+    residual-context check with ``judge_fn`` (default: local Muse
+    Glimmer, never a cloud model); judge errors hold fail-closed.
+    """
+    decision = gate(text, policy, registry, mode=mode, trace_out=trace_out)
+    return _apply_reid(
+        text, decision, conversation, residual, judge_fn, mode, trace_out
     )
 
 

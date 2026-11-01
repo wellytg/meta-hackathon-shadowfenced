@@ -1170,6 +1170,24 @@ def _run_traced(
     )
 
 
+def scan_reid(
+    text: str, trace_out: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """Extract re-identification quasi-identifiers (Tier 1 code, no model).
+
+    Thin hook over :mod:`shadowfenced.reid`: returns
+    ``[{kind, span, value}]`` findings and appends the ``reid.extract``
+    trace step (counts, kind labels and fingerprints, never raw values)
+    when ``trace_out`` is a list. Adds no spans and changes no verdicts.
+    """
+    from . import reid as reid_module
+
+    findings = reid_module.extract_quasi_identifiers(text)
+    if trace_out is not None:
+        reid_module.trace_extract(trace_out, findings)
+    return findings
+
+
 def scan(
     text: str, policy: Policy, registry: CanaryRegistry | None = None,
     trace_out: list[dict[str, Any]] | None = None
