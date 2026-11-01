@@ -34,6 +34,8 @@ _ENV_KEYS = (
     "SF_PROTECT_KEYS",
     "SF_HOSTED",
     "SF_HOSTED_DICTATION",
+    "SHADOWFENCED_EXT_TOKEN",
+    "SF_EXT_TOKEN_FILE",
 )
 
 DEFAULT_LOG_PATH = "runs/decisions.jsonl"
@@ -94,6 +96,8 @@ class Settings(BaseModel):
     protect_keys: str = "META_API_KEY,MODEL_API_KEY"
     hosted: bool = False
     hosted_dictation: bool = False
+    ext_token: str = ""
+    ext_token_file: str = ""
 
     @property
     def meta_available(self) -> bool:
@@ -184,8 +188,68 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
         protect_keys=merged["SF_PROTECT_KEYS"] if "SF_PROTECT_KEYS" in merged else "META_API_KEY,MODEL_API_KEY",
         hosted=_parse_flag(merged.get("SF_HOSTED"), False),
         hosted_dictation=_parse_flag(merged.get("SF_HOSTED_DICTATION"), False),
+        ext_token=merged.get("SHADOWFENCED_EXT_TOKEN", ""),
+        ext_token_file=merged.get("SF_EXT_TOKEN_FILE", ""),
     )
 
 
 # Backwards-friendly alias used across the codebase.
 load_settings = get_settings
+
+
+def ext_token_path(settings=None) -> "Path":
+    """Where the browser-extension pairing token lives on disk.
+
+    ``SF_EXT_TOKEN_FILE`` wins, else ``~/.shadowfenced/ext_token``.
+    The ``SHADOWFENCED_EXT_TOKEN`` env var (``settings.ext_token``)
+    bypasses the file entirely when set.
+    """
+    override = ""
+    if settings is not None:
+        override = (settings.ext_token_file or "").strip()
+    if not override:
+        import os as _os
+
+        override = _os.environ.get("SF_EXT_TOKEN_FILE", "").strip()
+    if override:
+        return Path(override)
+    return Path.home() / ".shadowfenced" / "ext_token"
+
+
+def load_or_create_ext_token(settings=None) -> str:
+    """Return the pairing token, generating and persisting it on first run.
+
+    Precedence: ``SHADOWFENCED_EXT_TOKEN`` env (or ``settings.ext_token``)
+    wins and is never written to disk; otherwise the token file from
+    :func:`ext_token_path` is read, and when missing a fresh
+    ``secrets.token_urlsafe(24)`` token is written with owner-only
+    permissions. The token value itself is never logged.
+    """
+    if settings is None:
+        try:
+            settings = get_settings()
+        except Exception:
+            settings = None
+    if settings is not None and (settings.ext_token or "").strip():
+        return settings.ext_token.strip()
+    path = ext_token_path(settings)
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        existing = ""
+    if existing:
+        return existing.split()[0]
+    import os as _os
+    import secrets as _secrets
+
+    fresh = _secrets.token_urlsafe(24)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(fresh + "\n", encoding="utf-8")
+        try:
+            _os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        pass
+    return fresh

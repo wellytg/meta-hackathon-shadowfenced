@@ -1162,7 +1162,30 @@
   }
 
   loadHostedBanner();
+  function loadExtToken() {
+    var tokenEl = document.getElementById("ext-token");
+    if (!tokenEl) return;
+    fetch("/api/ext/pairing")
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        if (body && body.token) tokenEl.textContent = body.token;
+        else tokenEl.textContent = "unavailable";
+      })
+      .catch(function () { tokenEl.textContent = "unavailable"; });
+    var copyBtn = document.getElementById("ext-token-copy");
+    if (copyBtn && !copyBtn.dataset.wired) {
+      copyBtn.dataset.wired = "1";
+      copyBtn.addEventListener("click", function () {
+        var value = tokenEl.textContent || "";
+        if (navigator.clipboard && value) {
+          navigator.clipboard.writeText(value).catch(function () {});
+        }
+      });
+    }
+  }
+
   loadProviders();
+  loadExtToken();
   refreshStats();
 
   /* T31b details drawer: per-turn decision, reasons, redaction summary,

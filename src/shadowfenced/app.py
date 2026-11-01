@@ -1768,9 +1768,11 @@ def _stream_response(
     )
 
 
+from .ext_api import mount_ext_api
 from .rules import router as rules_router
 
 app.include_router(rules_router)
+mount_ext_api(app)
 # include_router wraps the app lifespan even when the router has none;
 # restore the original only when it was actually wrapped, so startup
 # behaviour (and its identity) is unchanged on old and new FastAPI.

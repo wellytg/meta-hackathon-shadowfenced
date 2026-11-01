@@ -10,3 +10,5 @@ runs/
 pytest-of-*/
 docs/muse-sessions/
 policy.local.yaml
+
+extension/dist/

@@ -1,0 +1,103 @@
+'use strict';
+
+/* Shadowfenced background worker (service worker on Chrome, background
+ * script on Firefox — same file, no modules, only chrome.* + fetch).
+ * - Stores the pairing token and per-site on/off toggles (chrome.storage).
+ * - Forwards scan/redact/rehydrate/health calls to the local app at
+ *   http://127.0.0.1:8765 with the X-Ext-Token header.
+ * - Bridges messages between content scripts and the local app. */
+
+var SF_BASE = 'http://127.0.0.1:8765';
+var SF_SITES = ['chatgpt', 'claude', 'gemini', 'meta'];
+
+function getState() {
+  return new Promise(function (resolve) {
+    try {
+      chrome.storage.local.get(['sfToken', 'sfSites'], function (items) {
+        if (chrome.runtime.lastError) {
+          resolve({ token: '', sites: {} });
+          return;
+        }
+        resolve({ token: items.sfToken || '', sites: items.sfSites || {} });
+      });
+    } catch (e) {
+      resolve({ token: '', sites: {} });
+    }
+  });
+}
+
+function siteDisabled(sites, host) {
+  var id = hostToSiteId(host);
+  if (!id) return false;
+  return sites[id] === false;
+}
+
+function hostToSiteId(host) {
+  var h = String(host || '').toLowerCase();
+  if (h.indexOf('chatgpt.com') !== -1) return 'chatgpt';
+  if (h.indexOf('claude.ai') !== -1) return 'claude';
+  if (h.indexOf('gemini.google.com') !== -1) return 'gemini';
+  if (h.indexOf('meta.ai') !== -1) return 'meta';
+  return null;
+}
+
+function callApp(path, token, body) {
+  var headers = { 'Content-Type': 'application/json' };
+  if (token) headers['X-Ext-Token'] = token;
+  var opts = { method: body === undefined ? 'GET' : 'POST', headers: headers };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  return fetch(SF_BASE + path, opts).then(function (resp) {
+    if (!resp.ok) throw new Error('app returned HTTP ' + resp.status);
+    return resp.json();
+  });
+}
+
+chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+  (async function () {
+    var state = await getState();
+    switch (msg && msg.type) {
+      case 'SF_SCAN':
+        if (siteDisabled(state.sites, msg.host)) { sendResponse({ ok: true, data: { spans: [] } }); return; }
+        sendResponse(await forward('/api/ext/scan', state.token, { text: msg.text || '' }));
+        return;
+      case 'SF_REDACT':
+        // Redact is fail-safe: never short-circuit on toggles here; the
+        // content script already skips when the site is off. A disabled
+        // lookup failure still resolves {ok:false} -> send is blocked.
+        sendResponse(await forward('/api/ext/redact', state.token, { text: msg.text || '' }));
+        return;
+      case 'SF_REHYDRATE':
+        sendResponse(await forward('/api/ext/rehydrate', state.token, { text: msg.text || '' }));
+        return;
+      case 'SF_HEALTH':
+        sendResponse(await forward('/api/ext/health', state.token, undefined));
+        return;
+      case 'SF_GET_STATE':
+        sendResponse({ ok: true, data: { disabled: siteDisabled(state.sites, msg.host), sites: state.sites } });
+        return;
+      case 'SF_SET_TOKEN':
+        chrome.storage.local.set({ sfToken: msg.token || '' }, function () {
+          sendResponse({ ok: !chrome.runtime.lastError });
+        });
+        return;
+      case 'SF_SET_SITE':
+        var sites = Object.assign({}, state.sites);
+        sites[msg.site] = !!msg.on;
+        chrome.storage.local.set({ sfSites: sites }, function () {
+          sendResponse({ ok: !chrome.runtime.lastError });
+        });
+        return;
+      default:
+        sendResponse({ ok: false, error: 'unknown message' });
+    }
+  })();
+  return true; // async response
+});
+
+function forward(path, token, body) {
+  return callApp(path, token, body).then(function (data) {
+    return { ok: true, data: data };
+  }).catch(function (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  });
+}
