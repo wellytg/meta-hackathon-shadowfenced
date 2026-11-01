@@ -312,7 +312,7 @@ body {
 }
 
 .issue-card.sev-secret .sev-tag { background: var(--signal); }
-.issue-card.sev-review .sev-tag { background: var(--steel-pale); }
+.issue-card.sev-review .sev-tag { background: var(--hold); }
 
 .issue-head { display: flex; gap: 8px; align-items: baseline; }
 .issue-icon { font-size: 14px; }
@@ -616,4 +616,579 @@ body {
   .layout { grid-template-columns: 1fr; }
   .topbar { flex-wrap: wrap; }
   .ev-cols { grid-template-columns: 1fr; }
+}
+/*__T31_SHELL__*/
+/* T31 chat shell: skip link, top picks, sessions sidebar, details. */
+.skip-link {
+  position: absolute;
+  left: 12px;
+  top: -48px;
+  background: var(--ink);
+  color: var(--paper);
+  padding: 10px 16px;
+  font-weight: 700;
+  z-index: 2000;
+}
+.skip-link:focus { top: 12px; }
+.topbar-picks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px 12px;
+  width: 100%;
+}
+.layout {
+  grid-template-columns: 220px minmax(0, 1fr) 300px;
+}
+.sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.new-chat-btn {
+  background: var(--ink);
+  color: var(--paper);
+  border: 2px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--signal);
+  padding: 8px 12px;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  min-height: 44px;
+}
+.new-chat-btn:hover { background: var(--steel-deep); }
+.new-chat-btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--signal); }
+.chat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chat-list button {
+  width: 100%;
+  text-align: left;
+  background: var(--paper-2);
+  border: 2px solid var(--line);
+  color: var(--ink);
+  padding: 8px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  min-height: 44px;
+  overflow-wrap: break-word;
+}
+.chat-list button[aria-current="true"] {
+  background: var(--steel-pale);
+  border-color: var(--ink);
+}
+.sessions-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+.details-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.details-drawer > summary {
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+/* One compact decision receipt per assistant turn. */
+.receipt {
+  border: 2px solid var(--line);
+  border-left-width: 6px;
+  background: var(--paper-2);
+  padding: 6px 10px;
+  font-size: 13px;
+  max-width: 85%;
+  align-self: flex-start;
+}
+.receipt > summary {
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.receipt .receipt-why {
+  margin: 4px 0 2px;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: break-word;
+}
+.receipt[data-decision="ALLOW"] { border-left-color: var(--steel); }
+.receipt[data-decision="REDACT"] { border-left-color: var(--steel); }
+.receipt[data-decision="HOLD"] { border-left-color: var(--hold); }
+.receipt[data-decision="BLOCK"] { border-left-color: var(--signal); }
+.receipt[data-decision="UNKNOWN"] { border-left-color: var(--muted); }
+/* Accessible targets, focus, and breakpoints. */
+.send-btn,
+.paperclip-btn,
+.provider-select,
+.issue-actions button,
+.ev-actions button,
+.chip-x,
+.ai-toggle {
+  min-height: 44px;
+}
+a:focus-visible,
+button:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 3px solid var(--steel);
+  outline-offset: 2px;
+}
+@media (max-width: 1020px) {
+  .layout { grid-template-columns: 200px minmax(0, 1fr); }
+  .side-col { grid-column: 1 / -1; }
+}
+@media (max-width: 720px) {
+  .sessions { order: 2; }
+  .chat-col { order: 1; }
+  .side-col { order: 3; }
+  .receipt { max-width: 100%; }
+}
+@media (min-width: 1440px) {
+  .layout { max-width: 1400px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .receipt { transition-duration: 0.01ms; }
+  .new-chat-btn:active { transform: none; }
+}
+
+
+/*__T31B_SHELL__*/
+/* T31b: slim 56-64px header, compact model pill, settings menu, receipts. */
+.topbar {
+  min-height: 56px;
+  max-height: 64px;
+  padding: 6px 16px;
+  overflow: visible;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  text-decoration: none;
+  color: var(--ink);
+}
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  background: var(--ink);
+  border: 2px solid var(--line);
+}
+.brand-text { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.brand .wordmark {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+  line-height: 1;
+  white-space: nowrap;
+}
+.brand .header-pill {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  border-width: 1px;
+  padding: 2px 8px;
+}
+.model-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 auto;
+  width: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  padding: 2px 6px 2px 10px;
+  font-size: 12px;
+}
+.topbar-picks {
+  width: auto;
+}
+.pill-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.provider-select {
+  width: auto;
+  max-width: 220px;
+  min-height: 32px;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 2px;
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.details-toggle {
+  border: 2px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 12px;
+  min-height: 36px;
+  cursor: pointer;
+}
+.details-toggle:hover { background: var(--sand); }
+.settings-menu { position: relative; }
+.settings-summary {
+  list-style: none;
+  cursor: pointer;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 12px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+}
+.settings-summary::-webkit-details-marker { display: none; }
+.settings-summary:hover { background: var(--sand); }
+.settings-body {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 100;
+  min-width: 240px;
+  background: var(--paper-2);
+  border: 2px solid var(--line);
+  box-shadow: 4px 4px 0 var(--line);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+.settings-label { font-weight: 700; font-size: 12px; }
+.providers-open {
+  width: auto;
+  min-height: 36px;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.providers-open:hover { background: var(--sand); }
+.providers-panel {
+  border-top: 2px solid var(--line);
+  padding-top: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+.providers-panel[hidden] { display: none; }
+/* One compact receipt line per turn: icon + label + Why. Colour lives only
+   on the icon and the thin left rule; the surface stays paper. */
+.thread .receipt {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  background: var(--paper-2);
+  padding: 4px 10px;
+  font-size: 13px;
+  max-width: 85%;
+  align-self: flex-start;
+}
+.thread .receipt > summary { min-height: 32px; }
+.receipt-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+.receipt-head::-webkit-details-marker { display: none; }
+.receipt-icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  font-size: 11px;
+  font-weight: 800;
+}
+.receipt[data-decision="ALLOW"] .receipt-icon { color: var(--steel); }
+.receipt[data-decision="REDACT"] .receipt-icon { color: var(--steel); }
+.receipt[data-decision="HOLD"] .receipt-icon { color: var(--hold-ink); }
+.receipt[data-decision="BLOCK"] .receipt-icon { color: var(--signal-deep); }
+.receipt[data-decision="UNKNOWN"] .receipt-icon { color: var(--muted); }
+.receipt-label { flex: 1; font-weight: 700; min-width: 0; }
+.receipt-why-link {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+.receipt .receipt-why {
+  margin: 4px 0 2px 26px;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: break-word;
+}
+.receipt[data-decision="ALLOW"] { border-left-color: var(--steel); }
+.receipt[data-decision="REDACT"] { border-left-color: var(--steel); }
+.receipt[data-decision="HOLD"] { border-left-color: var(--hold); }
+.receipt[data-decision="BLOCK"] { border-left-color: var(--signal); }
+.receipt[data-decision="UNKNOWN"] { border-left-color: var(--muted); }
+/* Upload failures keep the legacy banner hook as a compact neutral note. */
+.thread .banner:not(.receipt) {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--hold);
+  background: var(--paper-2);
+  padding: 4px 10px;
+  font-size: 13px;
+  font-weight: 400;
+  max-width: 85%;
+  align-self: flex-start;
+}
+/* Details drawer: this-turn facts + empty state. */
+.turn-empty { font-size: 13px; color: var(--muted); margin: 0 0 4px; }
+.turn-facts { margin: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.turn-facts > div { display: grid; grid-template-columns: 88px 1fr; gap: 8px; align-items: baseline; }
+.turn-facts dt { font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.turn-facts dd { margin: 0; overflow-wrap: break-word; }
+.turn-trace h3 { margin: 10px 0 4px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.turn-trace ol { margin: 0; padding-left: 18px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--muted); }
+/* Membrane: thin vertical line on the composer send edge + zone rail. */
+.composer-block { position: relative; }
+.membrane-line {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  right: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--line);
+}
+.membrane-caption {
+  position: absolute;
+  right: 14px;
+  top: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  pointer-events: none;
+}
+.composer-row { padding-right: 22px; }
+.side-col { position: relative; }
+.zone-membrane {
+  position: absolute;
+  left: -11px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--line);
+  border-radius: 2px;
+}
+.zone-membrane .zone-a,
+.zone-membrane .zone-b {
+  position: absolute;
+  left: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.zone-membrane .zone-a { top: 0; }
+.zone-membrane .zone-b { bottom: 0; }
+@media (max-width: 1100px) {
+  .membrane-caption, .zone-membrane .zone-a, .zone-membrane .zone-b { display: none; }
+}
+@media (max-width: 860px) {
+  .topbar { flex-wrap: wrap; max-height: none; }
+  .brand .header-pill { display: none; }
+  .model-pill { order: 3; margin: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .receipt, .membrane-line, .zone-membrane { transition-duration: 0.01ms; animation: none; }
+}
+
+/*T31b receipt legibility + classic membrane chrome.*/
+.thread .receipt-head,
+.thread .receipt-label {
+  color: var(--ink);
+}
+html[data-theme="classic"] .membrane-caption,
+html[data-theme="classic"] .zone-membrane .zone-a,
+html[data-theme="classic"] .zone-membrane .zone-b {
+  display: none;
+}
+
+/*T31b single column: narrow screens stack conversation, chats, details.*/
+@media (max-width: 720px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .side-col {
+    grid-column: auto;
+  }
+}
+/*__T32_SINGLE_CLASSIC__*/
+/* T32: Classic is the single theme. The app fills the window height and the
+   page itself never scrolls: the header stays fixed on top, the composer is
+   pinned to the bottom of the conversation column, only the message list
+   scrolls, and the details drawer scrolls on its own. Classic language:
+   paper background, ink text, hard 2px outlines, safety orange for blocked,
+   steel blue for allowed/safe, amber for review/warn, monospace for data.
+   System fonts only, no network. Works at 390/768/1440px. */
+html, body { height: 100%; }
+body {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  flex-shrink: 0;
+}
+.layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  align-items: stretch;
+}
+.chat-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.thread {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.jump-latest {
+  align-self: center;
+  flex-shrink: 0;
+  margin: 6px auto;
+  background: var(--ink);
+  color: var(--paper);
+  border: 2px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--signal);
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.jump-latest:hover { background: var(--steel-deep); border-color: var(--steel-deep); }
+.jump-latest:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--signal); }
+.jump-latest[hidden] { display: none; }
+.composer-block {
+  flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+}
+.composer {
+  max-height: calc(8 * 1.5em + 16px);
+}
+.composer-tools { display: flex; align-items: center; gap: 8px; }
+.composer-tools:empty { display: none; }
+.receipt-notes {
+  margin: 4px 0 2px 26px;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: break-word;
+}
+.receipt-notes:empty { display: none; }
+/* Classic membrane: thin 2px state line + monospace PRIVATE/EXTERNAL rail. */
+.composer-block[data-membrane="released"] .membrane-line,
+.composer-block[data-membrane="redacted"] .membrane-line { background: var(--steel); }
+.composer-block[data-membrane="inspecting"] .membrane-line,
+.composer-block[data-membrane="review"] .membrane-line { background: var(--hold); }
+.composer-block[data-membrane="blocked"] .membrane-line { background: var(--signal); }
+.composer-block[data-membrane="unknown"] .membrane-line,
+.composer-block[data-membrane="idle"] .membrane-line { background: var(--muted); }
+html[data-theme="classic"] .membrane-caption,
+html[data-theme="classic"] .zone-membrane .zone-a,
+html[data-theme="classic"] .zone-membrane .zone-b { display: flex; }
+/* Upload chips keep the hard Classic outline and shadow. */
+.file-chip { box-shadow: 2px 2px 0 var(--line); }
+/* Sidebar and drawer scroll inside the full-height shell. */
+.sessions { min-height: 0; }
+.chat-list { overflow-y: auto; min-height: 0; }
+.side-col { min-height: 0; max-height: 100%; overflow: hidden; }
+.details-drawer { min-height: 0; flex: 1 1 auto; }
+.drawer-body { overflow-y: auto; min-height: 0; }
+/* Narrow screens (390px): stack, still no page scroll; each pane scrolls. */
+@media (max-width: 720px) {
+  .layout { display: flex; flex-direction: column; overflow: hidden; }
+  .chat-col { order: 1; flex: 1 1 auto; min-height: 0; }
+  .sessions { order: 2; flex-shrink: 0; max-height: 20vh; overflow-y: auto; }
+  .side-col { order: 3; flex-shrink: 0; max-height: 28vh; }
+  .jump-latest { width: 100%; }
+}
+/* Mid screens (768px): two columns, conversation keeps its own scroll. */
+@media (min-width: 721px) and (max-width: 1020px) {
+  .layout { overflow: hidden; }
+}
+/* Wide screens (1440px): cap the measure, everything else stays put. */
+@media (min-width: 1440px) {
+  .layout { max-width: 1400px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .jump-latest { transition: none; }
+  .jump-latest:active { transform: none; }
+  html { scroll-behavior: auto; }
 }

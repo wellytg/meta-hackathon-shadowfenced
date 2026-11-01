@@ -1,17 +1,27 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="classic">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Shadowfenced — Nothing sensitive crosses the boundary</title>
+<title>Shadowfenced — Your words. Your boundary.</title>
 <meta name="description" content="Shadowfenced checks what you type on your own machine and only lets clean or redacted text reach the AI.">
 <link rel="icon" href="../assets/block-chip.svg" type="image/svg+xml">
 <link rel="stylesheet" href="welcome.css">
+<!-- T32: Classic is the single theme; no theme stylesheet. -->
 </head>
 <body>
 <div id="hosted-banner" data-testid="hosted-banner" hidden>Public demo. Use made-up data only.</div>
 <div class="sheet">
 
+  <script>
+  /* T32: Classic is the single theme. */
+  (function () {
+    document.documentElement.setAttribute("data-theme", "classic");
+    try {
+      window.localStorage.setItem("shadowfenced.theme", "classic");
+    } catch (e) { /* classic stays */ }
+  })();
+  </script>
   <header class="masthead">
     <div class="brand">
       <img class="brand-badge" src="../assets/badge.svg" alt="" width="44" height="44">
@@ -26,10 +36,12 @@
   </header>
 
   <main>
+    <div class="hero">
     <section class="intro">
       <p class="kicker">What it is</p>
-      <h1>Nothing sensitive<br>crosses the boundary.</h1>
-      <p class="standfirst">Shadowfenced sits between you and the AI. It reads what you type
+      <h1>Your words. Your boundary.</h1>
+      <p class="standfirst">Keep sensitive details on your side of the conversation.
+        Shadowfenced sits between you and the AI. It reads what you type
         <strong>on your own computer</strong>, spots the sensitive parts, and only lets
         clean or redacted text leave. The real values never leave your side.</p>
     </section>
@@ -133,6 +145,112 @@
         <span class="swatch swatch-tag" aria-hidden="true"></span> Only the placeholder tag travels
       </figcaption>
     </figure>
+    </div>
+
+    <section class="story" aria-label="Why a boundary matters">
+      <p class="story-lead">You → AI = risk when your raw text travels: once it leaves your machine it can be stored, logged, or quoted back. The fence below keeps raw values on your side and lets only placeholder tags cross.</p>
+      <p class="kicker">The problem, in three steps</p>
+      <h2>What happens to what you type</h2>
+      <ol class="story-steps">
+        <li class="story-step">
+          <svg viewBox="0 0 300 150" role="img" aria-labelledby="story-a-title story-a-desc">
+            <title id="story-a-title">Step one illustration</title>
+            <desc id="story-a-desc">A person on the left sends a request that visibly contains an email, a contract clause, and an API key from a .env file to an agent on the right.</desc>
+            <g stroke="#16130E" stroke-width="2" fill="#FFFDF6">
+              <circle cx="28" cy="52" r="9"/>
+              <path d="M 14 96 v -14 a 14 14 0 0 1 28 0 v 14 Z"/>
+            </g>
+            <text x="12" y="112" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">you</text>
+            <rect x="56" y="22" width="128" height="76" fill="#FFFDF6" stroke="#16130E" stroke-width="2"/>
+            <text x="64" y="40" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">ada@example.com</text>
+            <text x="64" y="58" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">clause 12.4 ...</text>
+            <text x="64" y="76" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">.env API_KEY sk-..</text>
+            <path class="travel" d="M 184 60 C 210 48, 222 48, 240 60" fill="none" stroke="#16130E" stroke-width="2" stroke-dasharray="6 5"/>
+            <g stroke="#16130E" stroke-width="2">
+              <rect x="240" y="34" width="48" height="52" rx="8" fill="#F7F2E7"/>
+              <circle cx="256" cy="52" r="5" fill="#FFFDF6"/>
+              <circle cx="272" cy="52" r="5" fill="#FFFDF6"/>
+              <path d="M 254 70 h 20" stroke="#16130E" stroke-width="2"/>
+            </g>
+            <text x="240" y="100" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">agent</text>
+          </svg>
+          <div>
+            <h3>(a) How most AI tools work</h3>
+            <p>You type a request carrying an email address, a contract clause,
+              and an API key from a <code>.env</code> file — and the whole
+              thing travels to the agent. The app sees your raw text.</p>
+            <p class="illus-tag">Illustration — sample data, nothing is sent.</p>
+          </div>
+        </li>
+        <li class="story-step">
+          <svg viewBox="0 0 300 150" role="img" aria-labelledby="story-b-title story-b-desc">
+            <title id="story-b-title">Step two illustration</title>
+            <desc id="story-b-desc">The email, contract clause and API key values, highlighted, leave the machine and land in the cloud where copies spread into logs.</desc>
+            <g stroke="#16130E" stroke-width="2" fill="#FFFDF6">
+              <circle cx="28" cy="52" r="9"/>
+              <path d="M 14 96 v -14 a 14 14 0 0 1 28 0 v 14 Z"/>
+            </g>
+            <text x="12" y="112" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">you</text>
+            <rect x="56" y="30" width="96" height="18" fill="#FF5A1F" opacity="0.35" stroke="none"/>
+            <text x="62" y="43" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">ada@example.com</text>
+            <rect x="56" y="52" width="96" height="18" fill="#FF5A1F" opacity="0.35" stroke="none"/>
+            <text x="62" y="65" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">clause 12.4</text>
+            <rect x="56" y="74" width="96" height="18" fill="#FF5A1F" opacity="0.35" stroke="none"/>
+            <text x="62" y="87" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">API_KEY sk-..</text>
+            <path class="travel" d="M 152 60 C 180 44, 196 44, 214 56" fill="none" stroke="#16130E" stroke-width="2" stroke-dasharray="6 5"/>
+            <g stroke="#16130E" stroke-width="2">
+              <path d="M 218 56 a 12 12 0 0 1 2 -23.8 a 15 15 0 0 1 29 -4.4 a 11 11 0 0 1 16 9.6 a 10 10 0 0 1 -4 18.6 Z" fill="#FF5A1F"/>
+            </g>
+            <text x="216" y="76" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">raw values land</text>
+            <text x="216" y="90" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">in logs + quotes</text>
+            <text x="216" y="104" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">log: ada@.. 12.4</text>
+          </svg>
+          <div>
+            <h3>(b) Where it goes wrong</h3>
+            <p>Once the raw text arrives, it can be stored, logged, or quoted
+              back. You cannot pull it back. That copy lives outside your machine.</p>
+            <p class="illus-tag">Illustration — sample data, nothing is sent.</p>
+          </div>
+        </li>
+        <li class="story-step">
+          <svg viewBox="0 0 300 150" role="img" aria-labelledby="story-c-title story-c-desc">
+            <title id="story-c-title">Step three illustration</title>
+            <desc id="story-c-desc">A membrane line on the user machine blocks secrets and swaps personal details for placeholder tags; only tags reach the agent.</desc>
+            <g stroke="#16130E" stroke-width="2" fill="#FFFDF6">
+              <circle cx="28" cy="52" r="9"/>
+              <path d="M 14 96 v -14 a 14 14 0 0 1 28 0 v 14 Z"/>
+            </g>
+            <text x="12" y="112" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">you</text>
+            <rect x="52" y="30" width="72" height="56" fill="#FFFDF6" stroke="#16130E" stroke-width="2"/>
+            <text x="58" y="48" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">mail ada@..</text>
+            <text x="58" y="66" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">.env key ..</text>
+            <line x1="136" y1="16" x2="136" y2="118" stroke="#2F6B8A" stroke-width="3"/>
+            <text x="118" y="130" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">membrane</text>
+            <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+              <rect x="146" y="26" width="92" height="18" fill="#fff" stroke="#16130E" stroke-width="1.5"/>
+              <text x="151" y="39" font-size="9.5" fill="#16130E">[PII_EMAIL_1]</text>
+              <rect x="146" y="48" width="92" height="18" fill="#fff" stroke="#16130E" stroke-width="1.5"/>
+              <text x="151" y="61" font-size="9.5" fill="#16130E">[CONTRACT_1]</text>
+              <rect x="146" y="70" width="92" height="18" fill="#fff" stroke="#16130E" stroke-width="1.5"/>
+              <text x="151" y="83" font-size="9.5" fill="#16130E">[API_KEY_1]</text>
+            </g>
+            <path class="travel" d="M 238 60 C 252 52, 258 52, 266 60" fill="none" stroke="#16130E" stroke-width="2" stroke-dasharray="6 5"/>
+            <g stroke="#16130E" stroke-width="2">
+              <path d="M 266 56 a 10 10 0 0 1 2 -19.8 a 12 12 0 0 1 24 -3.7 a 9 9 0 0 1 13 8 a 8 8 0 0 1 -3 15.5 Z" fill="#F7F2E7"/>
+            </g>
+            <text x="258" y="100" font-size="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#16130E">only tags</text>
+          </svg>
+          <div>
+            <h3>(c) With Shadowfenced</h3>
+            <p>A membrane on your machine checks every message first. Secrets are
+              blocked; the email, contract clause and API key are swapped for
+              placeholders like <code>[PII_EMAIL_1]</code>, and the real values
+              are restored locally when the answer comes back.</p>
+            <p class="illus-tag">Illustration — sample data, nothing is sent.</p>
+          </div>
+        </li>
+      </ol>
+    </section>
 
     <section class="points" aria-label="Three things to know">
       <p class="kicker">Three things to know</p>
@@ -161,12 +279,83 @@
       </ol>
     </section>
 
+    <section class="how" aria-label="How it works">
+      <p class="kicker">How it works</p>
+      <h2>Four tiers, all on your side first</h2>
+      <ol>
+        <li>
+          <h3>1 · Tier 1 code scan</h3>
+          <p>Every keystroke is checked by deterministic code — no model call.
+            Proven findings (emails, secrets, codenames) are underlined in the
+            composer; ambiguous spans are marked for review.</p>
+        </li>
+        <li>
+          <h3>2 · The gate decides</h3>
+          <p>At send time the gate issues one decision: <strong>ALLOW</strong> clean
+            text, <strong>REDACT</strong> it with placeholder tags,
+            <strong>BLOCK</strong> planted canary tokens, or <strong>HOLD</strong>
+            anything ambiguous or carrying a sensitivity cue.</p>
+        </li>
+        <li>
+          <h3>3 · Tier 2 local review for holds</h3>
+          <p>Held messages are reviewed asynchronously by Muse Glimmer on this
+            machine — never by sending your raw text away. You get an anchored
+            choice: send without the flagged part, or don't send. Nothing is
+            released without your say.</p>
+        </li>
+        <li>
+          <h3>4 · Receipt and restore</h3>
+          <p>Only clean or redacted text reaches the upstream model — Llama 3.2
+            on this machine by default, or Meta Muse Spark in the cloud when you
+            configure a key. Answers come back with tags and are restored
+            locally; every turn is written to a hash-chained decision log you
+            can verify.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="local" aria-label="What stays on your machine">
+      <p class="kicker">Trust</p>
+      <h2>What stays on your machine</h2>
+      <ul>
+        <li><strong>Real values.</strong> Only placeholder tags cross the boundary; the mapping never leaves your side.</li>
+        <li><strong>Your choices.</strong> Redact / keep decisions apply immediately and only here; custom rules stay in a local file.</li>
+        <li><strong>Your drafts.</strong> Chat sessions live in the page memory only — never stored, never uploaded.</li>
+      </ul>
+      <h3>Limits, stated plainly</h3>
+      <ul>
+        <li>Model-suspicion underlines are hints; they are always re-checked by code at send time.</li>
+        <li>Anything the checker cannot clear is held, and unknown states fail closed — never treated as safe.</li>
+        <li>Attachments are scanned before sending; unscannable files are held rather than sent blindly.</li>
+        <li>The cloud provider you pick still receives whatever clean or redacted text you approve.</li>
+      </ul>
+    </section>
+
+    <section class="how install" aria-label="Install in 3 steps">
+      <p class="kicker">Install</p>
+      <h2>Running on your machine in 3 steps</h2>
+      <ol>
+        <li>
+          <h3>1 · Clone</h3>
+          <p><code>git clone https://github.com/wellytg/meta-hackathon-shadowfenced.git</code></p>
+        </li>
+        <li>
+          <h3>2 · Install</h3>
+          <p><code>pip install -e ".[dev]"</code> needs Python 3.11+.</p>
+        </li>
+        <li>
+          <h3>3 · Run</h3>
+          <p><code>python -m uvicorn shadowfenced.app:app --app-dir src --host 127.0.0.1 --port 8765</code> then open <code>http://127.0.0.1:8765</code>.</p>
+        </li>
+      </ol>
+    </section>
+
     <section class="try">
       <div class="try-text">
         <h2>Try it now</h2>
         <p>Type a made-up email address into the console and watch it get underlined, then redacted.</p>
       </div>
-      <a class="console-button" href="/" data-testid="open-console-main">Open the console</a>
+      <a class="console-button" href="/" data-testid="open-console-main">Open the app</a>
     </section>
   </main>
 
