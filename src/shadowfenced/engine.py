@@ -42,6 +42,7 @@ PLACEHOLDER_DESCRIPTIONS = {
     "CLIENT": "client name",
     "FIGURE": "unreleased figure",
     "BEACON": "possible sensitive pointer",
+    "CONTRACT_CLAUSE": "contract clause",
 }
 
 _PLURALS = {
@@ -153,6 +154,31 @@ def _hold(
         reasons=reasons,
     )
 
+
+def _confidential_contract_marker(text: str) -> str | None:
+    """Stamp name when a classified contract must hold for review.
+
+    Returns the handling-caveat stamp (``confidential``,
+    ``do-not-distribute`` or ``privileged``; fixed vocabulary, never
+    raw text) when the document classifier says contract AND the
+    text carries such a stamp, else None. The gate raises the
+    decision to HOLD with the reason "Confidential contract text"
+    so a human picks Redact-and-send; redaction itself still
+    replaces every proven span with a placeholder.
+    """
+    try:
+        from . import contract as contract_module
+        from . import docclass as docclass_module
+
+        info = docclass_module.classify(text)
+    except Exception:
+        return None
+    if not isinstance(info, dict) or info.get("doc_type") != "contract":
+        return None
+    try:
+        return contract_module.confidential_marker_of(text)
+    except Exception:
+        return None
 
 # Sensitivity cue words for the send-time hold rule. Tier-1-clean text
 # holding none of these (and no ambiguous spans) is decided from Tier 1
@@ -442,6 +468,45 @@ def _gate_impl(
                 f"{len(custom_review)} custom rule span(s) "
                 "with action review -> HOLD"
             )
+            if mode == "send":
+                latency_ms["tier2"] = 0.0
+                latency_ms["tier3"] = 0.0
+                latency_ms["total"] = (
+                    time.perf_counter() - total_started
+                ) * 1000
+                return Decision(
+                    decision="HOLD",
+                    decision_id=uuid.uuid4().hex,
+                    spans=spans,
+                    sent_text=None,
+                    placeholders={},
+                    resolved_tier=4,
+                    latency_ms=latency_ms,
+                    reasons=reasons,
+                    evidence={
+                        "proven_by_code": [s.span_id for s in proven],
+                        "pending": [
+                            {
+                                "kind": "message",
+                                "text": text[:MESSAGE_PENDING_CHARS],
+                            }
+                        ],
+                    },
+                    status="reviewing",
+                )
+            return _hold(spans, latency_ms, reasons)
+        contract_marker = _confidential_contract_marker(text)
+        if contract_marker is not None:
+            reasons.append(
+                "Confidential contract text "
+                f"({contract_marker} marker) -> HOLD"
+            )
+            if trace_out is not None:
+                trace_out.append(
+                    {"step": "contract.hold", "tool": "gate",
+                     "detail": f"contract doc + {contract_marker} marker -> HOLD",
+                     "result": "HOLD", "ms": 0.0}
+                )
             if mode == "send":
                 latency_ms["tier2"] = 0.0
                 latency_ms["tier3"] = 0.0

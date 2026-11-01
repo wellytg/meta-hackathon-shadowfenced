@@ -19,6 +19,8 @@ from typing import Any
 from .canary import PREFIX as CANARY_PREFIX
 from .redact import base_label
 from .canary import CanaryRegistry, encodings
+from .contract import SUBCLASS as CONTRACT_SUBCLASS
+from .contract import scan_contract_clauses
 from .policy import Policy
 from .spans import Span, merge_overlaps, span_from_cp_range
 
@@ -1218,4 +1220,107 @@ def scan(
     _run_traced(trace_out, spans, "tier1.custom_scan", counters, _scan_custom_rules, text, policy)
     _run_traced(trace_out, spans, "tier1.entropy_scan", counters, _scan_entropy, text, policy)
     _run_traced(trace_out, spans, "tier1.beacon_scan", counters, _scan_beacon, text, policy)
-    return merge_overlaps(spans)
+    _run_contract_scan(trace_out, spans, counters, text, policy)
+    return _merge_with_contracts(text, spans)
+
+
+def _run_contract_scan(
+    trace_out: list[dict[str, Any]] | None,
+    spans: list[Span],
+    counters: dict[str, int],
+    text: str,
+    policy: Policy,
+) -> None:
+    """Run the contract-clause detector, naming the fired marker."""
+    if trace_out is None:
+        spans.extend(scan_contract_clauses(text, policy))
+        return
+    started = time.perf_counter()
+    found = scan_contract_clauses(text, policy)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    spans.extend(found)
+    if found:
+        detail = (
+            f"{len(found)} hit(s): "
+            + ", ".join(_trace_labels(found, counters))
+        )
+        markers = sorted({span.why for span in found if span.why})
+        detail += " (markers: " + ", ".join(markers) + ")"
+        result = "hit"
+    else:
+        detail = "0 hits"
+        result = "clean"
+    trace_out.append(
+        {
+            "step": "tier1.contract_scan",
+            "tool": "tier1",
+            "detail": detail,
+            "result": result,
+            "ms": round(elapsed_ms, 3),
+        }
+    )
+
+
+def _carve_contracts(
+    text: str, contracts: list[Span], cutters: list[Span]
+) -> list[Span]:
+    """Split clause spans around overlapping proven spans.
+
+    A clause that swallows an email or secret would hide its
+    placeholder inside ``[CONTRACT_CLAUSE_n]``; carving keeps both
+    placeholders. Pieces keep the clause metadata under fresh ids.
+    """
+    carved: list[Span] = []
+    for clause in contracts:
+        ranges = [(clause.cp_start, clause.cp_end)]
+        for cutter in cutters:
+            if cutter.cp_end <= clause.cp_start or cutter.cp_start >= clause.cp_end:
+                continue
+            narrowed: list[tuple[int, int]] = []
+            for start, end in ranges:
+                if cutter.cp_end <= start or cutter.cp_start >= end:
+                    narrowed.append((start, end))
+                    continue
+                if cutter.cp_start > start:
+                    narrowed.append((start, cutter.cp_start))
+                if cutter.cp_end < end:
+                    narrowed.append((cutter.cp_end, end))
+            ranges = narrowed
+        for start, end in ranges:
+            if start >= end or not text[start:end].strip():
+                continue
+            carved.append(
+                span_from_cp_range(
+                    text,
+                    start,
+                    end,
+                    cls=clause.cls,
+                    subclass=clause.subclass,
+                    tier=clause.tier,
+                    proof=clause.proof,
+                    status=clause.status,
+                    message=clause.message,
+                    why=clause.why,
+                    suggested_action=clause.suggested_action,
+                    can_keep=clause.can_keep,
+                    confidence=clause.confidence,
+                )
+            )
+    return carved
+
+
+def _merge_with_contracts(text: str, spans: list[Span]) -> list[Span]:
+    """Merge spans, keeping clause placeholders beside inner ones."""
+    contracts = [
+        s for s in spans
+        if s.cls == "business" and s.subclass == CONTRACT_SUBCLASS
+    ]
+    if not contracts:
+        return merge_overlaps(spans)
+    wanted = {id(s) for s in contracts}
+    others = [s for s in spans if id(s) not in wanted]
+    merged_others = merge_overlaps(others)
+    merged_contracts = merge_overlaps(contracts)
+    cutters = [s for s in merged_others if s.status == "proven"]
+    carved = _carve_contracts(text, merged_contracts, cutters)
+    return merge_overlaps(merged_others + carved)
