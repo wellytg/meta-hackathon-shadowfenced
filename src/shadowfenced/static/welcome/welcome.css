@@ -17,6 +17,8 @@
 
 * { box-sizing: border-box; }
 
+img, svg { max-width: 100%; }
+
 html { -webkit-text-size-adjust: 100%; }
 
 body {
@@ -26,6 +28,8 @@ body {
   font-family: "Helvetica Neue", Helvetica, Arial, "Segoe UI", sans-serif;
   font-size: 16px;
   line-height: 1.5;
+  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 .sheet {
@@ -36,11 +40,13 @@ body {
   border-right: 2px solid var(--rule);
   background: var(--paper);
   min-height: 100vh;
+  overflow-wrap: break-word;
 }
 
-/* Masthead: badge left, console link right. */
+/* Masthead: badge left, console link right; wraps on narrow screens. */
 .masthead {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
@@ -48,7 +54,9 @@ body {
   border-bottom: 2px solid var(--rule);
 }
 
-.brand { display: flex; align-items: center; gap: 12px; }
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+.brand > div { min-width: 0; }
 
 .brand-badge {
   width: 44px;
@@ -72,10 +80,11 @@ body {
   color: var(--muted);
 }
 
-.masthead-nav { flex-shrink: 0; }
+.masthead-nav { flex-shrink: 0; min-width: 0; max-width: 100%; }
 
 .console-link {
   display: inline-block;
+  max-width: 100%;
   font-weight: 800;
   font-size: 15px;
   color: var(--paper);
@@ -105,6 +114,12 @@ body {
   margin: 0 0 16px;
 }
 
+/* Section label needs stronger contrast than the steel tint. */
+.points .kicker {
+  background: var(--steel-deep);
+  color: #ffffff;
+}
+
 .intro h1 {
   margin: 0 0 16px;
   font-size: clamp(38px, 7vw, 64px);
@@ -117,12 +132,14 @@ body {
 .standfirst { font-size: 18px; max-width: 56ch; margin: 0; }
 .standfirst strong { background: var(--steel-pale); padding: 0 4px; }
 
-/* Figure panel. */
+/* Figure panel: scales with the column, never wider than it. */
 .figure {
   margin: 32px 0 0;
   border: 2px solid var(--rule);
   background: var(--paper-2);
   box-shadow: 6px 6px 0 var(--ink);
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .figure svg { display: block; width: 100%; height: auto; }
@@ -162,9 +179,12 @@ body {
   align-items: start;
   padding: 18px 4px;
   border-top: 2px solid var(--rule);
+  min-width: 0;
 }
 
 .points li:last-child { border-bottom: 2px solid var(--rule); }
+
+.points li > div { min-width: 0; }
 
 .points .num {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -196,12 +216,14 @@ body {
   background: var(--steel-pale);
   border: 1px solid var(--ink);
   padding: 0 4px;
+  overflow-wrap: anywhere;
 }
 
 /* Try strip. */
 .try {
   margin-top: 44px;
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 20px;
@@ -210,7 +232,10 @@ body {
   color: var(--paper);
   padding: 24px 26px;
   box-shadow: 6px 6px 0 var(--signal);
+  min-width: 0;
 }
+
+.try-text { min-width: 0; }
 
 .try h2 {
   margin: 0 0 6px;
@@ -225,6 +250,7 @@ body {
 .console-button {
   flex-shrink: 0;
   display: inline-block;
+  max-width: 100%;
   font-weight: 800;
   font-size: 17px;
   color: var(--ink);
