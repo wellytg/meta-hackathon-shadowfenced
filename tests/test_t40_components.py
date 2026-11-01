@@ -12,6 +12,7 @@ import json
 import httpx
 import pytest
 
+from conftest import route_methods
 from shadowfenced import health as health_module
 from shadowfenced.app import app, health_components
 from shadowfenced.config import Settings
@@ -66,10 +67,7 @@ def _by_name(body) -> dict[str, dict]:
 
 
 def test_route_registered():
-    table = {
-        getattr(r, "path", ""): sorted(getattr(r, "methods", []) or [])
-        for r in app.routes
-    }
+    table = route_methods(app)
     assert table["/api/health/components"] == ["GET"]
 
 

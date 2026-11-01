@@ -19,6 +19,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from conftest import route_methods
 from shadowfenced import app as app_module
 from shadowfenced.app import app, handle_transcribe
 
@@ -93,10 +94,7 @@ def _watch_upstream(calls: list) -> httpx.MockTransport:
 
 
 def test_route_registered():
-    table = {
-        getattr(r, "path", ""): sorted(getattr(r, "methods", []) or [])
-        for r in app.routes
-    }
+    table = route_methods(app)
     assert table["/api/transcribe"] == ["POST"]
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from conftest import find_static_mount
 from shadowfenced.app import app
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,10 +28,7 @@ REQUIRED_HOOKS = (
 
 def _static_mount():
     """The StaticFiles mount at / registered by the real application."""
-    for route in app.routes:
-        if route.__class__.__name__ == "Mount" and getattr(route, "path", "") in ("", "/"):
-            return route.app
-    raise AssertionError("no static mount found on app")
+    return find_static_mount(app).app
 
 
 def _serve(path: str) -> tuple[int, dict, bytes]:
