@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
+from starlette.routing import Mount
 
 from shadowfenced import app as app_module
 from shadowfenced.app import ScanRequest, SendRequest, scan, send
@@ -147,14 +148,25 @@ def test_custom_rule_applies_without_restart(local_policy):
 
 
 def test_rules_routes_registered_before_static_mount():
-    found = {
-        (getattr(r, "path", ""), method)
-        for r in app_module.app.routes
-        for method in sorted(getattr(r, "methods", []) or [])
-    }
-    assert ("/api/rules", "GET") in found
-    assert ("/api/rules", "POST") in found
-    assert ("/api/rules/{rule_id}", "DELETE") in found
+    # Route storage changed across FastAPI versions (flat APIRoute list
+    # vs. nested router), so assert on the generated OpenAPI schema and
+    # on URL resolution instead of app.routes internals.
+    paths = app_module.app.openapi()["paths"]
+    assert "get" in paths["/api/rules"]
+    assert "post" in paths["/api/rules"]
+    assert "delete" in paths["/api/rules/{rule_id}"]
+
+    # The rules endpoints must resolve independently of how include_router
+    # stores them, and the static mount must stay last so it cannot
+    # shadow them.
+    assert app_module.app.url_path_for("list_rules") == "/api/rules"
+    assert app_module.app.url_path_for("create_rule") == "/api/rules"
+    assert (
+        app_module.app.url_path_for("delete_rule", rule_id="abc")
+        == "/api/rules/abc"
+    )
+    *_, last = app_module.app.routes
+    assert isinstance(last, Mount) and last.name == "static"
 
 
 def test_gitignore_covers_local_policy():

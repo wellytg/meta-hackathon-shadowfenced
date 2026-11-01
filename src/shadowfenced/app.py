@@ -903,8 +903,10 @@ from .rules import router as rules_router
 
 app.include_router(rules_router)
 # include_router wraps the app lifespan even when the router has none;
-# restore it so startup behavior (and its identity) is unchanged.
-app.router.lifespan_context = lifespan
+# restore the original only when it was actually wrapped, so startup
+# behaviour (and its identity) is unchanged on old and new FastAPI.
+if getattr(app.router, "lifespan_context", lifespan) is not lifespan:
+    app.router.lifespan_context = lifespan
 
 for _candidate in (
     Path("static"),
