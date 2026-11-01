@@ -198,6 +198,14 @@ def create_hold(
         preview, _ = _redact(text, proven)
     else:
         preview = text
+    hold_evidence: dict[str, object] = {
+        "proven_by_code": [s.span_id for s in proven],
+        "pending": [item["text"] for item in pending],
+    }
+    for _key in ("reid", "person_search", "doc_type", "doc_warning",
+                 "doc_signals"):
+        if isinstance(decision.evidence, dict) and _key in decision.evidence:
+            hold_evidence[_key] = decision.evidence[_key]
     hold = Hold(
         hold_id=decision.decision_id,
         text=text,
@@ -206,10 +214,7 @@ def create_hold(
         spans=list(decision.spans),
         proven_ids=[s.span_id for s in proven],
         pending=pending,
-        evidence={
-            "proven_by_code": [s.span_id for s in proven],
-            "pending": [item["text"] for item in pending],
-        },
+        evidence=hold_evidence,
         status="reviewing" if pending else "needs_human",
         redacted_preview=preview,
     )
