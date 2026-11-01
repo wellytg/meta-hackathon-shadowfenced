@@ -1,3 +1,13 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg" />
+  <img src="docs/assets/banner-light.svg" alt="Isometric fence of blocks between a laptop and a cloud. The real address stays on the laptop; only the tag [PII_EMAIL_1] crosses the fence. Nothing sensitive crosses the boundary." />
+</picture>
+
+[![CI](https://github.com/wellytg/meta-hackathon-shadowfenced/actions/workflows/ci.yml/badge.svg)](https://github.com/wellytg/meta-hackathon-shadowfenced/actions/workflows/ci.yml)
+[![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-17130C?style=flat-square)](https://www.apache.org/licenses/LICENSE-2.0)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-2F6F9E?style=flat-square)](https://www.python.org/)
+[![Meta Muse: Glimmer · Spark · Code](https://img.shields.io/badge/Meta_Muse-Glimmer_%C2%B7_Spark_%C2%B7_Code-FF5A1F?style=flat-square)](#how-a-message-is-decided)
+
 # Shadowfenced
 
 *Meta Global AI Developer Hackathon 2026 · team Shadowfenced · repo `meta-hackathon-shadowfenced`*
@@ -11,6 +21,14 @@ Built Oct 27 – Nov 4, 2026 for the Meta Global AI Developer Hackathon (Indie t
 written by Muse Code from the task briefs in `docs/muse-briefs/`.
 
 ## How a message is decided
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/tiers-dark.svg" />
+  <img src="docs/assets/tiers-light.svg" alt="Four decision tiers: Tier 1 code, Tier 2 Muse Glimmer 30B on this PC, Tier 3 code check, Tier 4 a person." />
+</picture>
+
+<details>
+<summary>Text diagram (ASCII)</summary>
 
 ```
  text ─► TIER 1  code: planted canaries (any encoding), key shapes, PII, org codenames/clients, beacon cues
@@ -28,6 +46,8 @@ written by Muse Code from the task briefs in `docs/muse-briefs/`.
  Any error or timeout ─► HOLD (fail closed). A model can never unblock what code proved.
  Every decision goes to a hash-chained log with fingerprints only (no raw values).
 ```
+
+</details>
 
 **Meta models used:** Muse Glimmer 30B (open weights, local, the judge), Muse Spark via the Meta Model API (the
 upstream AI behind the filter, sees redacted text only), Muse Code (built the project). Llama 3.2 3B is the local

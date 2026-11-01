@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="Shadowfenced: a fence of blocks between a laptop and a cloud. Only the tag [PII_EMAIL_1] crosses.">
+  <rect x="0" y="0" width="1280" height="400" fill="#17130C"/>
+  <rect x="3" y="3" width="1274" height="394" fill="none" stroke="#FAF5EA" stroke-width="4"/>
+  <text x="46" y="62" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="17" letter-spacing="3" fill="#FAF5EA">META HACKATHON &#183; LOCAL AI FILTER</text>
+  <text x="42" y="138" font-family="Arial Black, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="58" font-weight="900" fill="#FAF5EA" textLength="545" lengthAdjust="spacingAndGlyphs">SHADOWFENCED</text>
+  <text x="46" y="184" font-family="Helvetica, Arial, 'Helvetica Neue', sans-serif" font-size="25" font-weight="bold" fill="#FAF5EA">Nothing sensitive crosses the boundary.</text>
+  <rect x="46" y="204" width="400" height="6" fill="#FAF5EA"/>
+  <rect x="46" y="232" width="158" height="46" fill="#FF5A1F" stroke="#FAF5EA" stroke-width="3"/>
+  <text x="125" y="263" font-family="Helvetica, Arial, 'Helvetica Neue', sans-serif" font-size="21" font-weight="900" letter-spacing="2" text-anchor="middle" fill="#FFFFFF">BLOCKED</text>
+  <rect x="216" y="232" width="158" height="46" fill="#2F6F9E" stroke="#FAF5EA" stroke-width="3"/>
+  <text x="295" y="263" font-family="Helvetica, Arial, 'Helvetica Neue', sans-serif" font-size="21" font-weight="900" letter-spacing="2" text-anchor="middle" fill="#FFFFFF">ALLOWED</text>
+  <text x="46" y="322" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="14.5" fill="#FAF5EA">Local layer: the cloud sees redactions only.</text>
+  <text x="46" y="346" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="14.5" fill="#FAF5EA">Type or upload &#8212; nothing raw leaves this PC.</text>
+  <rect x="620" y="334" width="620" height="4" fill="#FAF5EA"/>
+  <rect x="645" y="192" width="172" height="112" fill="#2A251D" stroke="#FAF5EA" stroke-width="3"/>
+  <text x="655" y="232" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="15.5" fill="#FAF5EA">ana@example.com</text>
+  <rect x="655" y="240" width="140" height="6" fill="#FF5A1F"/>
+  <text x="655" y="272" font-family="Helvetica, Arial, 'Helvetica Neue', sans-serif" font-size="13" font-weight="900" letter-spacing="1" fill="#FAF5EA">STAYS ON THIS PC</text>
+  <polygon points="628,318 832,318 812,304 648,304" fill="#FAF5EA"/>
+  <rect x="812" y="286" width="208" height="20" fill="#FAF5EA"/>
+  <polygon points="852,206 884,228 852,250 820,228" fill="#4A4234" stroke="#FAF5EA" stroke-width="3" stroke-linejoin="miter"/>
+  <polygon points="820,228 852,250 852,310 820,288" fill="#332C22" stroke="#FAF5EA" stroke-width="3" stroke-linejoin="miter"/>
+  <polygon points="852,250 884,228 884,288 852,310" fill="#211C15" stroke="#FAF5EA" stroke-width="3" stroke-linejoin="miter"/>
+  <polygon points="916,206 948,228 916,250 884,228" fill="#4A4234" stroke="#FAF5EA" stroke-width="3" stroke-linejoin="miter"/>
+  <polygon points="884,228 916,250 916,310 884,288" fill="#332C22" stroke="#FAF5EA" stroke-width="3" stroke-linejoin="miter"/>
+  <polygon points="916,250 948,228 948,288 916,310" fill="#211C15" stroke="#FAF5EA" stroke-width="3" stroke-linejoin="miter"/>
+  <polygon points="980,206 1012,228 980,250 948,228" fill="#4A4234" stroke="#FAF5EA" stroke-width="3" stroke-linejoin="miter"/>
+  <polygon points="948,228 980,250 980,310 948,288" fill="#332C22" stroke="#FAF5EA" stroke-width="3" stroke-linejoin="miter"/>
+  <polygon points="980,250 1012,228 1012,288 980,310" fill="#211C15" stroke="#FAF5EA" stroke-width="3" stroke-linejoin="miter"/>
+  <line x1="817" y1="244" x2="1062" y2="244" stroke="#FAF5EA" stroke-width="2.5" stroke-dasharray="9 7"/>
+  <polygon points="1058,236 1058,252 1072,244" fill="#FAF5EA"/>
+  <rect x="862" y="226" width="172" height="36" fill="#17130C" stroke="#FAF5EA" stroke-width="3"/>
+  <text x="948" y="250" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="17" text-anchor="middle" fill="#FAF5EA">[PII_EMAIL_1]</text>
+  <path d="M1072,304 L1072,278 A24,24 0 0 1 1096,254 A34,34 0 0 1 1152,226 A32,32 0 0 1 1206,256 A22,22 0 0 1 1214,278 L1214,304 Z" fill="#2F6F9E" stroke="#FAF5EA" stroke-width="3" stroke-linejoin="round"/>
+  <text x="1143" y="287" font-family="Helvetica, Arial, 'Helvetica Neue', sans-serif" font-size="36" font-weight="900" text-anchor="middle" fill="#FFFFFF">AI</text>
+  <text x="730" y="358" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="13.5" text-anchor="middle" fill="#FAF5EA">YOU &#8212; VALUES STAY HERE</text>
+  <text x="916" y="358" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="13.5" text-anchor="middle" fill="#FAF5EA">LOCAL FILTER</text>
+  <text x="1143" y="358" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="13.5" text-anchor="middle" fill="#FAF5EA">UPSTREAM AI</text>
+</svg>

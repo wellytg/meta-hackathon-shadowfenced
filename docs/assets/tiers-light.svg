@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="The four decision tiers: code, Glimmer on this PC, code check, person.">
+  <rect x="0" y="0" width="1280" height="360" fill="#FAF5EA"/>
+  <rect x="2" y="2" width="1276" height="356" fill="none" stroke="#17130C" stroke-width="4"/>
+  <text x="40" y="58" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="17" letter-spacing="3" fill="#17130C">HOW A MESSAGE IS DECIDED</text>
+  <polygon points="40,116 68,90 324,90 296,116" fill="#FF8A5C" stroke="#17130C" stroke-width="3" stroke-linejoin="miter"/>
+  <polygon points="296,116 324,90 324,240 296,266" fill="#C74312" stroke="#17130C" stroke-width="3" stroke-linejoin="miter"/>
+  <rect x="40" y="116" width="256" height="150" fill="#FF5A1F" stroke="#17130C" stroke-width="3"/>
+  <text x="168" y="152" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="15" text-anchor="middle" fill="#FFFFFF">TIER 1</text>
+  <text x="168" y="190" font-family="Arial Black, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="33" font-weight="900" text-anchor="middle" fill="#FFFFFF">CODE</text>
+  <text x="168" y="216" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="13" text-anchor="middle" fill="#FFFFFF">canaries &#183; keys &#183; PII</text>
+  <text x="168" y="236" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="13" text-anchor="middle" fill="#FFFFFF">block &#183; redact &#183; hold</text>
+  <polygon points="344,116 372,90 628,90 600,116" fill="#FFFFFF" stroke="#17130C" stroke-width="3" stroke-linejoin="miter"/>
+  <polygon points="600,116 628,90 628,240 600,266" fill="#E4D9BE" stroke="#17130C" stroke-width="3" stroke-linejoin="miter"/>
+  <rect x="344" y="116" width="256" height="150" fill="#FFFFFF" stroke="#17130C" stroke-width="3"/>
+  <text x="472" y="152" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="15" text-anchor="middle" fill="#17130C">TIER 2</text>
+  <text x="472" y="190" font-family="Arial Black, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="33" font-weight="900" text-anchor="middle" fill="#17130C">GLIMMER</text>
+  <text x="472" y="216" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="13" text-anchor="middle" fill="#17130C">Muse Glimmer 30B</text>
+  <text x="472" y="236" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="13" text-anchor="middle" fill="#17130C">this PC &#183; typed verdict</text>
+  <polygon points="648,116 676,90 932,90 904,116" fill="#FFFFFF" stroke="#17130C" stroke-width="3" stroke-linejoin="miter"/>
+  <polygon points="904,116 932,90 932,240 904,266" fill="#E4D9BE" stroke="#17130C" stroke-width="3" stroke-linejoin="miter"/>
+  <rect x="648" y="116" width="256" height="150" fill="#FFFFFF" stroke="#17130C" stroke-width="3"/>
+  <text x="776" y="152" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="15" text-anchor="middle" fill="#17130C">TIER 3</text>
+  <text x="776" y="190" font-family="Arial Black, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="33" font-weight="900" text-anchor="middle" fill="#17130C">CHECK</text>
+  <text x="776" y="216" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="13" text-anchor="middle" fill="#17130C">code checks the claim</text>
+  <text x="776" y="236" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="13" text-anchor="middle" fill="#17130C">span &#183; decode &#183; rule</text>
+  <polygon points="952,116 980,90 1236,90 1208,116" fill="#4E92C2" stroke="#17130C" stroke-width="3" stroke-linejoin="miter"/>
+  <polygon points="1208,116 1236,90 1236,240 1208,266" fill="#1C4A6B" stroke="#17130C" stroke-width="3" stroke-linejoin="miter"/>
+  <rect x="952" y="116" width="256" height="150" fill="#2F6F9E" stroke="#17130C" stroke-width="3"/>
+  <text x="1080" y="152" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="15" text-anchor="middle" fill="#FFFFFF">TIER 4</text>
+  <text x="1080" y="190" font-family="Arial Black, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="33" font-weight="900" text-anchor="middle" fill="#FFFFFF">PERSON</text>
+  <text x="1080" y="216" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="13" text-anchor="middle" fill="#FFFFFF">a person decides</text>
+  <text x="1080" y="236" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="13" text-anchor="middle" fill="#FFFFFF">proven vs suspected</text>
+  <text x="320" y="76" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="11.5" letter-spacing="1" text-anchor="middle" fill="#17130C">HOLD</text>
+  <line x1="302" y1="191" x2="330" y2="191" stroke="#17130C" stroke-width="3"/>
+  <polygon points="330,182 330,200 342,191" fill="#17130C"/>
+  <text x="624" y="76" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="11.5" letter-spacing="1" text-anchor="middle" fill="#17130C">CLAIM</text>
+  <line x1="606" y1="191" x2="634" y2="191" stroke="#17130C" stroke-width="3"/>
+  <polygon points="634,182 634,200 646,191" fill="#17130C"/>
+  <text x="928" y="76" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="11.5" letter-spacing="1" text-anchor="middle" fill="#17130C">REVIEW</text>
+  <line x1="910" y1="191" x2="938" y2="191" stroke="#17130C" stroke-width="3"/>
+  <polygon points="938,182 938,200 950,191" fill="#17130C"/>
+  <text x="640" y="322" font-family="SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace" font-size="15" text-anchor="middle" fill="#17130C">Any error or timeout &#8594; HOLD (fail closed). A model can never unblock what code proved.</text>
+</svg>
