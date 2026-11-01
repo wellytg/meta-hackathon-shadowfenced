@@ -100,6 +100,10 @@ def append_decision(
         "latency_ms": latency if isinstance(latency, dict) else {"total": latency},
         "prev_hash": prev_hash,
     }
+    evidence = decision.evidence or {}
+    for _key in ("protected_key", "role", "left_machine"):
+        if _key in evidence:
+            record[_key] = evidence[_key]
     record["hash"] = _hash_record(record)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")

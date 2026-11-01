@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from . import engine
 from . import holds
+from . import keyguard as keyguard_module
 from . import judge as judge_module
 from .canary import CanaryRegistry
 from .config import get_settings
@@ -32,8 +33,8 @@ from .extract import (
     extract_text,
 )
 from .policy import Policy, load_policy
-from .redact import load_mapping, rehydrate
-from .spans import Span, span_from_cp_range
+from .redact import load_mapping, rehydrate, save_mapping
+from .spans import Span, cp_to_utf16, make_span_id, span_from_cp_range
 from .uploads import UPLOADS
 from .upstream import UpstreamError, chat_sync
 
@@ -223,7 +224,7 @@ def _shadowfenced_field(decision: engine.Decision) -> dict[str, Any]:
 
 def _forward_messages(
     messages: list[dict[str, Any]],
-    sent_text: str | None,
+    sent_text: str | list[Any] | None,
     decision: str | None = None,
 ) -> list[dict[str, Any]]:
     """Rebuild upstream messages with the gated user text only.
@@ -231,12 +232,399 @@ def _forward_messages(
     On REDACT the redacted text goes upstream with a leading system note
     explaining the placeholders; ALLOW forwards plain user text.
     """
+    if isinstance(sent_text, list):
+        return _forward_chat_messages(messages, sent_text, decision)
     kept = [m for m in messages if isinstance(m, dict) and m.get("role") != "user"]
     if decision == "REDACT" and sent_text is not None:
         kept.insert(0, {"role": "system", "content": REDACT_NOTE})
     if sent_text is not None:
         kept.append({"role": "user", "content": sent_text})
     return kept
+
+
+def _forward_chat_messages(
+    messages: list[Any],
+    redacted: list[Any],
+    decision: str | None = None,
+) -> list[dict[str, Any]]:
+    """Forward per-message chat items in their original order and roles.
+
+    ``redacted`` is aligned with ``messages``: dict items are used as-is,
+    str items replace a string content, and None keeps the original
+    message. On REDACT a leading system note explains the placeholders.
+    """
+    out: list[dict[str, Any]] = []
+    for original, item in zip(messages, redacted):
+        if isinstance(item, dict):
+            out.append(item)
+        elif (
+            isinstance(item, str)
+            and isinstance(original, dict)
+            and isinstance(original.get("content"), str)
+        ):
+            new_message = dict(original)
+            new_message["content"] = item
+            out.append(new_message)
+        elif isinstance(original, dict):
+            out.append(original)
+        else:
+            out.append({"role": "user", "content": str(original)})
+    if decision == "REDACT":
+        out.insert(0, {"role": "system", "content": REDACT_NOTE})
+    return out
+
+
+def _content_text_parts(content: Any) -> tuple[list[str], bool]:
+    """Gateable text pieces of one message content, plus the clean flag.
+
+    String content gates as one piece; a list gates each text part and
+    sets clean False when non-text parts appear; anything else is
+    unclean with no gateable text.
+    """
+    if content is None:
+        return [], True
+    if isinstance(content, str):
+        return [content], True
+    if isinstance(content, list):
+        pieces: list[str] = []
+        clean = True
+        for part in content:
+            text, is_text = _part_text(part)
+            if not is_text:
+                clean = False
+            else:
+                pieces.append(text)
+        return pieces, clean
+    return [], False
+
+
+def _rebuild_chat_message(
+    message: dict[str, Any],
+    content_pieces: list[str],
+    arg_redacted: dict[int, str],
+) -> dict[str, Any]:
+    """Write redacted strings back into a copy of one message."""
+    new_message = dict(message)
+    content = message.get("content", "")
+    if isinstance(content, str):
+        new_message["content"] = content_pieces[0] if content_pieces else ""
+    elif isinstance(content, list):
+        parts: list[Any] = []
+        iterator = iter(content_pieces)
+        for part in content:
+            _, is_text = _part_text(part)
+            if is_text and isinstance(part, dict):
+                part = dict(part)
+                part["text"] = next(iterator, "")
+            parts.append(part)
+        new_message["content"] = parts
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        rebuilt: list[Any] = []
+        for index, call in enumerate(tool_calls):
+            if isinstance(call, dict) and index in arg_redacted:
+                call = dict(call)
+                function = call.get("function")
+                if isinstance(function, dict):
+                    function = dict(function)
+                else:
+                    function = {}
+                function["arguments"] = arg_redacted[index]
+                call["function"] = function
+            rebuilt.append(call)
+        new_message["tool_calls"] = rebuilt
+    return new_message
+
+
+def _gate_chat_messages(
+    messages: list[Any],
+) -> tuple[engine.Decision, list[Any] | None, str]:
+    """Gate every chat message role plus assistant tool-call arguments.
+
+    Each message's content text parts and tool-call arguments are gated
+    separately (Tier 1 plus protected keys); redaction rewrites only the
+    sensitive spans inside each message. Returns ``(decision, items,
+    text)`` where ``items`` is aligned with ``messages`` (redacted dicts
+    for REDACT/ALLOW, None for BLOCK/HOLD) and ``text`` is the combined
+    gated text for the decision log. A BLOCK in any message blocks the
+    request; severity otherwise ranks BLOCK > HOLD > REDACT > ALLOW.
+    """
+    import dataclasses
+    import json as _json
+    import uuid as _uuid
+
+    policy = get_policy()
+    registry = get_registry()
+    order = {"ALLOW": 0, "REDACT": 1, "HOLD": 2, "BLOCK": 3}
+
+    roles: list[str] = []
+    raw_messages: list[Any] = list(messages)
+    content_lists: list[list[str]] = []
+    args_lists: list[dict[int, str]] = []
+    unclean_flags: list[bool] = []
+    for message in raw_messages:
+        if not isinstance(message, dict):
+            roles.append("user")
+            content_lists.append([])
+            args_lists.append({})
+            unclean_flags.append(False)
+            continue
+        role = message.get("role")
+        if not isinstance(role, str) or not role:
+            role = "user"
+        roles.append(role)
+        pieces, clean = _content_text_parts(message.get("content", ""))
+        arg_texts: dict[int, str] = {}
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for index, call in enumerate(tool_calls):
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function")
+                if not isinstance(function, dict) or "arguments" not in function:
+                    continue
+                arguments = function["arguments"]
+                if isinstance(arguments, str):
+                    arg_texts[index] = arguments
+                elif isinstance(arguments, (dict, list)):
+                    arg_texts[index] = _json.dumps(arguments)
+                elif arguments is not None:
+                    arg_texts[index] = str(arguments)
+        content_lists.append(pieces)
+        args_lists.append(arg_texts)
+        unclean_flags.append(not clean)
+
+    records: list[dict[str, Any]] = []
+    cursor = 0
+    for info_index, (pieces, arg_texts) in enumerate(
+        zip(content_lists, args_lists)
+    ):
+        for piece in pieces:
+            records.append(
+                {"info": info_index, "kind": "content", "text": piece,
+                 "start": cursor}
+            )
+            cursor += len(piece) + 1
+        for arg_index in sorted(arg_texts):
+            records.append(
+                {"info": info_index, "kind": "args", "arg": arg_index,
+                 "text": arg_texts[arg_index], "start": cursor}
+            )
+            cursor += len(arg_texts[arg_index]) + 1
+    full = "\n".join(record["text"] for record in records)
+
+    spans_all: list[Span] = []
+    reasons_all: list[str] = []
+    merged: dict[str, str] = {}
+    counters: dict[str, int] = {}
+    key_hits: list[tuple[str, str, int, int, int]] = []
+    worst = "ALLOW"
+    latency_total = 0.0
+    arg_redacted_all: list[dict[int, str]] = [{} for _ in raw_messages]
+    content_redacted_all: list[list[str]] = [[] for _ in raw_messages]
+
+    for record in records:
+        text = record["text"]
+        info_index = record["info"]
+        role = roles[info_index]
+        hit = keyguard_module.find_in_text(text)
+        string_decision = engine.gate(text, policy, registry, mode="send")
+        latency_total += float(
+            (string_decision.latency_ms or {}).get("total", 0.0)
+        )
+        record["engine"] = string_decision
+        outcome = string_decision.decision
+        redacted: str | None = None
+        if hit is not None:
+            variable, _encoding, local_start, local_end = hit
+            key_hits.append(
+                (variable, role, record["start"] + local_start,
+                 record["start"] + local_end, info_index)
+            )
+            reasons_all.append(f"{variable} appeared in a {role} message")
+            outcome = "BLOCK"
+        elif outcome == "REDACT":
+            redacted = string_decision.sent_text or ""
+            for placeholder, value in (
+                string_decision.placeholders or {}
+            ).items():
+                if placeholder in merged:
+                    if merged[placeholder] == value:
+                        continue
+                    base, _, _ = placeholder.strip().strip("[]").rpartition("_")
+                    counters[base] = counters.get(base, 0) + 1
+                    while f"[{base}_{counters[base]}]" in merged:
+                        counters[base] += 1
+                    fresh = f"[{base}_{counters[base]}]"
+                    redacted = redacted.replace(placeholder, fresh)
+                    merged[fresh] = value
+                else:
+                    base, _, number = (
+                        placeholder.strip().strip("[]").rpartition("_")
+                    )
+                    try:
+                        counters[base] = max(
+                            counters.get(base, 0), int(number)
+                        )
+                    except ValueError:
+                        pass
+                    merged[placeholder] = value
+        elif outcome == "ALLOW":
+            redacted = text
+        if order[outcome] > order[worst]:
+            worst = outcome
+        reasons_all.extend(string_decision.reasons)
+        for span in string_decision.spans:
+            shifted = dataclasses.replace(
+                span,
+                cp_start=span.cp_start + record["start"],
+                cp_end=span.cp_end + record["start"],
+                start=0,
+                end=0,
+                span_id="",
+            )
+            spans_all.append(shifted)
+        record["redacted"] = redacted
+        if redacted is not None:
+            if record["kind"] == "content":
+                content_redacted_all[info_index].append(redacted)
+            else:
+                arg_redacted_all[info_index][record["arg"]] = redacted
+
+    if any(unclean_flags) and order[worst] < order["HOLD"]:
+        worst = "HOLD"
+    if any(unclean_flags):
+        reasons_all.append("non-text content parts need review")
+
+    for span in spans_all:
+        span.start = cp_to_utf16(full, span.cp_start)
+        span.end = cp_to_utf16(full, span.cp_end)
+        span.span_id = make_span_id(span.cls, span.cp_start, span.cp_end)
+
+    for variable, role, start, end, _info_index in key_hits:
+        spans_all.append(
+            span_from_cp_range(
+                full,
+                start,
+                end,
+                cls="secret",
+                subclass="protected_key",
+                status="proven",
+                message="Looks like a protected API key.",
+                why=f"{variable} value (or an encoding of it) in gated text",
+                suggested_action="block",
+                can_keep=False,
+                confidence=0.99,
+            )
+        )
+    for _variable in dict.fromkeys(hit[0] for hit in key_hits):
+        keyguard_module.note_hit(_variable)
+
+    decision_id = _uuid.uuid4().hex
+    latency_ms: dict[str, float] = {"total": latency_total}
+    if worst == "BLOCK":
+        evidence: dict[str, Any] = {}
+        if key_hits:
+            evidence = {
+                "protected_key": key_hits[0][0],
+                "role": key_hits[0][1],
+                "left_machine": False,
+            }
+        return (
+            engine.Decision(
+                decision="BLOCK",
+                decision_id=decision_id,
+                spans=spans_all,
+                sent_text=None,
+                placeholders={},
+                resolved_tier=1,
+                latency_ms=latency_ms,
+                reasons=reasons_all,
+                evidence=evidence,
+            ),
+            None,
+            full,
+        )
+    if worst == "HOLD":
+        proven_ids = [
+            span.span_id for span in spans_all if span.status == "proven"
+        ]
+        ambiguous = [s for s in spans_all if s.status == "ambiguous"]
+        pending: list[dict[str, Any]] = [
+            {"kind": "message", "text": full[:2000]}
+        ]
+        for span in ambiguous:
+            pending.append(
+                {
+                    "kind": "span",
+                    "span_id": span.span_id,
+                    "text": full[span.cp_start:span.cp_end],
+                }
+            )
+        return (
+            engine.Decision(
+                decision="HOLD",
+                decision_id=decision_id,
+                spans=spans_all,
+                sent_text=None,
+                placeholders={},
+                resolved_tier=4,
+                latency_ms=latency_ms,
+                reasons=reasons_all,
+                evidence={
+                    "proven_by_code": proven_ids,
+                    "pending": pending,
+                },
+                status="reviewing",
+            ),
+            None,
+            full,
+        )
+    items: list[Any] = []
+    for index, message in enumerate(raw_messages):
+        if not isinstance(message, dict):
+            items.append(message)
+        else:
+            items.append(
+                _rebuild_chat_message(
+                    message,
+                    content_redacted_all[index],
+                    arg_redacted_all[index],
+                )
+            )
+    if worst == "REDACT":
+        save_mapping(decision_id, merged)
+        return (
+            engine.Decision(
+                decision="REDACT",
+                decision_id=decision_id,
+                spans=spans_all,
+                sent_text="\n".join(
+                    record.get("redacted") or "" for record in records
+                ),
+                placeholders=dict(merged),
+                resolved_tier=1,
+                latency_ms=latency_ms,
+                reasons=reasons_all,
+            ),
+            items,
+            full,
+        )
+    reasons_all.append("no spans -> ALLOW")
+    return (
+        engine.Decision(
+            decision="ALLOW",
+            decision_id=decision_id,
+            spans=spans_all,
+            sent_text=full,
+            placeholders={},
+            resolved_tier=1,
+            latency_ms=latency_ms,
+            reasons=reasons_all,
+        ),
+        items,
+        full,
+    )
 
 
 def _transport() -> Any:
@@ -526,21 +914,25 @@ def _send_response(
 
 @app.post("/v1/chat/completions")
 def chat_completions(body: ChatRequest) -> Any:
-    """OpenAI-compatible completions behind the Shadowfenced gate."""
-    text, clean = extract_user_text(body.messages)
-    if not clean:
-        decision = engine.gate(text, get_policy(), get_registry(), mode="send")
-        decision = _hold_for(decision, "non-text content parts need review")
-        _log_decision(decision, text)
-        _register_hold(
-            decision, text, body.messages, None,
-            why="non-text content parts need review",
-        )
-        return _hold_response(decision, "non-text content parts need review")
-    decision = engine.gate(text, get_policy(), get_registry(), mode="send")
+    """OpenAI-compatible completions behind the Shadowfenced gate.
+
+    Every forwarded message role (system, user, assistant, tool) and
+    assistant tool-call arguments are gated, not only user messages.
+    Messages forward in their original order with their original roles;
+    redaction rewrites only the sensitive spans inside each message. A
+    BLOCK in any message blocks the request.
+    """
+    decision, redacted, text = _gate_chat_messages(body.messages)
     _log_decision(decision, text)
     if decision.decision == "HOLD":
+        if "non-text content parts need review" in decision.reasons:
+            _register_hold(
+                decision, text, body.messages, None,
+                why="non-text content parts need review",
+            )
+            return _hold_response(decision, "non-text content parts need review")
         _register_hold(decision, text, body.messages, None)
+        return _hold_response(decision, "ambiguous spans need human review")
     if decision.decision == "BLOCK":
         return JSONResponse(
             status_code=403,
@@ -554,13 +946,9 @@ def chat_completions(body: ChatRequest) -> Any:
             },
             headers={"X-Shadowfenced-Decision": "BLOCK"},
         )
-    if decision.decision == "HOLD":
-        return _hold_response(decision, "ambiguous spans need human review")
     try:
         answer = _send_upstream(
-            _forward_messages(
-                body.messages, decision.sent_text, decision.decision
-            ),
+            _forward_messages(body.messages, redacted, decision.decision),
             None,
         )
     except UpstreamError as exc:
@@ -703,6 +1091,17 @@ def hold_rule(hold_id: str, body: RuleRequest) -> Any:
         decision, result["answer"], result["highlights"], result["unmatched"],
         hold.provider,
     )
+
+
+@app.get("/api/keyguard")
+def keyguard_status() -> dict[str, Any]:
+    """Protected variable names and per-variable hit counts (no values)."""
+    entries = keyguard_module.snapshot()
+    return {
+        "keys": entries,
+        "protected_keys": [entry["name"] for entry in entries],
+        "hits": {entry["name"]: entry["hits"] for entry in entries},
+    }
 
 
 @app.get("/api/stats")
