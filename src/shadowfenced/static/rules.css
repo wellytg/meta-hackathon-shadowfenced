@@ -317,3 +317,8 @@
   min-width: 64px;
   text-align: right;
 }
+
+/* Turning descriptive mode off hides every trace. */
+.sf-trace[hidden] {
+  display: none;
+}

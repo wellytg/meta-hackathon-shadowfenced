@@ -8,7 +8,42 @@
     descriptiveOn = window.localStorage.getItem(DESCRIPTIVE_KEY) === "1";
   } catch (e) { /* storage unavailable; toggle stays in memory */ }
 
-  var pendingTraces = []; // queued /api/send traces, one per banner
+  // One queue entry per /api/send fetch, created synchronously when the
+  // fetch starts so the matching banner (appended only after the response
+  // arrives) can never win the race against the async trace read.
+  var pendingSends = []; // FIFO of Promise<trace|null>
+  var waitingBanners = []; // banner elements still needing their send trace
+
+  // Pair queued banners with queued send traces in order. Rendering happens
+  // in the trace promise callback, so a banner that arrived before its
+  // trace JSON still gets its trace, for the first message after the
+  // toggle is turned on and for every later message alike.
+  function pairTraces() {
+    while (waitingBanners.length && pendingSends.length) {
+      (function (banner, tracePromise) {
+        tracePromise.then(function (trace) {
+          if (!trace || !trace.length) return;
+          if (!banner.isConnected) return;
+          var next = banner.nextElementSibling;
+          if (next && next.classList && next.classList.contains("sf-trace")) {
+            next.hidden = !descriptiveOn;
+            return;
+          }
+          var box = renderTrace(trace);
+          box.hidden = !descriptiveOn;
+          banner.insertAdjacentElement("afterend", box);
+        }).catch(function () { /* trace stays missing */ });
+      })(waitingBanners.shift(), pendingSends.shift());
+    }
+    // Queues stay aligned (one entry per send, one per banner); drop stale
+    // ends so a page left open can never grow them without bound.
+    if (pendingSends.length > 50) {
+      pendingSends.splice(0, pendingSends.length - 50);
+    }
+    if (waitingBanners.length > 50) {
+      waitingBanners.splice(0, waitingBanners.length - 50);
+    }
+  }
 
   // Capture /api/send traces without disturbing app.js: the original
   // response object passes through untouched; we only read a clone.
@@ -19,12 +54,39 @@
       var result = original.apply(this, arguments);
       try {
         var target = typeof url === "string" ? url : (url && url.url) || "";
-        if (target.indexOf("/api/send") >= 0 && result && result.clone) {
-          result.clone().json().then(function (body) {
-            if (body && Array.isArray(body.trace)) {
-              pendingTraces.push(body.trace);
+        if (target.indexOf("/api/send") >= 0 && result &&
+            typeof result.then === "function") {
+          var resolveTrace;
+          var tracePromise = new Promise(function (resolve) {
+            resolveTrace = resolve;
+          });
+          pendingSends.push(tracePromise);
+          result.then(function (resp) {
+            var clone = null;
+            try {
+              clone = resp && resp.clone ? resp.clone() : null;
+            } catch (cloneErr) { clone = null; }
+            if (!clone) {
+              resolveTrace(null);
+              pairTraces();
+              return;
             }
-          }).catch(function () { /* trace stays missing */ });
+            clone.json().then(function (body) {
+              resolveTrace(
+                body && Array.isArray(body.trace) ? body.trace : null
+              );
+              pairTraces();
+            }).catch(function () {
+              resolveTrace(null);
+              pairTraces();
+            });
+          }, function () {
+            // A failed send still appends a banner via app.js, so resolve
+            // with no trace to keep the queues aligned.
+            resolveTrace(null);
+            pairTraces();
+          });
+          pairTraces();
         }
       } catch (e) { /* never break the send flow */ }
       return result;
@@ -78,26 +140,45 @@
     return box;
   }
 
+  function handleBanner(banner) {
+    if (!banner || banner.__sfTraceQueued) return;
+    banner.__sfTraceQueued = true;
+    waitingBanners.push(banner);
+    pairTraces();
+  }
+
+  function collectBanners(node) {
+    if (!node || node.nodeType !== 1) return;
+    if (node.classList && node.classList.contains("banner")) {
+      // Upload failures also render banners but never issue /api/send,
+      // so they must not consume another message's trace.
+      if (node.textContent &&
+          node.textContent.indexOf("Could not attach") !== -1) return;
+      handleBanner(node);
+    }
+    if (node.querySelectorAll) {
+      var nested = node.querySelectorAll(".banner");
+      for (var i = 0; i < nested.length; i++) {
+        if (nested[i].textContent &&
+            nested[i].textContent.indexOf("Could not attach") !== -1) {
+          continue;
+        }
+        handleBanner(nested[i]);
+      }
+    }
+  }
+
   function watchThread() {
     var thread = document.getElementById("thread");
     if (!thread || typeof MutationObserver !== "function") return;
     var observer = new MutationObserver(function (mutations) {
       mutations.forEach(function (mutation) {
         mutation.addedNodes.forEach(function (node) {
-          if (
-            node.nodeType !== 1 ||
-            !node.classList ||
-            !node.classList.contains("banner")
-          ) {
-            return;
-          }
-          var trace = pendingTraces.shift();
-          if (!trace || !trace.length || !descriptiveOn) return;
-          node.insertAdjacentElement("afterend", renderTrace(trace));
+          collectBanners(node);
         });
       });
     });
-    observer.observe(thread, { childList: true });
+    observer.observe(thread, { childList: true, subtree: true });
   }
 
   function ruleRow(rule, removable, onRemove) {
@@ -136,6 +217,13 @@
       item.appendChild(remove);
     }
     return item;
+  }
+
+  function setTracesVisible() {
+    var traces = document.querySelectorAll(".sf-trace");
+    for (var i = 0; i < traces.length; i++) {
+      traces[i].hidden = !descriptiveOn;
+    }
   }
 
   function buildDrawer() {
@@ -341,6 +429,7 @@
         window.localStorage.setItem(DESCRIPTIVE_KEY, descriptiveOn ? "1" : "0");
       } catch (e) { /* in-memory only */ }
       paint();
+      setTracesVisible();
     });
     paint();
     actions.appendChild(descBtn);
