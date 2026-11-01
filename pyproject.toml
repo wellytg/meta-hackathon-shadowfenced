@@ -45,5 +45,8 @@ shadowfenced = "shadowfenced.app:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+shadowfenced = ["static/**"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
