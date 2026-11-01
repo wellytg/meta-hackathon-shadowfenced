@@ -16,6 +16,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
+from conftest import route_methods
 from shadowfenced import config as config_module
 from shadowfenced import ecs_log
 from shadowfenced import ext_api
@@ -149,10 +150,7 @@ def test_log_events_reports_broken_chain():
 
 
 def test_log_events_route_registered():
-    table = {
-        getattr(r, "path", ""): sorted(getattr(r, "methods", []) or [])
-        for r in app.routes
-    }
+    table = route_methods(app)
     assert table["/api/log/events"] == ["GET"]
     assert table["/api/guard"] == ["GET"]
     assert table["/api/ext/pairing/regenerate"] == ["POST"]

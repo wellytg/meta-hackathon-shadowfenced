@@ -165,8 +165,15 @@ def test_rules_routes_registered_before_static_mount():
         app_module.app.url_path_for("delete_rule", rule_id="abc")
         == "/api/rules/abc"
     )
-    *_, last = app_module.app.routes
-    assert isinstance(last, Mount) and last.name == "static"
+    routes = list(app_module.app.routes)
+    statics = [
+        index for index, route in enumerate(routes)
+        if isinstance(route, Mount) and route.name == "static"
+    ]
+    assert statics, "no static mount found on app"
+    assert statics[-1] == len(routes) - 1, (
+        "static mount must stay last so it cannot shadow API routes"
+    )
 
 
 def test_gitignore_covers_local_policy():

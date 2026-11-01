@@ -19,6 +19,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from conftest import route_methods
 from shadowfenced import app as app_module
 from shadowfenced.app import (
     ChatRequest,
@@ -100,7 +101,7 @@ def _json_body(response) -> dict:
 
 
 def test_routes_registered():
-    table = {getattr(r, "path", ""): sorted(getattr(r, "methods", []) or []) for r in app.routes}
+    table = route_methods(app)
     assert table["/api/health"] == ["GET"]
     assert table["/api/scan"] == ["POST"]
     assert table["/api/send"] == ["POST"]
