@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Shadowfenced",
+  "version": "0.1.0",
+  "description": "Guard rail that scans AI chat prompts for sensitive details before you send them. Requires the local Shadowfenced app.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "shadowfenced@example.local",
+      "strict_min_version": "121.0"
+    }
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "https://chatgpt.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*",
+    "https://meta.ai/*",
+    "https://www.meta.ai/*"
+  ],
+  "background": {
+    "scripts": ["src/background.js"]
+  },
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "Shadowfenced"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://meta.ai/*",
+        "https://www.meta.ai/*"
+      ],
+      "js": ["src/logic.js", "src/adapters.js", "src/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
