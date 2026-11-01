@@ -1,11 +1,13 @@
-"""One shared Ollama context size for every local Glimmer call (T49).
+"""Shared Ollama options for every local Glimmer call (T49, T53).
 
 Every local Glimmer request -- judge verdicts, person-search intent, the
 re-identification residual check, and the startup warm-up -- must use the
 same ``options.num_ctx`` and ``keep_alive``. Ollama reloads the model
 whenever a request asks for a different context size, so one stray
 default (Ollama's built-in 8192) forces an ~18 s reload of the 17 GB
-model on every size switch and trips the 10 s person-search timeout.
+model on every size switch and trips the shared text-call timeout.
+Text calls share one timeout (``SF_GLIMMER_TIMEOUT_S``, default 45 s);
+image calls keep their own longer setting.
 """
 
 from __future__ import annotations
@@ -17,6 +19,9 @@ from typing import Any
 
 #: Fallback context size when no setting is available.
 DEFAULT_GLIMMER_NUM_CTX = 2048
+#: Fallback text-call timeout (seconds) when no setting is available.
+#: Image calls keep their own longer setting (``SF_IMAGE_TIMEOUT_S``).
+DEFAULT_GLIMMER_TIMEOUT_S = 45.0
 
 
 def glimmer_num_ctx(settings: Any = None) -> int:
@@ -49,6 +54,28 @@ def glimmer_keep_alive() -> Any:
         return int(raw)
     except ValueError:
         return raw
+
+
+def glimmer_timeout_s(settings: Any = None) -> float:
+    """Shared timeout (seconds) for every local Glimmer text call.
+
+    Reads ``SF_GLIMMER_TIMEOUT_S`` via settings; falls back to
+    ``DEFAULT_GLIMMER_TIMEOUT_S`` when missing, unparsable or <= 0.
+    Image calls keep ``settings.image_timeout_s`` instead.
+    """
+    if settings is None:
+        from .config import get_settings
+
+        try:
+            settings = get_settings()
+        except Exception:
+            return DEFAULT_GLIMMER_TIMEOUT_S
+    try:
+        value = float(getattr(settings, "glimmer_timeout_s",
+                              DEFAULT_GLIMMER_TIMEOUT_S))
+    except (TypeError, ValueError):
+        return DEFAULT_GLIMMER_TIMEOUT_S
+    return value if value > 0 else DEFAULT_GLIMMER_TIMEOUT_S
 
 
 def glimmer_options(settings: Any = None, **extra: Any) -> dict[str, Any]:

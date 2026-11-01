@@ -1002,8 +1002,9 @@ def _downgrade_verified_public_figure(
 ) -> Decision | None:
     """ALLOW when Glimmer verifies a public figure in encyclopedic framing.
 
-    Tier 3 coordination for T48 rule 2: the re-identification layer may
-    still warn on a published birthday plus a name, but when Glimmer has
+    Tier 3 coordination for T48 rule 2, extended in T53 to pure cue-word
+    HOLDs with no re-id case: the layer may still warn on a published
+    birthday plus a name, but when Glimmer has
     verified (exact-substring subject, confidence >= 0.6) that the
     subject is a public figure, the question uses encyclopedic framing
     and no current contact detail or ID number is present, there is no
@@ -1013,8 +1014,15 @@ def _downgrade_verified_public_figure(
     if decision.decision not in ("WARN", "HOLD"):
         return None
     reid_info = (decision.evidence or {}).get("reid")
-    if not reid_info or reid_info.get("outcome") not in ("WARN", "HOLD"):
+    if reid_info is not None and reid_info.get("outcome") not in ("WARN", "HOLD"):
         return None
+    if reid_info is None:
+        if not decision.reasons or not all(
+            "sensitivity cue word" in reason for reason in decision.reasons
+        ):
+            return None
+        if any(getattr(span, "proof", "") == "custom" for span in decision.spans):
+            return None
     if result.warn or not result.triggered:
         return None
     if result.subject_public is not True or not result.verified_subject:
@@ -1032,7 +1040,7 @@ def _downgrade_verified_public_figure(
            and getattr(span, "cls", "") in ("pii", "secret")
            for span in decision.spans):
         return None
-    combo = set(reid_info.get("combination") or [])
+    combo = set(reid_info.get("combination") or []) if reid_info is not None else {str(item.get("kind", "")) for item in (current or [])}
     if combo & set(reid_module.CONTACT_KINDS):
         return None
     if not reid_module.has_encyclopedic_framing(text, conversation):
