@@ -542,6 +542,13 @@
         // Plain user-facing line only; machine reasons (span ids, hashes)
         // stay in the log and are never rendered here.
         banner.textContent = bannerText(decision, body);
+        if (body && typeof body.doc_warning === "string" && body.doc_warning) {
+          var docWarning = document.createElement("div");
+          docWarning.className = "doc-warning";
+          docWarning.setAttribute("data-testid", "doc-warning");
+          docWarning.textContent = body.doc_warning;
+          thread.appendChild(docWarning);
+        }
         thread.appendChild(banner);
 
         var toggle = document.createElement("button");

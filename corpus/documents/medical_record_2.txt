@@ -1,0 +1,17 @@
+Seabrook Clinic -- Visit Summary (fictional example)
+
+Patient: Ellis Grant
+DOB: 09/02/1975
+Contact: +1 (555) 017-8831
+MRN: 771024
+Insurance: Harborline Health, Member ID QTX-77102
+
+Visit date: June 3, 2026
+Diagnosis: type 2 diabetes
+Vitals normal apart from elevated glucose
+Symptoms noted: fatigue
+
+Medication prescribed: metformin 500 mg twice daily
+Dosage review at the next visit.
+
+Follow-up visit in three months.

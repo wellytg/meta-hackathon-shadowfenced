@@ -1,0 +1,16 @@
+Harborline Studio -- Payslip (fictional example)
+
+Employee: Nadia Shah
+Contact: +1 (555) 012-9904
+Employer: Harborline Studio
+
+Pay period: April 1-30, 2026
+Pay date: May 1, 2026
+Tax code: 1257L
+
+Gross pay: $3,842.10
+Deductions: $764.20
+Net pay: $3,077.90
+
+Direct deposit to account number 73910428
+Routing number: 011401533

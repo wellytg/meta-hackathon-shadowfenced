@@ -1,0 +1,21 @@
+First Harbor Bank -- Monthly Statement (fictional example)
+
+Account holder: Mara Ellison
+742 Harbor Way, Seabrook, CA 90210
+Contact: +1 (555) 014-8820
+
+Statement period: March 1-31, 2026
+Opening balance: $4,210.55
+Closing balance: $3,872.10
+
+Routing number: 021000021
+Account number: 84729105
+
+Transactions:
+Mar 03  Harbor Grocers            -82.14
+Mar 11  Payroll credit          +2,400.00
+Mar 19  Seabrook Power            -96.31
+Mar 27  ATM withdrawal           -200.00
+
+Available balance: $3,872.10
+Please call the number above with any questions.

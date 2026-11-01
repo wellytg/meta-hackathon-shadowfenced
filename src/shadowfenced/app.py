@@ -187,6 +187,22 @@ def provider_list() -> list[dict[str, Any]]:
     ]
 
 
+def _doc_fields(text: str) -> dict[str, Any]:
+    """Document-type classification for one upload payload (T29).
+
+    Never raises and never blocks: unscannable input classifies as
+    no document type.
+    """
+    try:
+        from . import docclass as docclass_module
+
+        info = docclass_module.classify(text)
+        return {"doc_type": info.get("doc_type"),
+                "doc_warning": info.get("warning")}
+    except Exception:
+        return {"doc_type": None, "doc_warning": None}
+
+
 def span_to_dict(span: Span) -> dict[str, Any]:
     """Serialise one span per the API contract (UTF-16 + code points)."""
     return {
@@ -998,6 +1014,8 @@ def _send_response(
         "answer": answer,
         "answer_highlights": highlights,
         "user_message": engine.user_message(decision),
+        "doc_warning": decision.doc_warning,
+        "doc_type": decision.doc_type,
         "evidence": evidence,
         "resolved_tier": decision.resolved_tier,
         "latency_ms": decision.latency_ms,
@@ -1250,6 +1268,8 @@ def _handle_audio_upload(
             "summary": {},
             "summary_text": "Transcribed by Muse Voice · could not read file",
             "error": str(exc),
+            "doc_type": None,
+            "doc_warning": None,
         }
     if not text.strip():
         record = UPLOADS.save(
@@ -1265,6 +1285,8 @@ def _handle_audio_upload(
             "summary": {},
             "summary_text": "Transcribed by Muse Voice · could not read file",
             "error": "transcription returned no text",
+            "doc_type": None,
+            "doc_warning": None,
         }
     spans = tier1.scan(text, get_policy(), get_registry())
     status = "flagged" if spans else "clean"
@@ -1290,6 +1312,7 @@ def _handle_audio_upload(
         "spans": [span_to_dict(s) for s in spans],
         "summary": summary,
         "summary_text": "Transcribed by Muse Voice · " + summary_text,
+        **_doc_fields(text),
     }
 
 
@@ -1334,6 +1357,8 @@ def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, s
             "summary": {},
             "summary_text": "could not read file",
             "error": str(exc),
+            "doc_type": None,
+            "doc_warning": None,
         }
     spans = tier1.scan(text, get_policy(), get_registry())
     status = "flagged" if spans else "clean"
@@ -1359,6 +1384,7 @@ def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, s
         "spans": [span_to_dict(s) for s in spans],
         "summary": summary,
         "summary_text": summary_text,
+        **_doc_fields(text),
     }
 
 

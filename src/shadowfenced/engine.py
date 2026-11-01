@@ -31,6 +31,12 @@ PLACEHOLDER_DESCRIPTIONS = {
     "SECRET": "secret",
     "PII_EMAIL": "email address",
     "PII_PHONE": "phone number",
+    "PII_ACCOUNT": "account number",
+    "PII_ROUTING": "routing number",
+    "PII_IBAN": "IBAN",
+    "PII_SWIFT": "SWIFT code",
+    "PII_SORT_CODE": "sort code",
+    "PII_HOLDER_NAME": "account holder name",
     "CODENAME": "internal codename",
     "CLIENT": "client name",
     "FIGURE": "unreleased figure",
@@ -77,23 +83,31 @@ def user_message(decision: Decision) -> str:
     """One plain user-facing sentence for a decision.
 
     Contains no span ids, hashes, or raw values: those stay in
-    ``decision.reasons`` (the log), never in the banner.
+    ``decision.reasons`` (the log), never in the banner. When a
+    document-type warning is present it is shown first, above the
+    decision line.
     """
     if decision.decision == "BLOCK":
-        return (
+        base = (
             "A planted canary token was found (proven by code). "
             "Nothing was sent."
         )
-    if decision.decision == "REDACT":
+    elif decision.decision == "REDACT":
         total = len(decision.placeholders)
         if total == 0:
-            return "Sent with redactions."
-        parts = describe_placeholders(decision.placeholders)
-        noun = "redaction" if total == 1 else "redactions"
-        return f"Sent with {total} {noun}: " + ", ".join(parts) + "."
-    if decision.decision == "HOLD":
-        return "Held for review: possible pointer to sensitive data."
-    return "Sent clean"
+            base = "Sent with redactions."
+        else:
+            parts = describe_placeholders(decision.placeholders)
+            noun = "redaction" if total == 1 else "redactions"
+            base = f"Sent with {total} {noun}: " + ", ".join(parts) + "."
+    elif decision.decision == "HOLD":
+        base = "Held for review: possible pointer to sensitive data."
+    else:
+        base = "Sent clean"
+    warning = getattr(decision, "doc_warning", None)
+    if isinstance(warning, str) and warning:
+        return f"{warning} {base}"
+    return base
 
 
 @dataclass
@@ -110,6 +124,8 @@ class Decision:
     reasons: list[str] = field(default_factory=list)
     evidence: dict[str, Any] = field(default_factory=dict)
     status: str = "complete"  # complete | reviewing (async Glimmer review)
+    doc_type: str | None = None  # doc warning type, never blocks
+    doc_warning: str | None = None  # plain warning above the decision
 
 
 def _hold(
@@ -256,6 +272,59 @@ def _gate_send(
             latency_ms=latency_ms,
             reasons=reasons,
         )
+def _attach_doc_classification(
+    decision: Decision,
+    text: str,
+    trace_out: list[dict[str, Any]] | None,
+) -> None:
+    """Classify the document type and attach its warning (T29).
+
+    The warning is informational only: it is stored on the decision,
+    copied into the decision evidence, prepended to the user-facing
+    message, and recorded as a ``doc.classify`` trace step. The gate
+    decision itself is never changed here.
+    """
+    from . import docclass as docclass_module
+    try:
+        started = time.perf_counter()
+        info = docclass_module.classify(text)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+    except Exception:
+        return
+    doc_type = info.get("doc_type")
+    scores = info.get("scores") or {}
+    if not isinstance(doc_type, str) or not doc_type:
+        if trace_out is not None:
+            trace_out.append(
+                {"step": "doc.classify", "tool": "tier1",
+                 "detail": "no document type",
+                 "result": "none", "ms": round(elapsed_ms, 3)}
+            )
+        return
+    warning = info.get("warning")
+    decision.doc_type = doc_type
+    decision.doc_warning = warning if isinstance(warning, str) else None
+    evidence = dict(decision.evidence or {})
+    evidence["doc_type"] = doc_type
+    if decision.doc_warning:
+        evidence["doc_warning"] = decision.doc_warning
+    evidence["doc_signals"] = [
+        f"{dtype}:{name}+{weight}"
+        for dtype, name, weight in (info.get("signals") or [])
+        if dtype == doc_type
+    ]
+    decision.evidence = evidence
+    if trace_out is not None:
+        detail = f"{doc_type} (score {scores.get(doc_type, 0)}): " + ", ".join(
+            evidence["doc_signals"]
+        )
+        trace_out.append(
+            {"step": "doc.classify", "tool": "tier1",
+             "detail": detail, "result": doc_type,
+             "ms": round(elapsed_ms, 3)}
+        )
+
+
 def _gate_impl(
     text: str,
     policy: Policy,
@@ -549,6 +618,7 @@ def gate(
     decision = _gate_impl(
         text, policy, registry, choices, mode, trace_out=trace_out
     )
+    _attach_doc_classification(decision, text, trace_out)
     _append_gate_trace(
         trace_out, decision, choices,
         (time.perf_counter() - started) * 1000,

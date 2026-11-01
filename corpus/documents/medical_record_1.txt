@@ -1,0 +1,17 @@
+Seabrook Clinic -- Visit Summary (fictional example)
+
+Patient: June Okafor
+DOB: 04/11/1988
+Contact: +1 (555) 011-2076
+MRN: 482913
+Insurance: Harborline Health, Member ID HMX-48210
+
+Visit date: May 12, 2026
+Diagnosis: essential hypertension
+Blood pressure: 142/91
+Symptoms noted: headaches
+
+Medication prescribed: lisinopril 10 mg daily
+Allergies: none recorded
+
+Follow-up visit in four weeks.
