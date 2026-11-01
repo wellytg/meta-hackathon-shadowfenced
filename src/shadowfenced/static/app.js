@@ -556,6 +556,28 @@
         renderReceipt(decision, body, banner);
         noteTurn(decision, body);
         setMembrane(membraneFor(decision));
+        if (body && body.evidence && body.evidence.person_search && body.evidence.person_search.banner) {
+          var personHost = (banner.querySelector && banner.querySelector(".receipt-notes")) || banner;
+          var personNote = document.createElement("div");
+          personNote.className = "person-search-note";
+          personNote.setAttribute("data-testid", "person-search-note");
+          personNote.textContent = body.evidence.person_search.banner;
+          personHost.appendChild(personNote);
+          if (body.decision === "WARN" && body.evidence.person_search.generalised_text) {
+            var personBtn = document.createElement("button");
+            personBtn.type = "button";
+            personBtn.className = "reid-generalise";
+            personBtn.setAttribute("data-testid", "reid-generalise");
+            personBtn.textContent = "Generalise";
+            (function (gt) {
+              personBtn.addEventListener("click", function () {
+                composer.value = gt;
+                composer.dispatchEvent(new Event("input", { bubbles: true }));
+              });
+            })(body.evidence.person_search.generalised_text);
+            personHost.appendChild(personBtn);
+          }
+        }
 
         var toggle = document.createElement("button");
         toggle.type = "button";

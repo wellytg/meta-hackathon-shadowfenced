@@ -1,4 +1,4 @@
-/* Shadowfenced re-identification (T30) banner: plain-words notice plus a
+/* Shadowfenced re-identification (T30) plus person-search intent (T33) banner: plain-words notice plus a
    one-click Generalise choice. No app.js changes: this file watches the
    existing /api/send responses and renders only evidence.reid (banner and
    coarsened generalised_text). Machine reasons are never rendered. */
@@ -57,10 +57,13 @@
   }
 
   function renderReid(body) {
-    if (!body || !body.evidence || !body.evidence.reid) {
+    if (!body || !body.evidence || (!body.evidence.reid && !body.evidence.person_search)) {
       return;
     }
-    var info = body.evidence.reid;
+    var info = body.evidence.person_search && body.evidence.person_search.banner ? {
+      banner: body.evidence.person_search.banner,
+      generalised_text: body.evidence.person_search.generalised_text || (body.evidence.reid && body.evidence.reid.generalised_text)
+    } : body.evidence.reid;
     if (!info.banner || body.decision === "ALLOW") {
       return;
     }
