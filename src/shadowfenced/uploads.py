@@ -23,6 +23,10 @@ class UploadedFile:
     kind: str
     text: str
     status: str  # clean | flagged | unscannable
+    image_png: bytes | None = None  # redacted PNG bytes (images only)
+    regions: int = 0  # sensitive regions hidden (images only)
+    thumbnail: str = ""  # redacted thumbnail data URL (images only)
+    method: str = ""  # "sam" | "box" | "none" (images only)
     created_at: float = field(default_factory=time.time)
     expires_at: float = field(default_factory=lambda: time.time() + STORE_TTL_S)
 

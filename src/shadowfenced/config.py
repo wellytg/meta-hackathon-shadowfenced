@@ -30,6 +30,7 @@ _ENV_KEYS = (
     "SF_LIVE_TIMEOUT_S",
     "SF_LIVE_NUM_GPU",
     "SF_TIER2_MODE",
+    "SF_IMAGE_REDACTION",
     "SF_LIVE_HINTS",
     "SF_PROTECT_KEYS",
     "SF_HOSTED",
@@ -92,6 +93,7 @@ class Settings(BaseModel):
     live_timeout_s: float = 4.0
     live_num_gpu: int = 0
     tier2_mode: str = "live"
+    image_redaction: str = "off"
     live_hints: bool = False
     protect_keys: str = "META_API_KEY,MODEL_API_KEY"
     hosted: bool = False
@@ -117,6 +119,12 @@ def _collect(env: dict[str, str] | None = None) -> dict[str, str]:
 def _tier2_mode(raw: str | None) -> str:
     mode = (raw or "live").strip().lower()
     return mode if mode in ("live", "replay", "off") else "live"
+
+
+def _image_redaction(raw: str | None) -> str:
+    """Image redaction mode: ``off`` (default), ``local``, or ``on``."""
+    mode = (raw or "off").strip().lower()
+    return mode if mode in ("off", "local", "on") else "off"
 
 
 def _parse_float(raw: str | None, default: float) -> float:
@@ -184,6 +192,7 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
         live_timeout_s=_parse_float(merged.get("SF_LIVE_TIMEOUT_S"), 4.0),
         live_num_gpu=_parse_int(merged.get("SF_LIVE_NUM_GPU"), 0),
         tier2_mode=_tier2_mode(merged.get("SF_TIER2_MODE")),
+        image_redaction=_image_redaction(merged.get("SF_IMAGE_REDACTION")),
         live_hints=_parse_flag(merged.get("SF_LIVE_HINTS"), False),
         protect_keys=merged["SF_PROTECT_KEYS"] if "SF_PROTECT_KEYS" in merged else "META_API_KEY,MODEL_API_KEY",
         hosted=_parse_flag(merged.get("SF_HOSTED"), False),

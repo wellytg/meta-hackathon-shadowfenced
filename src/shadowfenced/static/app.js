@@ -14,6 +14,9 @@
   var fileInput = document.getElementById("file-input");
   var fileChips = document.getElementById("file-chips");
   var attachedFiles = []; // {file_id, name, kind, status, summary_text, spans}
+  var originalImages = {}; // file_id -> original data URL (this PC only, never sent)
+  var redactedCache = {}; // file_id -> object URL for the full redacted PNG
+  var pendingOriginals = {}; // name:size -> original data URL until the upload lands
   var sending = false;
   var composerError = document.getElementById("composer-error");
 
@@ -402,7 +405,95 @@
     return "Held for review: possible pointer to sensitive data.";
   }
 
-  var KIND_ICONS = { text: "T", markdown: "M", csv: "#", docx: "W", pdf: "P", unknown: "?" };
+  var KIND_ICONS = { text: "T", markdown: "M", csv: "#", docx: "W", pdf: "P", image: "I", unknown: "?" };
+
+  /* T43 image redaction: thumbnail chips, a local before/after compare,
+     and the opt-in consent card. Square Classic: no rounded corners. */
+  function stashOriginalImage(file) {
+    var name = (file && file.name) || "";
+    if (!file || (!/^image\//.test(file.type || "") && !/\.(png|jpe?g)$/i.test(name))) return;
+    var key = name + ":" + file.size;
+    try {
+      var reader = new FileReader();
+      reader.onload = function () { pendingOriginals[key] = String(reader.result || ""); };
+      reader.onerror = function () { pendingOriginals[key] = ""; };
+      reader.readAsDataURL(file);
+    } catch (e) { pendingOriginals[key] = ""; }
+  }
+
+  function showImageCompare(box, f) {
+    box.innerHTML = "";
+    box.hidden = false;
+    var wrap = document.createElement("div");
+    wrap.className = "img-compare-row";
+    function cell(label, src) {
+      var fig = document.createElement("figure");
+      fig.className = "img-cell";
+      var img = document.createElement("img");
+      img.alt = label + " " + f.name;
+      img.src = src;
+      var cap = document.createElement("figcaption");
+      cap.textContent = label;
+      fig.appendChild(img);
+      fig.appendChild(cap);
+      return { fig: fig, img: img };
+    }
+    var before = cell("Before (this PC only)", originalImages[f.file_id] || "");
+    var after = cell("After (redacted)", "");
+    wrap.appendChild(before.fig);
+    wrap.appendChild(after.fig);
+    box.appendChild(wrap);
+    if (redactedCache[f.file_id]) { after.img.src = redactedCache[f.file_id]; return; }
+    fetch("/api/uploads/" + encodeURIComponent(f.file_id) + "/image")
+      .then(function (resp) {
+        if (!resp.ok) throw new Error("redacted image unavailable");
+        return resp.blob();
+      })
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        redactedCache[f.file_id] = url;
+        after.img.src = url;
+      })
+      .catch(function () { after.img.alt = "Redacted image unavailable"; });
+  }
+
+  function showImageConsent(body, file) {
+    var card = document.createElement("div");
+    card.className = "banner";
+    card.setAttribute("data-testid", "image-consent");
+    var msg = document.createElement("p");
+    msg.textContent = body.notice || "";
+    card.appendChild(msg);
+    var row = document.createElement("div");
+    row.className = "consent-row";
+    [["on", "Turn on"], ["local", "Keep images local"], ["off", "Don't attach"]].forEach(function (opt) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "consent-btn";
+      btn.textContent = opt[1];
+      btn.setAttribute("data-choice", opt[0]);
+      btn.addEventListener("click", function () {
+        fetch("/api/image-redaction/consent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ choice: opt[0] })
+        }).then(function () {
+          card.remove();
+          if (opt[0] === "off") return;
+          try {
+            var dt = new DataTransfer();
+            dt.items.add(file);
+            fileInput.files = dt.files;
+            fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+          } catch (e) { /* user re-attaches manually */ }
+        });
+      });
+      row.appendChild(btn);
+    });
+    card.appendChild(row);
+    thread.appendChild(card);
+    updateEmptyHint();
+  }
 
   function renderChips() {
     if (!fileChips) return;
@@ -421,6 +512,11 @@
       name.textContent = f.name + " · " + (f.summary_text || f.status);
       name.addEventListener("click", function () {
         details.hidden = !details.hidden;
+        var cmp = chip.querySelector(".img-compare");
+        if (cmp) {
+          if (cmp.hidden) { showImageCompare(cmp, f); }
+          else { cmp.hidden = true; }
+        }
       });
       var remove = document.createElement("button");
       remove.type = "button";
@@ -428,9 +524,22 @@
       remove.setAttribute("aria-label", "Remove " + f.name);
       remove.textContent = "x";
       remove.addEventListener("click", function () {
+        var gone = attachedFiles[index];
+        if (gone && gone.file_id) { delete originalImages[gone.file_id]; delete redactedCache[gone.file_id]; }
         attachedFiles.splice(index, 1);
         renderChips();
       });
+      if (f.kind === "image" && f.thumbnail) {
+        var thumb = document.createElement("img");
+        thumb.className = "img-thumb";
+        thumb.src = f.thumbnail;
+        thumb.alt = "Redacted preview of " + f.name;
+        chip.appendChild(thumb);
+        var compare = document.createElement("div");
+        compare.className = "img-compare";
+        compare.hidden = true;
+        chip.appendChild(compare);
+      }
       var details = document.createElement("ul");
       details.className = "chip-findings";
       details.hidden = true;
@@ -461,6 +570,7 @@
       clearComposerError();
       var file = fileInput.files && fileInput.files[0];
       if (!file) return;
+      stashOriginalImage(file);
       var form = new FormData();
       form.append("file", file, file.name);
       fetch("/api/upload", { method: "POST", body: form })
@@ -471,8 +581,17 @@
         })
         .then(function (res) {
           if (res.ok) {
-            attachedFiles.push(res.body);
-            renderChips();
+            if (res.body && res.body.consent_required) {
+              showImageConsent(res.body, file);
+            } else {
+              attachedFiles.push(res.body);
+              var okey = file.name + ":" + file.size;
+              if (res.body && res.body.file_id && pendingOriginals[okey]) {
+                originalImages[res.body.file_id] = pendingOriginals[okey];
+                delete pendingOriginals[okey];
+              }
+              renderChips();
+            }
           } else {
             var err = document.createElement("div");
             err.className = "banner";

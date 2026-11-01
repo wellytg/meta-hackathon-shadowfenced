@@ -547,6 +547,16 @@ body {
 
 .file-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .file-chips:empty { display: none; }
+/*T43 image redaction: thumbnails, consent row, before/after compare.
+  Square Classic: hard 2px outlines, offset shadows, no rounded corners.*/
+.img-thumb { width: 96px; height: 96px; object-fit: cover; border: 2px solid var(--line); border-radius: 0; }
+.consent-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.consent-btn { background: var(--paper-2); border: 2px solid var(--line); box-shadow: 2px 2px 0 var(--line); color: var(--ink); cursor: pointer; font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 0; }
+.img-compare { flex-basis: 100%; margin-top: 6px; }
+.img-compare-row { display: flex; gap: 8px; }
+.img-cell { margin: 0; flex: 1; min-width: 0; }
+.img-cell img { width: 100%; border: 2px solid var(--line); border-radius: 0; display: block; }
+.img-cell figcaption { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
 .file-chip {
   display: flex;

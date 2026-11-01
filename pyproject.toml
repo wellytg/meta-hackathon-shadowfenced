@@ -19,6 +19,8 @@ dependencies = [
     "python-docx",
     "pypdf",
     "keyring",
+    "Pillow",
+    "meta-sam-parser",
 ]
 
 [project.optional-dependencies]
