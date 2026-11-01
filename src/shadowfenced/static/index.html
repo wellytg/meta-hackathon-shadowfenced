@@ -22,7 +22,11 @@
     <span class="brand-mark" aria-hidden="true"></span>
     <span class="brand-text">
       <span class="wordmark">Shadowfenced</span>
-      <span class="header-pill" data-testid="header-pill">Local check · code + Muse Glimmer (30B, this PC)</span>
+      <span class="status-indicator" data-testid="status-indicator">
+        <span class="status-dot" data-testid="guard-dot" data-state="checking" aria-hidden="true"></span>
+        <span class="model-status" data-testid="model-status">Model: Muse Spark · cloud</span>
+        <span class="header-pill" data-testid="header-pill">Guard: on · checking locally (code + Muse Glimmer)</span>
+      </span>
     </span>
   </a>
   <div class="topbar-picks model-pill" title="Upstream model">
@@ -33,6 +37,8 @@
     </select>
   </div>
   <div class="topbar-actions">
+    <button id="chats-toggle" class="chats-toggle" type="button"
+      aria-expanded="false" aria-controls="sessions-panel">Chats</button>
     <button id="details-toggle" class="details-toggle" type="button"
       aria-expanded="false" aria-controls="details-drawer">Details</button>
     <details class="settings-menu" id="settings-menu">
@@ -49,12 +55,16 @@
         <div class="settings-row" id="settings-rules-slot">
           <span class="settings-label">Rules</span>
         </div>
+        <div class="settings-row">
+          <span class="settings-label">Developer mode</span>
+          <button type="button" disabled title="coming soon" data-testid="developer-mode">Coming soon</button>
+        </div>
       </div>
     </details>
   </div>
 </header>
 <main class="layout">
-  <nav class="sessions" aria-label="Chats">
+  <nav class="sessions" id="sessions-panel" aria-label="Chats">
     <button id="new-chat" data-testid="new-chat" class="new-chat-btn" type="button">New chat</button>
     <ul id="chat-list" data-testid="chat-list" class="chat-list" aria-live="polite"></ul>
     <p class="sessions-note">Chats live in this page only. They are never stored or sent anywhere.</p>
@@ -66,7 +76,7 @@
     <button id="jump-latest" data-testid="jump-latest" class="jump-latest" type="button" hidden>Jump to latest ↓</button>
     <div class="composer-block" id="composer-block" data-membrane="idle">
       <div class="membrane-line" aria-hidden="true"></div>
-      <div class="membrane-caption" aria-hidden="true"><span>Private</span><span>External</span></div>
+      <div class="composer-box">
       <div class="composer-wrap">
         <div id="backdrop" class="composer-backdrop" aria-hidden="true"></div>
         <textarea id="composer" data-testid="composer" class="composer"
@@ -75,17 +85,18 @@
       </div>
       <div id="file-chips" class="file-chips"></div>
       <div class="composer-row">
-        <button id="paperclip" class="paperclip-btn" type="button" data-testid="attach" title="Attach a file">Attach</button>
+        <button id="paperclip" class="paperclip-btn" type="button" data-testid="attach" title="Attach a file" aria-label="Attach a file">+</button>
         <div id="composer-tools" data-testid="composer-tools" class="composer-tools"></div>
         <input id="file-input" data-testid="file-input" type="file" hidden accept=".txt,.md,.csv,.docx,.pdf,.wav,.mp3,.m4a,.ogg,.webm">
-        <button id="send" data-testid="send" class="send-btn" type="button">Send</button>
-        <span id="checking" class="checking" hidden>checking…</span>
+        <button id="send" data-testid="send" class="send-btn" type="button" disabled>Send</button>
+        <span id="checking" class="checking" hidden>Checking locally…</span>
       </div>
+      <div id="composer-error" class="composer-error" role="status" hidden></div>
       <div id="issues" class="issues"></div>
+      </div>
     </div>
   </section>
   <div class="side-col">
-    <div class="zone-membrane" aria-hidden="true"><span class="zone-a">Private</span><span class="zone-b">External</span></div>
     <details id="details-drawer" data-testid="details-drawer" class="details-drawer" open>
       <summary>Details</summary>
       <div class="drawer-body">
@@ -116,13 +127,18 @@
         </div>
         <div class="card">
           <h2>Pair browser extension</h2>
-          <p class="stat-line">Enter this token in the extension popup to pair it.</p>
+          <p class="stat-line">Paste this into the Shadowfenced browser extension. It lets only your extension use this app.</p>
           <p class="stat-line">Pairing token: <code id="ext-token" data-testid="ext-token">loading...</code>
+          <button id="ext-token-show" data-testid="ext-token-show" type="button">Show</button>
           <button id="ext-token-copy" type="button">Copy</button></p>
+          <p class="stat-line"><button id="ext-token-regenerate" data-testid="ext-token-regenerate" type="button">Regenerate</button>
+          <span id="ext-token-msg" class="token-msg" role="status" hidden></span></p>
         </div>
         <div class="card">
           <h2>Decision log</h2>
           <p><span id="log-badge" data-testid="log-ok" class="log-badge">log chain verified · 0 events</span></p>
+          <p><button id="log-view" data-testid="log-view" type="button" class="log-view-btn">View log</button></p>
+          <ol id="log-events" data-testid="log-events" class="log-list" hidden></ol>
         </div>
       </div>
     </details>
@@ -137,17 +153,40 @@
   "use strict";
   var toggle = document.getElementById("details-toggle");
   var drawer = document.getElementById("details-drawer");
+  var chatsToggle = document.getElementById("chats-toggle");
+  function narrow() {
+    return window.innerWidth <= 640;
+  }
   function paint() {
     if (!toggle || !drawer) return;
-    toggle.setAttribute("aria-expanded", drawer.open ? "true" : "false");
+    var expanded = narrow()
+      ? document.body.classList.contains("show-details")
+      : drawer.open;
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
   }
   if (toggle && drawer) {
     toggle.addEventListener("click", function () {
-      drawer.open = !drawer.open;
-      paint();
+      if (narrow()) {
+        var show = document.body.classList.toggle("show-details");
+        document.body.classList.remove("show-chats");
+        if (chatsToggle) chatsToggle.setAttribute("aria-expanded", "false");
+        toggle.setAttribute("aria-expanded", show ? "true" : "false");
+      } else {
+        drawer.open = !drawer.open;
+        paint();
+      }
     });
     drawer.addEventListener("toggle", paint);
+    window.addEventListener("resize", paint);
     paint();
+  }
+  if (chatsToggle) {
+    chatsToggle.addEventListener("click", function () {
+      var show = document.body.classList.toggle("show-chats");
+      document.body.classList.remove("show-details");
+      chatsToggle.setAttribute("aria-expanded", show ? "true" : "false");
+      paint();
+    });
   }
   // rules.js appends .sf-head-actions to .topbar; relocate those buttons
   // into the settings menu so Theme, Descriptive mode and Rules sit together.
@@ -158,8 +197,11 @@
     if (!actions || !descSlot || !rulesSlot) return false;
     var btns = actions.querySelectorAll("button");
     for (var i = 0; i < btns.length; i++) {
+      var testid = btns[i].getAttribute("data-testid") || "";
       var label = (btns[i].textContent || "").toLowerCase();
-      if (label.indexOf("descriptive") >= 0) descSlot.appendChild(btns[i]);
+      if (testid === "sf-descriptive-toggle" ||
+          label.indexOf("descriptive") >= 0 ||
+          label.indexOf("show more detail") >= 0) descSlot.appendChild(btns[i]);
       else rulesSlot.appendChild(btns[i]);
     }
     if (!actions.children.length && actions.parentNode) actions.parentNode.removeChild(actions);

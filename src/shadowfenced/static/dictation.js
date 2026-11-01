@@ -170,6 +170,7 @@
       var form = new FormData();
       form.append("file", blob, fileNameFor(blob.type || ""));
       form.append("duration", String(Math.round(elapsedMs / 100) / 10));
+      showMessage("Transcribing\u2026");
       button.disabled = true;
       button.setAttribute("aria-label", "Transcribing");
       button.textContent = "\u2026";
@@ -300,18 +301,21 @@
           }
           button.classList.add("sf-mic-recording");
           button.setAttribute("aria-pressed", "true");
+          function paintListening() {
+            var label = formatElapsed(Date.now() - startedAt);
+            showMessage("Listening " + label + " \u2014 press Stop to finish.");
+            button.textContent = "Stop " + label;
+            button.setAttribute("aria-label", "Stop dictation (" + label + ")");
+          }
           timer = window.setInterval(function () {
             var remaining = stopAt - Date.now();
             if (remaining <= 0) {
               stopRecording();
               return;
             }
-            var label = formatElapsed(Date.now() - startedAt);
-            button.textContent = "\u25CF " + label;
-            button.setAttribute("aria-label", "Stop dictation (" + label + ")");
+            paintListening();
           }, 250);
-          button.textContent = "\u25CF 0:00";
-          button.setAttribute("aria-label", "Stop dictation (0:00)");
+          paintListening();
         })
         .catch(function (err) {
           var name = err && err.name ? err.name : "";
@@ -397,6 +401,7 @@
     });
   }
 
+  window.ShadowfencedDictation = { formatElapsed: formatElapsed };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
   } else {

@@ -14,6 +14,25 @@
   var fileInput = document.getElementById("file-input");
   var fileChips = document.getElementById("file-chips");
   var attachedFiles = []; // {file_id, name, kind, status, summary_text, spans}
+  var sending = false;
+  var composerError = document.getElementById("composer-error");
+
+  // One-line composer error next to the control that failed; it
+  // clears on the next action (typing, sending, attaching).
+  function showComposerError(text) {
+    if (!composerError) return;
+    composerError.textContent = text;
+    composerError.hidden = !text;
+  }
+  function clearComposerError() {
+    showComposerError("");
+  }
+
+  // Send stays disabled while the box is empty (no text, no attachments).
+  function paintSend() {
+    if (!sendBtn) return;
+    sendBtn.disabled = sending || (!composer.value && !attachedFiles.length);
+  }
 
   var PROVIDER_LABELS = {
     meta: "Meta Muse Spark (cloud)",
@@ -25,6 +44,10 @@
   }
 
   var HEADER_PILL = "Local check \u00b7 code + Muse Glimmer (30B, this PC)";
+  var GUARD_FULL = "Guard: on \u00b7 checking locally (code + Muse Glimmer)";
+  var GUARD_CODE_ONLY = "Guard: on \u00b7 code checks only";
+  var guardDot = document.querySelector('[data-testid="guard-dot"]');
+  var modelStatus = document.querySelector('[data-testid="model-status"]');
 
   // Live model hints are experimental and off by default: the server
   // says whether they are on (GET /api/health returns live_hints).
@@ -33,6 +56,33 @@
   function setPill() {
     if (!headerPill) return;
     headerPill.textContent = HEADER_PILL;
+  }
+
+  function shortModelLabel(id, label) {
+    if (id === "meta") return "Muse Spark \u00b7 cloud";
+    return String(label || id)
+      .replace(/^Meta /, "")
+      .replace(/ \((cloud|local[^)]*)\)$/i, " \u00b7 $1");
+  }
+
+  function paintModelStatus() {
+    if (!modelStatus || !providerSel) return;
+    var opt = providerSel.options[providerSel.selectedIndex];
+    var label = opt ? opt.textContent : providerSel.value;
+    modelStatus.textContent = "Model: " + shortModelLabel(providerSel.value, label);
+  }
+
+  function paintGuard(glimmer) {
+    if (guardDot) guardDot.setAttribute("data-state", glimmer ? "on" : "limited");
+    if (!headerPill) return;
+    headerPill.textContent = glimmer ? GUARD_FULL : GUARD_CODE_ONLY;
+  }
+
+  function loadGuard() {
+    fetch("/api/guard")
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) { paintGuard(!!(body && body.glimmer)); })
+      .catch(function () { paintGuard(false); });
   }
 
   // Hosted demo (SF_HOSTED=1): reveal the fixed public-demo banner.
@@ -79,18 +129,24 @@
           if (fallback) providerSel.value = fallback.id;
         }
         setPill();
+        paintModelStatus();
       })
       .catch(function () { /* static options stay as the fallback */ });
   }
 
   providerSel.addEventListener("change", function () {
+    providerSel.disabled = true;
     fetch("/api/provider", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: providerSel.value })
     })
-      .then(function () { setPill(); })
-      .catch(function () { /* default stays server-side */ });
+      .then(function () {
+        providerSel.disabled = false;
+        setPill();
+        paintModelStatus();
+      })
+      .catch(function () { providerSel.disabled = false; });
   });
 
   var scanSeq = 0;       // latest scan request id; stale responses are dropped
@@ -396,11 +452,13 @@
       chip.appendChild(details);
       fileChips.appendChild(chip);
     });
+    paintSend();
   }
 
   if (paperclip && fileInput) {
     paperclip.addEventListener("click", function () { fileInput.click(); });
     fileInput.addEventListener("change", function () {
+      clearComposerError();
       var file = fileInput.files && fileInput.files[0];
       if (!file) return;
       var form = new FormData();
@@ -495,6 +553,7 @@
     renderBackdrop("", []);
     renderIssues([], null);
     syncScroll();
+    paintSend();
   }
 
   function clearAttachments() {
@@ -503,8 +562,10 @@
   }
 
   function sendNow() {
+    if (sending) return; // one request in flight at a time
     var text = composer.value;
     if (!text && !attachedFiles.length) return;
+    clearComposerError();
     // Only spans the user explicitly clicked Redact/Keep on are sent;
     // anything untouched redacts by default without a recorded choice.
     var choiceList = spans
@@ -521,7 +582,8 @@
     noteUserMessage(text);
     setMembrane("inspecting");
     checking.hidden = false;
-    sendBtn.disabled = true;
+    sending = true;
+    paintSend();
 
     fetch("/api/send", {
       method: "POST",
@@ -615,6 +677,9 @@
         }
         updateEmptyHint();
         refreshStats();
+        // The server took the text, so a fresh box is safe here.
+        clearComposer();
+        clearAttachments();
       })
       .catch(function () {
         var banner = document.createElement("details");
@@ -626,12 +691,13 @@
         noteTurn("UNKNOWN", null);
         setMembrane("unknown");
         updateEmptyHint();
+        showComposerError("Not sent \u2014 couldn't reach the checker. " +
+          "Your text was kept; try again.");
       })
       .then(function () {
-        clearComposer();
-        clearAttachments();
         checking.hidden = true;
-        sendBtn.disabled = false;
+        sending = false;
+        paintSend();
       });
   }
 
@@ -893,16 +959,22 @@
   }
 
   composer.addEventListener("input", function () {
+    clearComposerError();
     setMembrane("idle");
     liveSpans = [];
     liveSeq++; // drop any in-flight live response
     renderBackdrop(composer.value, spans.filter(function () { return false; }));
+    paintSend();
     queueScan();
   });
   composer.addEventListener("scroll", syncScroll);
   sendBtn.addEventListener("click", sendNow);
+  // Enter sends; Shift+Enter (or Alt+Enter) keeps the default newline.
   composer.addEventListener("keydown", function (event) {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) sendNow();
+    if (event.isComposing) return;
+    if (event.key !== "Enter" || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    sendNow();
   });
 
   /* T32 layout: only the thread scrolls. New turns stick to the bottom
@@ -957,6 +1029,7 @@
   renderBackdrop("", []);
   updateEmptyHint();
   setPill();
+  paintModelStatus();
   /* T32 chat shell: Classic is the single theme + memory-only sessions. */
   var THEME_KEY = "shadowfenced.theme";
   var THEME_NAMES = ["classic"];
@@ -1162,30 +1235,154 @@
   }
 
   loadHostedBanner();
+  var extTokenValue = "";
+  function paintExtToken() {
+    var tokenEl = document.getElementById("ext-token");
+    if (!tokenEl) return;
+    var shown = tokenEl.getAttribute("data-visible") === "true";
+    tokenEl.textContent = !extTokenValue ? "unavailable"
+      : shown ? extTokenValue : "••••••••";
+    var showBtn = document.getElementById("ext-token-show");
+    if (showBtn) showBtn.textContent = shown ? "Hide" : "Show";
+  }
+  function tokenMsg(text, isError) {
+    var el = document.getElementById("ext-token-msg");
+    if (!el) return;
+    el.textContent = text;
+    el.hidden = !text;
+    el.setAttribute("data-error", isError ? "true" : "false");
+  }
   function loadExtToken() {
     var tokenEl = document.getElementById("ext-token");
     if (!tokenEl) return;
     fetch("/api/ext/pairing")
       .then(function (resp) { return resp.json(); })
       .then(function (body) {
-        if (body && body.token) tokenEl.textContent = body.token;
-        else tokenEl.textContent = "unavailable";
+        extTokenValue = (body && body.token) || "";
+        paintExtToken();
       })
-      .catch(function () { tokenEl.textContent = "unavailable"; });
+      .catch(function () {
+        extTokenValue = "";
+        paintExtToken();
+      });
+    var showBtn = document.getElementById("ext-token-show");
+    if (showBtn && !showBtn.dataset.wired) {
+      showBtn.dataset.wired = "1";
+      showBtn.addEventListener("click", function () {
+        var shown = tokenEl.getAttribute("data-visible") === "true";
+        tokenEl.setAttribute("data-visible", shown ? "false" : "true");
+        paintExtToken();
+      });
+    }
     var copyBtn = document.getElementById("ext-token-copy");
     if (copyBtn && !copyBtn.dataset.wired) {
       copyBtn.dataset.wired = "1";
       copyBtn.addEventListener("click", function () {
-        var value = tokenEl.textContent || "";
-        if (navigator.clipboard && value) {
-          navigator.clipboard.writeText(value).catch(function () {});
+        if (navigator.clipboard && extTokenValue) {
+          navigator.clipboard.writeText(extTokenValue).catch(function () {});
         }
+      });
+    }
+    var regenBtn = document.getElementById("ext-token-regenerate");
+    if (regenBtn && !regenBtn.dataset.wired) {
+      regenBtn.dataset.wired = "1";
+      regenBtn.addEventListener("click", function () {
+        if (regenBtn.disabled) return;
+        tokenMsg("");
+        regenBtn.disabled = true;
+        fetch("/api/ext/pairing/regenerate", {
+          method: "POST",
+          headers: { "X-Ext-Token": extTokenValue }
+        })
+          .then(function (resp) {
+            return resp.json().then(function (body) {
+              return { ok: resp.ok, body: body };
+            });
+          })
+          .then(function (res) {
+            if (res.ok && res.body && res.body.token) {
+              extTokenValue = res.body.token;
+              paintExtToken();
+              regenBtn.disabled = false;
+              tokenMsg("New token ready. Update the extension.");
+            } else {
+              regenBtn.disabled = false;
+              tokenMsg("Could not regenerate the token.", true);
+            }
+          })
+          .catch(function () {
+            regenBtn.disabled = false;
+            tokenMsg("Could not regenerate the token.", true);
+          });
       });
     }
   }
 
+  // Decision log viewer: time, outcome, tier, reasons and fingerprints
+  // only (the endpoint never returns raw values); plus chain status.
+  function loadLogViewer() {
+    var viewBtn = document.getElementById("log-view");
+    var list = document.getElementById("log-events");
+    if (!viewBtn || !list || viewBtn.dataset.wired) return;
+    viewBtn.dataset.wired = "1";
+    viewBtn.addEventListener("click", function () {
+      if (viewBtn.disabled) return;
+      if (!list.hidden) {
+        list.hidden = true;
+        viewBtn.textContent = "View log";
+        return;
+      }
+      viewBtn.disabled = true;
+      viewBtn.textContent = "Loading\u2026";
+      fetch("/api/log/events?limit=50")
+        .then(function (resp) { return resp.json(); })
+        .then(function (body) {
+          list.innerHTML = "";
+          var events = (body && body.events) || [];
+          if (!events.length) {
+            var empty = document.createElement("li");
+            empty.textContent = body && body.ok
+              ? "No decisions logged yet."
+              : "Log unavailable: chain could not be verified.";
+            list.appendChild(empty);
+          }
+          events.slice().reverse().forEach(function (entry) {
+            var item = document.createElement("li");
+            var bits = [
+              entry.ts || "—",
+              entry.decision || "—",
+              "tier " + (entry.tier != null ? entry.tier : "—")
+            ];
+            if (entry.reasons && entry.reasons.length) {
+              bits.push(entry.reasons.join(", "));
+            }
+            if (entry.fingerprints && entry.fingerprints.length) {
+              bits.push("prints " + entry.fingerprints.join(" "));
+            }
+            item.textContent = bits.join(" · ");
+            list.appendChild(item);
+          });
+          viewBtn.disabled = false;
+          list.hidden = false;
+          viewBtn.textContent = "Hide log";
+        })
+        .catch(function () {
+          list.innerHTML = "";
+          var failed = document.createElement("li");
+          failed.textContent = "Could not load the log.";
+          list.appendChild(failed);
+          viewBtn.disabled = false;
+          list.hidden = false;
+          viewBtn.textContent = "Hide log";
+        });
+    });
+  }
+
   loadProviders();
   loadExtToken();
+  loadLogViewer();
+  loadGuard();
+  paintSend();
   refreshStats();
 
   /* T31b details drawer: per-turn decision, reasons, redaction summary,
@@ -1280,4 +1477,40 @@
     }
     paintTurn(selectedTurn);
   });
+
+  /* T38b states: one Escape closes the topmost panel first, then the
+     phone panels. Panels never take the typed text with them. */
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape" && event.key !== "Esc") return;
+    var providersPanel = document.getElementById("providers-panel");
+    if (providersPanel && !providersPanel.hidden) {
+      providersPanel.hidden = true;
+      var opener = document.getElementById("providers-open");
+      if (opener) opener.focus();
+      return;
+    }
+    var settingsMenu = document.getElementById("settings-menu");
+    if (settingsMenu && settingsMenu.open) {
+      settingsMenu.open = false;
+      return;
+    }
+    if (document.body.classList.contains("show-chats")) {
+      document.body.classList.remove("show-chats");
+      return;
+    }
+    if (document.body.classList.contains("show-details")) {
+      document.body.classList.remove("show-details");
+      return;
+    }
+  });
+
+  // Pure state helpers, exported for tests (no DOM inside).
+  window.ShadowfencedUI = {
+    receiptLabel: receiptLabel,
+    receiptIcon: receiptIcon,
+    membraneFor: membraneFor,
+    isSendEnabled: function (text, hasAttachments, busy) {
+      return !busy && !!(text || hasAttachments);
+    }
+  };
 })();

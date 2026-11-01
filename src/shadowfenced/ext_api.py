@@ -137,6 +137,40 @@ def pairing_status(_guard: None = Depends(ext_guard)) -> dict[str, Any]:
     return {"token": expected_token()}
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "testclient"}
+
+
+def check_local(request: Request) -> None:
+    """Allow pairing rotation only from this machine (loopback)."""
+    host = request.client.host if request.client else ""
+    if host in _LOOPBACK_HOSTS:
+        return
+    log.warning("ext_api: rejected pairing rotation from non-loopback host")
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": "shadowfenced_ext_local_only",
+            "type": "shadowfenced_ext_local_only",
+            "message": "pairing rotation is allowed only on this machine",
+        },
+    )
+
+
+@router.post("/pairing/regenerate")
+def pairing_regenerate(
+    request: Request, _guard: None = Depends(ext_guard)
+) -> dict[str, Any]:
+    """Create a fresh pairing token, invalidating the previous one.
+
+    Local-only (loopback) and requires the current token header, like
+    every other ``POST`` here. The new token value is never logged.
+    """
+    check_local(request)
+    from . import config
+
+    return {"token": config.rotate_ext_token()}
+
+
 @router.post("/scan")
 def ext_scan(body: ScanBody, _guard: None = Depends(ext_guard)) -> dict[str, Any]:
     """Scan text locally; suggest one placeholder per span (no state)."""
