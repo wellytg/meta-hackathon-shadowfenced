@@ -35,6 +35,19 @@
     headerPill.textContent = HEADER_PILL;
   }
 
+  // Hosted demo (SF_HOSTED=1): reveal the fixed public-demo banner.
+  function loadHostedBanner() {
+    fetch("/api/hosted")
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        if (body && body.hosted) {
+          var el = document.getElementById("hosted-banner");
+          if (el) el.hidden = false;
+        }
+      })
+      .catch(function () { /* banner stays hidden */ });
+  }
+
   function loadLiveHintsFlag() {
     fetch("/api/health")
       .then(function (resp) { return resp.json(); })
@@ -851,6 +864,7 @@
   updateEmptyHint();
   setPill();
   loadLiveHintsFlag();
+  loadHostedBanner();
   loadProviders();
   refreshStats();
 })();

@@ -260,6 +260,19 @@ body {
   .travel { animation: none; }
 }
 
+#hosted-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: #16130e;
+  color: #f7f2e7;
+  text-align: center;
+  font-size: 13px;
+  padding: 6px 12px;
+}
+
 @media (max-width: 560px) {
   .sheet { padding: 0 16px 36px; border-left: 0; border-right: 0; }
   .masthead { align-items: flex-start; }

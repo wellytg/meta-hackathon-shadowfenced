@@ -1,0 +1,30 @@
+# One-command local run: docker compose up --build
+# With the local Glimmer judge: add OLLAMA_URL=http://ollama:11434 to your
+# .env, pull the model once (docker compose run ollama ollama pull <model>),
+# then start with: docker compose --profile local-glimmer up --build
+services:
+  shadowfenced:
+    build: .
+    ports:
+      - "8765:8765"
+    env_file:
+      - path: .env
+        required: false
+    # Upstream and model settings live in .env (see .env.example);
+    # the app reads OLLAMA_URL for the local judge through the existing
+    # Ollama URL setting.
+
+  # Optional local judge (Glimmer stand-in). Enable with
+  # --profile local-glimmer, and point the app at it by setting
+  # OLLAMA_URL=http://ollama:11434 in your .env.
+  ollama:
+    image: ollama/ollama:latest
+    profiles:
+      - local-glimmer
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
+volumes:
+  ollama-data: {}

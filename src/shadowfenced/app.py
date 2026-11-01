@@ -15,13 +15,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import engine
 from . import holds
+from . import hosted as hosted_module
 from . import keyguard as keyguard_module
 from . import judge as judge_module
 from .canary import CanaryRegistry
@@ -60,6 +61,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="shadowfenced", lifespan=lifespan)
+
+
+def hosted_limit_response(request: Request) -> JSONResponse | None:
+    """429 response when the hosted per-IP bucket is empty (None = pass)."""
+    if hosted_module.is_hosted():
+        client = request.client.host if request.client else "unknown"
+        if not hosted_module.allow_request(client):
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": {
+                        "code": "shadowfenced_rate_limited",
+                        "type": "shadowfenced_rate_limited",
+                        "message": "rate limit exceeded; try again shortly",
+                    },
+                },
+            )
+    return None
+
+
+@app.middleware("http")
+async def _hosted_rate_limit(request: Request, call_next):
+    """Hosted demo: per-IP token bucket; local mode passes through."""
+    limited = hosted_limit_response(request)
+    if limited is not None:
+        return limited
+    return await call_next(request)
 
 _POLICY: Policy | None = None
 _REGISTRY: CanaryRegistry | None = None
@@ -682,6 +710,16 @@ def health() -> dict[str, Any]:
     return {"status": "ok", "live_hints": get_settings().live_hints}
 
 
+@app.get("/api/hosted")
+def hosted_status() -> dict[str, Any]:
+    """Hosted demo flag plus the public-demo banner (shown when hosted)."""
+    hosted = hosted_module.is_hosted()
+    return {
+        "hosted": hosted,
+        "banner": hosted_module.HOSTED_BANNER if hosted else None,
+    }
+
+
 @app.post("/api/scan")
 def scan(request: ScanRequest) -> dict[str, Any]:
     """Run the Tier 1 scan and return spans plus latency.
@@ -932,6 +970,7 @@ def _register_hold(
                 sender=_review_sender(
                     [m for m in messages if isinstance(m, dict)], provider
                 ),
+                meta_transport=_transport(),
             )
     except Exception:
         pass
@@ -1316,10 +1355,17 @@ for _candidate in (
         break
 
 
+def print_startup_banner() -> None:
+    """Print the hosted demo banner once at startup (hosted mode only)."""
+    if hosted_module.is_hosted():
+        print(f"Shadowfenced: {hosted_module.HOSTED_BANNER}")
+
+
 def main() -> None:
     """Run the proxy on 127.0.0.1:8765."""
     import uvicorn
 
+    print_startup_banner()
     uvicorn.run(app, host="127.0.0.1", port=8765)
 
 

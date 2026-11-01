@@ -307,6 +307,43 @@ def _locate(text: str, span_text: str) -> tuple[int | None, int | None]:
     return None, None
 
 
+def _judge_for_review(
+    hold: Hold,
+    window: str,
+    model: str,
+    judge_transport: Any,
+    meta_transport: Any,
+) -> Any:
+    """Judge one window; on the hosted fallback record the trace label.
+
+    Never raises: any failure returns None so the review fails closed.
+    """
+    try:
+        from . import hosted as hosted_module
+
+        judgement, label = hosted_module.judge_for_review(
+            window,
+            model,
+            judge_transport=judge_transport,
+            meta_transport=meta_transport,
+        )
+    except Exception:
+        return None
+    if label:
+        hold.evidence["judge"] = label
+        trace = hold.evidence.setdefault("trace", [])
+        if isinstance(trace, list):
+            trace.append(
+                {
+                    "step": "tier2.judge",
+                    "tool": "judge",
+                    "detail": label,
+                    "result": "judged" if judgement is not None else "unavailable",
+                }
+            )
+    return judgement
+
+
 def _review_message_item(
     hold: Hold,
     item: dict[str, Any],
@@ -318,6 +355,7 @@ def _review_message_item(
     registry: CanaryRegistry | None,
     suspicions: list[dict[str, Any]],
     confirmed: list[Span],
+    meta_transport: Any = None,
 ) -> None:
     """Judge the whole message once; verify a non-benign span in code.
 
@@ -330,12 +368,9 @@ def _review_message_item(
     message_text = item.get("text", "")
     if not isinstance(message_text, str):
         message_text = ""
-    try:
-        judgement = judge_module.judge(
-            message_text, model, live=False, transport=judge_transport
-        )
-    except Exception:
-        judgement = None
+    judgement = _judge_for_review(
+        hold, message_text, model, judge_transport, meta_transport
+    )
     if judgement is None:
         suspicions.append(
             _suspicion("", None, "Glimmer unavailable")
@@ -403,6 +438,7 @@ def run_review(
     hold_id: str,
     *,
     judge_transport: Any = None,
+    meta_transport: Any = None,
     sender: Sender | None = None,
     policy: Policy | None = None,
     registry: CanaryRegistry | None = None,
@@ -443,18 +479,16 @@ def run_review(
             _review_message_item(
                 hold, item, text, tier1_spans, model, judge_transport,
                 policy, registry, suspicions, confirmed,
+                meta_transport=meta_transport,
             )
             continue
         span_text = item["text"]
         window = judge_module.make_window(
             text, item["cp_start"], item["cp_end"]
         )
-        try:
-            judgement = judge_module.judge(
-                window, model, live=False, transport=judge_transport
-            )
-        except Exception:
-            judgement = None
+        judgement = _judge_for_review(
+            hold, window, model, judge_transport, meta_transport
+        )
         if judgement is None:
             suspicions.append(
                 _suspicion(
@@ -747,6 +781,8 @@ def hold_card(hold: Hold) -> dict[str, Any]:
         "hold_id": hold.hold_id,
         "status": hold.status,
         "provider": hold.provider,
+        "judge": hold.evidence.get("judge"),
+        "trace": list(hold.evidence.get("trace", []) or []),
         "title": hold_title(hold),
         "proven_by_code": proven_by_code,
         "model_suspicion_only": list(
