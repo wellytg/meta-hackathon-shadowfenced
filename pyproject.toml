@@ -26,6 +26,14 @@ dev = [
     "pytest-asyncio",
     "playwright",
 ]
+finetune = [
+    "transformers",
+    "peft",
+    "bitsandbytes",
+    "datasets",
+    "accelerate",
+    "trl",
+]
 
 [project.scripts]
 shadowfenced = "shadowfenced.app:main"
