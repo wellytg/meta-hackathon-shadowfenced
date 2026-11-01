@@ -7,12 +7,18 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<!-- Runtime hooks created by app.js (kept present, visible and clickable):
+     composer, send, answer, banner, btn-why, btn-approve, btn-deny,
+     evidence-card, file-input, ai-saw-toggle. Do not remove these ids. -->
 <header class="topbar">
   <div>
     <h1>Shadowfenced</h1>
     <p class="tagline">Nothing sensitive crosses the boundary.</p>
   </div>
-  <span class="header-pill" data-testid="header-pill">Local check · code + Muse Glimmer (30B, this PC)</span>
+  <div class="topbar-side">
+    <a class="topbar-about" href="/welcome/">How it works</a>
+    <span class="header-pill" data-testid="header-pill">Local check · code + Muse Glimmer (30B, this PC)</span>
+  </div>
 </header>
 <main class="layout">
   <section class="chat-col">

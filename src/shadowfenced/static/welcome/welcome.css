@@ -1,0 +1,271 @@
+/* Shadowfenced splash page: printed-collateral style, flat and left-aligned. */
+
+:root {
+  --paper: #f7f2e7;
+  --paper-2: #fffdf6;
+  --ink: #16130e;
+  --muted: #4d463a;
+  --signal: #ff5a1f;
+  --signal-deep: #b23a0e;
+  --steel: #2f6b8a;
+  --steel-deep: #1d4257;
+  --steel-pale: #dce8f0;
+  --sand: #efe6d2;
+  --sand-deep: #d8c9a8;
+  --rule: #16130e;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Helvetica Neue", Helvetica, Arial, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.sheet {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 28px 48px;
+  border-left: 2px solid var(--rule);
+  border-right: 2px solid var(--rule);
+  background: var(--paper);
+  min-height: 100vh;
+}
+
+/* Masthead: badge left, console link right. */
+.masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 0 16px;
+  border-bottom: 2px solid var(--rule);
+}
+
+.brand { display: flex; align-items: center; gap: 12px; }
+
+.brand-badge {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+}
+
+.wordmark {
+  margin: 0;
+  font-weight: 900;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.issue {
+  margin: 4px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.masthead-nav { flex-shrink: 0; }
+
+.console-link {
+  display: inline-block;
+  font-weight: 800;
+  font-size: 15px;
+  color: var(--paper);
+  background: var(--ink);
+  text-decoration: none;
+  padding: 10px 18px;
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--signal);
+}
+
+.console-link:hover { background: var(--steel-deep); }
+.console-link:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--signal); }
+
+/* Intro: left-aligned, no centred hero. */
+.intro { padding: 40px 0 8px; max-width: 62ch; }
+
+.kicker {
+  display: inline-block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--paper);
+  background: var(--steel);
+  padding: 3px 10px;
+  margin: 0 0 16px;
+}
+
+.intro h1 {
+  margin: 0 0 16px;
+  font-size: clamp(38px, 7vw, 64px);
+  line-height: 0.98;
+  font-weight: 900;
+  letter-spacing: -0.025em;
+  text-transform: uppercase;
+}
+
+.standfirst { font-size: 18px; max-width: 56ch; margin: 0; }
+.standfirst strong { background: var(--steel-pale); padding: 0 4px; }
+
+/* Figure panel. */
+.figure {
+  margin: 32px 0 0;
+  border: 2px solid var(--rule);
+  background: var(--paper-2);
+  box-shadow: 6px 6px 0 var(--ink);
+}
+
+.figure svg { display: block; width: 100%; height: auto; }
+
+.figure-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  margin: 0;
+  padding: 10px 14px;
+  border-top: 2px solid var(--rule);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+
+.swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--ink);
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+.swatch-ink { background: var(--ink); }
+.swatch-tag { background: #fff; }
+
+/* Numbered ledger rows, not identical cards. */
+.points { margin-top: 44px; }
+
+.points ol { list-style: none; margin: 20px 0 0; padding: 0; }
+
+.points li {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 16px;
+  align-items: start;
+  padding: 18px 4px;
+  border-top: 2px solid var(--rule);
+}
+
+.points li:last-child { border-bottom: 2px solid var(--rule); }
+
+.points .num {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 700;
+  font-size: 26px;
+  line-height: 1;
+  color: var(--paper-2);
+  background: var(--ink);
+  border: 2px solid var(--ink);
+  text-align: center;
+  padding: 4px 0;
+}
+
+.points li:nth-child(2) .num { background: var(--signal); }
+.points li:nth-child(3) .num { background: var(--steel); }
+
+.points h2 {
+  margin: 0 0 4px;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.points p { margin: 0; color: var(--muted); max-width: 60ch; }
+.points p code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  color: var(--ink);
+  background: var(--steel-pale);
+  border: 1px solid var(--ink);
+  padding: 0 4px;
+}
+
+/* Try strip. */
+.try {
+  margin-top: 44px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  border: 2px solid var(--rule);
+  background: var(--ink);
+  color: var(--paper);
+  padding: 24px 26px;
+  box-shadow: 6px 6px 0 var(--signal);
+}
+
+.try h2 {
+  margin: 0 0 6px;
+  font-size: 26px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+}
+
+.try p { margin: 0; font-size: 15px; color: var(--sand); max-width: 44ch; }
+
+.console-button {
+  flex-shrink: 0;
+  display: inline-block;
+  font-weight: 800;
+  font-size: 17px;
+  color: var(--ink);
+  background: var(--paper);
+  text-decoration: none;
+  padding: 12px 26px;
+  border: 2px solid var(--paper);
+}
+
+.console-button:hover { background: var(--signal); border-color: var(--signal); }
+.console-button:active { transform: translate(2px, 2px); }
+
+.colophon {
+  margin-top: 36px;
+  border-top: 2px solid var(--rule);
+  padding-top: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+.colophon p { margin: 0; }
+
+/* Travel-path dash drift; off when motion is unwelcome. */
+@media (prefers-reduced-motion: no-preference) {
+  .travel { animation: dash-drift 6s linear infinite; }
+}
+
+@keyframes dash-drift {
+  to { stroke-dashoffset: -130; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .travel { animation: none; }
+}
+
+@media (max-width: 560px) {
+  .sheet { padding: 0 16px 36px; border-left: 0; border-right: 0; }
+  .masthead { align-items: flex-start; }
+  .console-link { padding: 8px 12px; font-size: 13px; }
+  .wordmark { font-size: 18px; }
+  .points li { grid-template-columns: 52px 1fr; gap: 12px; }
+  .points .num { font-size: 19px; }
+  .try { flex-direction: column; align-items: flex-start; }
+}
