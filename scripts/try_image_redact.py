@@ -37,7 +37,9 @@ def main() -> int:
         return 1
     out = args.image.with_suffix("").with_name(args.image.stem + ".redacted.png")
     out.write_bytes(redacted.png)
-    print(f"wrote {out} ({redacted.method}, {len(redacted.regions)} regions)")
+    label = redacted.method_label or redacted.method
+    parser = "parser: installed" if image_redact.sam_parser_available() else "parser: missing"
+    print(f"wrote {out} ({label}, {len(redacted.regions)} regions; {parser})")
     for text in redacted.texts:
         print(f"  read: {text}")
     return 0

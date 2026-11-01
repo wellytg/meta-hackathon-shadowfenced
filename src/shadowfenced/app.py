@@ -1829,6 +1829,7 @@ def _handle_image_upload(filename: str, data: bytes, *, settings: Settings | Non
         "summary_text": summary_text,
         "regions": count,
         "method": redacted.method,
+        "method_label": redacted.method_label,
         "thumbnail": record.thumbnail,
         "doc_type": None,
         "doc_warning": None,

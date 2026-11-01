@@ -509,7 +509,8 @@
       var name = document.createElement("button");
       name.type = "button";
       name.className = "chip-name";
-      name.textContent = f.name + " · " + (f.summary_text || f.status);
+      name.textContent = f.name + " · " + (f.summary_text || f.status) +
+        (f.method_label ? " · " + f.method_label : "");
       name.addEventListener("click", function () {
         details.hidden = !details.hidden;
         var cmp = chip.querySelector(".img-compare");
@@ -571,6 +572,18 @@
       var file = fileInput.files && fileInput.files[0];
       if (!file) return;
       stashOriginalImage(file);
+      var isImage = (/^image\//.test(file.type || "")) ||
+        (/\.(png|jpe?g)$/i.test(file.name || ""));
+      if (isImage && checking) {
+        checking.textContent = "Checking image locally…";
+        checking.hidden = false;
+      }
+      var doneCheckingImage = function () {
+        if (isImage && checking) {
+          checking.textContent = "Checking locally…";
+          if (!sending) checking.hidden = true;
+        }
+      };
       var form = new FormData();
       form.append("file", file, file.name);
       fetch("/api/upload", { method: "POST", body: form })
@@ -604,8 +617,9 @@
             updateEmptyHint();
           }
           fileInput.value = "";
+          doneCheckingImage();
         })
-        .catch(function () { fileInput.value = ""; });
+        .catch(function () { fileInput.value = ""; doneCheckingImage(); });
     });
   }
 

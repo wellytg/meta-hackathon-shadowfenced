@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import sys
 import types
 
@@ -357,3 +358,111 @@ def test_hosted_mode_refuses_images(monkeypatch):
     assert exc.value.status_code == 403
     assert "hosted demo mode" in exc.value.detail["message"]
     assert image_redaction_status()["mode"] == "off"
+
+
+def _glimmer_content_transport(content, bodies=None):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if bodies is not None:
+            bodies.append(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, json={"message": {"content": content}})
+
+    return httpx.MockTransport(handler)
+
+
+def test_glimmer_stray_eot_token_parses_to_two_regions():
+    """Real-run reply (T43b): correct JSON plus a stray ``<|eot|>``."""
+    image_redaction_consent({"choice": "local"})
+    bodies: list[dict] = []
+    content = (
+        '{ "regions": [{"prompt": "email address", "box": [150, 25, 670, 65],'
+        ' "text": "marta.quill@corvane.io"}, {"prompt": "phone number",'
+        ' "box": [150, 135, 380, 175], "text": "+1 415 555 0134"}] }<|eot|>'
+    )
+    uploaded = handle_upload(
+        "shot.png", make_image(),
+        glimmer_transport=_glimmer_content_transport(content, bodies),
+    )
+    assert uploaded["regions"] == 2
+    assert uploaded["method"] == "box"
+    body = bodies[0]
+    assert body["format"] == "json"  # never drop format: long empty runs
+    assert body["options"]["num_ctx"] == 2048
+    assert "keep_alive" in body
+
+
+def test_glimmer_prose_around_json_parses():
+    """Prose before/after the JSON still yields the regions."""
+    image_redaction_consent({"choice": "local"})
+    content = (
+        "Sure, here are the sensitive regions I can see:\n"
+        '{"regions": [{"prompt": "email address", "box": [10, 10, 100, 40],'
+        ' "text": "ada@corvane.io"}]}\n'
+        "That is everything I found."
+    )
+    uploaded = handle_upload(
+        "shot.png", make_image(),
+        glimmer_transport=_glimmer_content_transport(content),
+    )
+    assert uploaded["regions"] == 1
+    assert uploaded["method"] == "box"
+
+
+def test_method_labels():
+    assert image_redact.describe_method("sam") == "SAM masks"
+    assert image_redact.describe_method("box") == "Box fill"
+    assert (
+        image_redact.describe_method("box", parser_missing=True)
+        == "Box fill (SAM parser not installed)"
+    )
+    assert image_redact.describe_method("none") == ""
+
+
+def test_parser_missing_falls_back_to_box_fill_with_label(monkeypatch, caplog):
+    """No meta-sam-parser: no crash, one warning, box fill, labelled chip."""
+    monkeypatch.setenv("META_API_KEY", "test-meta-key")
+    monkeypatch.setitem(sys.modules, "meta_sam_parser", None)
+    monkeypatch.setattr(image_redact, "_SAM_PARSER_WARNED", False)
+    image_redaction_consent({"choice": "on"})
+    with caplog.at_level(logging.WARNING, logger="shadowfenced.image_redact"):
+        first = handle_upload(
+            "shot.png",
+            make_image(),
+            glimmer_transport=_glimmer_transport(),
+            sam_transport=_sam_transport(),
+        )
+        second = handle_upload(
+            "shot.png",
+            make_image(),
+            glimmer_transport=_glimmer_transport(),
+            sam_transport=_sam_transport(),
+        )
+    for uploaded in (first, second):
+        assert uploaded["method"] == "box"
+        assert uploaded["regions"] == 2
+        assert (
+            uploaded["method_label"] == "Box fill (SAM parser not installed)"
+        )
+    warnings = [
+        record for record in caplog.records if "meta-sam-parser" in record.message
+    ]
+    assert len(warnings) == 1
+
+
+def test_image_timeout_defaults_to_120s():
+    from shadowfenced.config import get_settings
+
+    assert get_settings(env={}).image_timeout_s == 120.0
+    assert get_settings(env={"SF_IMAGE_TIMEOUT_S": "30"}).image_timeout_s == 30.0
+
+
+def test_image_upload_shows_checking_image_status():
+    from pathlib import Path
+
+    js = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "shadowfenced"
+        / "static"
+        / "app.js"
+    ).read_text(encoding="utf-8")
+    assert "Checking image locally…" in js

@@ -36,6 +36,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -44,6 +45,8 @@ import httpx
 
 from .config import Settings, get_settings
 from .upstream import _verify_for
+
+logger = logging.getLogger(__name__)
 
 #: Image suffixes handled by this module (spec: PNG/JPEG only).
 IMAGE_SUFFIXES: tuple[str, ...] = (".png", ".jpg", ".jpeg")
@@ -75,6 +78,82 @@ _BOX_RE = re.compile(
 
 class ImageRedactError(RuntimeError):
     """Image redaction failed; the caller must fail closed."""
+
+
+#: Stray chat special tokens (``<|eot|>`` and kin) Glimmer sometimes
+#: appends after otherwise-correct JSON. Stripped before parsing.
+_SPECIAL_TOKEN_RE = re.compile(r"<\|.*?\|>")
+
+#: Remembers whether the missing-parser warning was already logged so a
+#: box-fill fallback does not spam the log once per image.
+_SAM_PARSER_WARNED = False
+
+
+def _warn_parser_missing_once() -> None:
+    """Log the missing-``meta-sam-parser`` fallback once per process."""
+    global _SAM_PARSER_WARNED
+    if not _SAM_PARSER_WARNED:
+        _SAM_PARSER_WARNED = True
+        logger.warning(
+            "meta-sam-parser not installed; falling back to box fill"
+        )
+
+
+def sam_parser_available() -> bool:
+    """True when ``meta-sam-parser`` imports (logs once when missing)."""
+    try:
+        import meta_sam_parser  # noqa: F401
+    except ImportError:
+        _warn_parser_missing_once()
+        return False
+    return True
+
+
+def parse_glimmer_json(content: object) -> object:
+    """Parse one Glimmer vision reply tolerantly (shared helper).
+
+    Strips ``<|...|>`` special tokens, then ``json.loads``; when that
+    fails, retries on the outermost ``{...}`` slice so prose around the
+    JSON still parses. Raises :class:`GlimmerError` only when no JSON
+    object can be recovered.
+    """
+    if not isinstance(content, str) or not content.strip():
+        raise GlimmerError("glimmer returned no content")
+    text = _SPECIAL_TOKEN_RE.sub("", content).strip()
+    if not text:
+        raise GlimmerError("glimmer returned non-JSON content")
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            raise GlimmerError(
+                "glimmer returned non-JSON content"
+            ) from None
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except ValueError as exc:
+            raise GlimmerError(
+                "glimmer returned non-JSON content"
+            ) from exc
+    return parsed
+
+
+def _keep_alive() -> Any:
+    """Ollama keep_alive: int seconds, duration string, or -1 (resident).
+
+    Mirrors :mod:`judge` so the vision model stays resident instead of
+    reloading on every screenshot (``SF_KEEP_ALIVE``, default ``-1``).
+    """
+    import os as _os
+
+    raw = (_os.environ.get("SF_KEEP_ALIVE") or "-1").strip()
+    if raw == "-1":
+        return -1
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
 
 
 class GlimmerError(ImageRedactError):
@@ -118,6 +197,7 @@ class RedactedImage:
     regions: list[Region] = field(default_factory=list)
     texts: list[str] = field(default_factory=list)  # Tier 1 scans these
     method: str = "none"  # "sam" | "box" | "none"
+    method_label: str = ""  # human-readable chip text, e.g. "Box fill"
 
 
 def _clamp_box(box: Any, width: int, height: int) -> tuple[int, int, int, int] | None:
@@ -226,11 +306,13 @@ def find_regions(
         "format": "json",
         "stream": False,
         "think": False,
+        "keep_alive": _keep_alive(),
+        "options": {"num_ctx": 2048},
     }
     url = cfg.ollama_url.rstrip("/") + "/api/chat"
     try:
         with httpx.Client(
-            transport=transport, timeout=GLIMMER_TIMEOUT_S,
+            transport=transport, timeout=cfg.image_timeout_s,
             verify=_verify_for(url),
         ) as client:
             response = client.post(url, json=body)
@@ -248,10 +330,7 @@ def find_regions(
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, str) or not content.strip():
         raise GlimmerError("glimmer returned no content")
-    try:
-        parsed = json.loads(content.strip())
-    except ValueError as exc:
-        raise GlimmerError("glimmer returned non-JSON content") from exc
+    parsed = parse_glimmer_json(content)
     items = parsed.get("regions", []) if isinstance(parsed, dict) else []
     if not isinstance(items, list):
         raise GlimmerError("glimmer returned a bad region list")
@@ -325,6 +404,7 @@ def _parser_masks(output_text: str) -> list[Mask]:
             image_segmentation_format,
         )
     except ImportError:
+        _warn_parser_missing_once()
         raise
     format_ = image_segmentation_format()
     parser = format_.create_parser()
@@ -505,6 +585,23 @@ def apply_masks(
     return encode_png(image)
 
 
+def describe_method(method: str, *, parser_missing: bool = False) -> str:
+    """Human-readable chip text for a redaction method.
+
+    ``"Box fill (SAM parser not installed)"`` when boxes were used
+    because ``meta-sam-parser`` is missing; ``"Box fill"`` for plain
+    local boxes; ``"SAM masks"`` for exact masks; ``""`` when nothing
+    was hidden.
+    """
+    if method == "sam":
+        return "SAM masks"
+    if method == "box":
+        if parser_missing:
+            return "Box fill (SAM parser not installed)"
+        return "Box fill"
+    return ""
+
+
 def redact_image(
     image_bytes: bytes,
     *,
@@ -526,7 +623,10 @@ def redact_image(
     )
     if not regions:
         image = _open_image(image_bytes)
-        return RedactedImage(png=encode_png(image), method="none")
+        return RedactedImage(
+            png=encode_png(image), method="none",
+            method_label=describe_method("none"),
+        )
     texts = [r.text for r in regions if r.text]
     masks: list[Mask] = []
     method = "box"
@@ -546,7 +646,9 @@ def redact_image(
             raise ImageRedactError(
                 "region found but not localizable; refusing to send original"
             )
+    parser_missing = method == "box" and not sam_parser_available()
     return RedactedImage(
         png=apply_masks(image_bytes, masks, size),
         regions=regions, texts=texts, method=method,
+        method_label=describe_method(method, parser_missing=parser_missing),
     )
