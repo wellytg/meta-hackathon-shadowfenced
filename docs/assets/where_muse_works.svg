@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="600" viewBox="0 0 1280 600" role="img" aria-label="Where Muse works: inputs on the left, Shadowfenced on this PC in the middle, AI provider on the right, Muse roles below.">
+  <rect x="0" y="0" width="1280" height="600" fill="#FAF5EA"/>
+  <rect x="2" y="2" width="1276" height="596" fill="none" stroke="#17130C" stroke-width="4"/>
+  <text x="40" y="56" font-family="monospace" font-size="17" letter-spacing="3" fill="#17130C">WHERE MUSE WORKS</text>
+  <rect x="40" y="76" width="280" height="70" fill="#FFFFFF" stroke="#17130C" stroke-width="2"/>
+  <text x="56" y="104" font-family="Arial, sans-serif" font-size="18" font-weight="900" fill="#17130C">You</text>
+  <text x="56" y="128" font-family="monospace" font-size="13" fill="#17130C">(type, paste, send a file)</text>
+  <rect x="40" y="158" width="280" height="70" fill="#FFFFFF" stroke="#17130C" stroke-width="2"/>
+  <text x="56" y="186" font-family="Arial, sans-serif" font-size="18" font-weight="900" fill="#17130C">AI Agent</text>
+  <text x="56" y="210" font-family="monospace" font-size="13" fill="#17130C">(a coding assistant)</text>
+  <rect x="40" y="240" width="280" height="70" fill="#FFFFFF" stroke="#17130C" stroke-width="2"/>
+  <text x="56" y="268" font-family="Arial, sans-serif" font-size="18" font-weight="900" fill="#17130C">Browser Extension</text>
+  <text x="56" y="292" font-family="monospace" font-size="13" fill="#17130C">(in ChatGPT, Claude, Meta AI)</text>
+  <line x1="320" y1="111" x2="380" y2="111" stroke="#17130C" stroke-width="2"/>
+  <polygon points="380,103 380,119 392,111" fill="#17130C"/>
+  <line x1="320" y1="193" x2="380" y2="193" stroke="#17130C" stroke-width="2"/>
+  <polygon points="380,185 380,201 392,193" fill="#17130C"/>
+  <line x1="320" y1="275" x2="380" y2="275" stroke="#17130C" stroke-width="2"/>
+  <polygon points="380,267 380,283 392,275" fill="#17130C"/>
+  <rect x="392" y="110" width="300" height="230" fill="#FFFFFF" stroke="#17130C" stroke-width="2"/>
+  <rect x="392" y="110" width="300" height="44" fill="#17130C"/>
+  <text x="542" y="128" font-family="Arial, sans-serif" font-size="17" font-weight="900" text-anchor="middle" fill="#FFFFFF">Shadowfenced</text>
+  <text x="542" y="146" font-family="monospace" font-size="12" text-anchor="middle" fill="#FFFFFF">(on this PC)</text>
+  <rect x="452" y="180" width="180" height="110" fill="#FF5A1F" stroke="#17130C" stroke-width="2"/>
+  <text x="542" y="222" font-family="Arial, sans-serif" font-size="44" font-weight="900" text-anchor="middle" fill="#FFFFFF">S</text>
+  <text x="542" y="248" font-family="monospace" font-size="12" text-anchor="middle" fill="#FFFFFF">LOCAL GUARD</text>
+  <text x="542" y="270" font-family="monospace" font-size="12" text-anchor="middle" fill="#FFFFFF">BLOCK / ALLOW</text>
+  <text x="542" y="322" font-family="monospace" font-size="12" text-anchor="middle" fill="#17130C">Nothing raw leaves</text>
+  <line x1="692" y1="225" x2="792" y2="225" stroke="#17130C" stroke-width="2"/>
+  <polygon points="792,217 792,233 804,225" fill="#17130C"/>
+  <rect x="804" y="165" width="180" height="120" fill="#2F6F9E" stroke="#17130C" stroke-width="2"/>
+  <text x="894" y="208" font-family="Arial, sans-serif" font-size="30" font-weight="900" text-anchor="middle" fill="#FFFFFF">AI</text>
+  <text x="894" y="234" font-family="Arial, sans-serif" font-size="15" font-weight="900" text-anchor="middle" fill="#FFFFFF">AI Provider</text>
+  <text x="894" y="256" font-family="monospace" font-size="12" text-anchor="middle" fill="#FFFFFF">(any model)</text>
+  <text x="40" y="380" font-family="monospace" font-size="15" letter-spacing="2" fill="#17130C">MUSE ROLES</text>
+  <rect x="40" y="394" width="224" height="120" fill="#FFFFFF" stroke="#17130C" stroke-width="2"/>
+  <rect x="40" y="394" width="224" height="30" fill="#E8A415" stroke="#17130C" stroke-width="2"/>
+  <text x="152" y="415" font-family="Arial, sans-serif" font-size="14" font-weight="900" text-anchor="middle" fill="#17130C">Muse Glimmer</text>
+  <text x="152" y="446" font-family="monospace" font-size="13" text-anchor="middle" fill="#17130C">local judge</text>
+  <text x="152" y="470" font-family="monospace" font-size="12" text-anchor="middle" fill="#17130C">(checks, decides)</text>
+  <rect x="280" y="394" width="224" height="120" fill="#FFFFFF" stroke="#17130C" stroke-width="2"/>
+  <rect x="280" y="394" width="224" height="30" fill="#2F6F9E" stroke="#17130C" stroke-width="2"/>
+  <text x="392" y="415" font-family="Arial, sans-serif" font-size="14" font-weight="900" text-anchor="middle" fill="#FFFFFF">Muse Spark</text>
+  <text x="392" y="446" font-family="monospace" font-size="13" text-anchor="middle" fill="#17130C">upstream AI</text>
+  <text x="392" y="470" font-family="monospace" font-size="12" text-anchor="middle" fill="#17130C">and hosted judge</text>
+  <rect x="520" y="394" width="224" height="120" fill="#FFFFFF" stroke="#17130C" stroke-width="2"/>
+  <rect x="520" y="394" width="224" height="30" fill="#2F6F9E" stroke="#17130C" stroke-width="2"/>
+  <text x="632" y="415" font-family="Arial, sans-serif" font-size="14" font-weight="900" text-anchor="middle" fill="#FFFFFF">Muse Voice</text>
+  <text x="632" y="446" font-family="monospace" font-size="13" text-anchor="middle" fill="#17130C">dictation</text>
+  <text x="632" y="470" font-family="monospace" font-size="12" text-anchor="middle" fill="#17130C">(transcribes audio)</text>
+  <rect x="760" y="394" width="224" height="120" fill="#FFFFFF" stroke="#17130C" stroke-width="2"/>
+  <rect x="760" y="394" width="224" height="30" fill="#E8A415" stroke="#17130C" stroke-width="2"/>
+  <text x="872" y="415" font-family="Arial, sans-serif" font-size="14" font-weight="900" text-anchor="middle" fill="#17130C">SAM 3.1</text>
+  <text x="872" y="446" font-family="monospace" font-size="13" text-anchor="middle" fill="#17130C">image masks</text>
+  <text x="872" y="470" font-family="monospace" font-size="12" text-anchor="middle" fill="#17130C">(finds regions)</text>
+  <rect x="1000" y="394" width="240" height="120" fill="#FFFFFF" stroke="#17130C" stroke-width="2"/>
+  <rect x="1000" y="394" width="240" height="30" fill="#FF5A1F" stroke="#17130C" stroke-width="2"/>
+  <text x="1120" y="415" font-family="Arial, sans-serif" font-size="14" font-weight="900" text-anchor="middle" fill="#FFFFFF">Muse Code</text>
+  <text x="1120" y="446" font-family="monospace" font-size="13" text-anchor="middle" fill="#17130C">built it</text>
+  <text x="1120" y="470" font-family="monospace" font-size="12" text-anchor="middle" fill="#17130C">(this product)</text>
+  <text x="640" y="562" font-family="monospace" font-size="13" text-anchor="middle" fill="#17130C">Only placeholders cross the boundary. Raw values stay on this PC.</text>
+</svg>

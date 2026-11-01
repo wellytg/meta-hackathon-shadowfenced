@@ -15,6 +15,7 @@ dependencies = [
     "truststore",
     "pydantic",
     "pyyaml",
+    "pillow",
     "python-multipart",
     "python-docx",
     "pypdf",
