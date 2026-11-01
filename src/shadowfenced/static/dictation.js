@@ -1,4 +1,4 @@
-/* Voice dictation (T34): opt-in microphone button using Meta Muse Voice.
+/* Voice dictation (T39): opt-in microphone button using Meta Muse Voice.
  *
  * The button is added to #composer-tools when that element exists, and
  * otherwise next to the Attach button. The first click shows a one-time
@@ -6,15 +6,21 @@
  * "sf-dictation-consent") -- audio and transcripts are never stored.
  *
  * Recording uses MediaRecorder and stops on a second click or after
- * 60 seconds. The transcript is inserted at the cursor in the composer
- * and an "input" event is dispatched so the normal live scan runs;
- * nothing is ever sent automatically.
+ * 60 seconds. The captured audio is then decoded with
+ * AudioContext.decodeAudioData, downmixed to mono and resampled to
+ * 16000 Hz with an OfflineAudioContext, encoded as 16-bit PCM WAV in
+ * the browser (RIFF/WAVE header, 1 channel, 16000 Hz), and uploaded as
+ * "dictation.wav" (audio/wav) to /api/transcribe so the server can send
+ * it straight to Muse Voice Transcribe. The transcript is inserted at
+ * the cursor in the composer and an "input" event is dispatched so the
+ * normal live scan runs; nothing is ever sent automatically.
  */
 (function () {
   "use strict";
 
   var CONSENT_KEY = "sf-dictation-consent";
   var MAX_SECONDS = 60;
+  var TARGET_RATE = 16000; // 16000 Hz mono output for Muse Voice Transcribe.
   var NOTICE_TEXT =
     "Dictation uses Meta Muse Voice in the cloud. " +
     "Your voice is sent to Meta to be turned into text. " +
@@ -70,11 +76,115 @@
     return "";
   }
 
-  function fileNameFor(mimeType) {
-    if (mimeType === "audio/ogg") return "dictation.ogg";
-    if (mimeType === "audio/wav") return "dictation.wav";
-    if (mimeType === "audio/mp4") return "dictation.m4a";
-    return "dictation.webm";
+  function decodeWith(ctx, rawBuffer) {
+    /* Promise form where supported, callback form (old Safari) fallback. */
+    return new Promise(function (resolve, reject) {
+      var result = null;
+      try {
+        result = ctx.decodeAudioData(
+          rawBuffer,
+          function (decoded) {
+            resolve(decoded);
+          },
+          function (err) {
+            reject(err || new Error("decode failed"));
+          }
+        );
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      if (result && typeof result.then === "function") {
+        result.then(resolve, reject);
+      }
+    });
+  }
+
+  function downmixToMono16k(audioBuffer) {
+    /* Downmix to mono: 1 channel at 16000 Hz via OfflineAudioContext. */
+    var OfflineCtx =
+      window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!OfflineCtx) {
+      return Promise.reject(new Error("no OfflineAudioContext"));
+    }
+    var frames = Math.max(
+      1,
+      Math.ceil(audioBuffer.duration * TARGET_RATE)
+    );
+    var offline = new OfflineCtx(1, frames, TARGET_RATE);
+    var source = offline.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(offline.destination);
+    source.start(0);
+    return offline.startRendering();
+  }
+
+  function encodeWav(monoSamples) {
+    /* Encode Float32 mono samples at 16000 Hz as 16-bit PCM WAV. */
+    var numChannels = 1;
+    var bitsPerSample = 16;
+    var blockAlign = (numChannels * bitsPerSample) >> 3;
+    var byteRate = TARGET_RATE * blockAlign;
+    var dataLength = monoSamples.length * 2;
+    var buffer = new ArrayBuffer(44 + dataLength);
+    var view = new DataView(buffer);
+    function writeString(offset, text) {
+      for (var i = 0; i < text.length; i++) {
+        view.setUint8(offset + i, text.charCodeAt(i));
+      }
+    }
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + dataLength, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true); // PCM format chunk size
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // 1 channel (mono)
+    view.setUint32(24, 16000, true); // 16000 Hz sample rate
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitsPerSample, true);
+    writeString(36, "data");
+    view.setUint32(40, dataLength, true);
+    for (var n = 0; n < monoSamples.length; n++) {
+      var sample = monoSamples[n];
+      if (sample > 1) {
+        sample = 1;
+      } else if (sample < -1) {
+        sample = -1;
+      }
+      view.setInt16(44 + n * 2, Math.round(sample * 32767), true);
+    }
+    return new Blob([buffer], { type: "audio/wav" });
+  }
+
+  function convertToWav(blob) {
+    var AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) {
+      return Promise.reject(new Error("no AudioContext"));
+    }
+    return blob
+      .arrayBuffer()
+      .then(function (raw) {
+        var ctx = new AudioCtx();
+        function done(wavBlob) {
+          try {
+            ctx.close();
+          } catch (err) {
+            /* ignore */
+          }
+          return wavBlob;
+        }
+        return decodeWith(ctx, raw)
+          .then(downmixToMono16k)
+          .then(function (rendered) {
+            return done(encodeWav(rendered.getChannelData(0)));
+          })
+          .then(null, function (err) {
+            done(null);
+            throw err;
+          });
+      });
   }
 
   function init() {
@@ -168,7 +278,7 @@
 
     function upload(blob, elapsedMs) {
       var form = new FormData();
-      form.append("file", blob, fileNameFor(blob.type || ""));
+      form.append("file", blob, "dictation.wav");
       form.append("duration", String(Math.round(elapsedMs / 100) / 10));
       button.disabled = true;
       button.setAttribute("aria-label", "Transcribing");
@@ -242,6 +352,13 @@
         showMessage("No microphone found. Dictation needs a microphone.");
         return;
       }
+      if (
+        !(window.AudioContext || window.webkitAudioContext) ||
+        !(window.OfflineAudioContext || window.webkitOfflineAudioContext)
+      ) {
+        showMessage("Dictation is not supported on this browser.");
+        return;
+      }
       var mimeType = pickMimeType();
       navigator.mediaDevices
         .getUserMedia({ audio: true })
@@ -287,7 +404,19 @@
               setIdle();
               return;
             }
-            upload(blob, elapsed);
+            button.setAttribute("aria-label", "Transcribing");
+            button.textContent = "\u2026";
+            convertToWav(blob).then(
+              function (wavBlob) {
+                upload(wavBlob, elapsed);
+              },
+              function () {
+                showMessage(
+                  "Could not read the recording on this browser."
+                );
+                setIdle();
+              }
+            );
           };
           startedAt = Date.now();
           stopAt = startedAt + MAX_SECONDS * 1000;
