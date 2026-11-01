@@ -880,6 +880,78 @@ def _apply_reid(
     )
 
 
+def _downgrade_verified_public_figure(
+    text: str,
+    decision: Decision,
+    conversation: list[str] | None,
+    current: list[dict[str, Any]] | None,
+    result: Any,
+    trace_out: list[dict[str, Any]] | None,
+) -> Decision | None:
+    """ALLOW when Glimmer verifies a public figure in encyclopedic framing.
+
+    Tier 3 coordination for T48 rule 2: the re-identification layer may
+    still warn on a published birthday plus a name, but when Glimmer has
+    verified (exact-substring subject, confidence >= 0.6) that the
+    subject is a public figure, the question uses encyclopedic framing
+    and no current contact detail or ID number is present, there is no
+    private person to protect. Never touches BLOCK or REDACT, and never
+    downgrades while Tier 1 review is still pending (ambiguous spans).
+    """
+    if decision.decision not in ("WARN", "HOLD"):
+        return None
+    reid_info = (decision.evidence or {}).get("reid")
+    if not reid_info or reid_info.get("outcome") not in ("WARN", "HOLD"):
+        return None
+    if result.warn or not result.triggered:
+        return None
+    if result.subject_public is not True or not result.verified_subject:
+        return None
+    try:
+        confidence = float(result.confidence)
+    except (TypeError, ValueError):
+        return None
+    if confidence < 0.6:
+        return None
+    if any(getattr(span, "status", "") == "ambiguous"
+           for span in decision.spans):
+        return None
+    if any(getattr(span, "status", "") == "proven"
+           and getattr(span, "cls", "") in ("pii", "secret")
+           for span in decision.spans):
+        return None
+    combo = set(reid_info.get("combination") or [])
+    if combo & set(reid_module.CONTACT_KINDS):
+        return None
+    if not reid_module.has_encyclopedic_framing(text, conversation):
+        return None
+    reasons = list(decision.reasons) + [
+        "verified public figure in encyclopedic framing -> ALLOW",
+    ]
+    evidence = dict(decision.evidence or {})
+    sent_text = decision.sent_text if decision.decision == "WARN" else text
+    downgraded = Decision(
+        decision="ALLOW",
+        decision_id=uuid.uuid4().hex,
+        spans=decision.spans,
+        sent_text=sent_text,
+        placeholders=dict(decision.placeholders or {}),
+        resolved_tier=1,
+        latency_ms=dict(decision.latency_ms),
+        reasons=reasons,
+        evidence=evidence,
+    )
+    downgraded.doc_type = decision.doc_type
+    downgraded.doc_warning = decision.doc_warning
+    if trace_out is not None:
+        trace_out.append(
+            {"step": "intent.public_figure", "tool": "glimmer",
+             "detail": "verified public figure, encyclopedic framing",
+             "result": "OK", "ms": 0.0}
+        )
+    return downgraded
+
+
 def _apply_person_search(
     text: str,
     decision: Decision,
@@ -913,6 +985,11 @@ def _apply_person_search(
     except Exception:
         return decision
     if not result.warn:
+        downgraded = _downgrade_verified_public_figure(
+            text, decision, conversation, current, result, trace_out,
+        )
+        if downgraded is not None:
+            return downgraded
         return decision
     evidence: dict[str, Any] = dict(decision.evidence or {})
     evidence["person_search"] = {

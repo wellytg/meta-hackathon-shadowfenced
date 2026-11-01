@@ -301,6 +301,8 @@ class PersonSearchResult:
     """Outcome of the person-search intent check."""
 
     warn: bool = False
+    subject_public: bool | None = None
+    verified_subject: bool = False
     triggered: bool = False
     banner: str = ""
     inferred_labels: list[str] = field(default_factory=list)
@@ -394,6 +396,8 @@ def check_person_search(
             ),
             generalised_text=generalised,
             reason="verified private-person search -> WARN",
+            subject_public=False,
+            verified_subject=True,
         )
         _trace_warn(trace_out, result, parsed)
         return result
@@ -411,6 +415,8 @@ def check_person_search(
             {reid_module.fingerprint(clue) for clue in verified_inferred}
         ),
         reason="no verified private-person search",
+        subject_public=parsed.subject_public,
+        verified_subject=bool(verified_subject),
     )
 
 
