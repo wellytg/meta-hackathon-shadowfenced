@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="Shadowfenced banner: laptop sends only placeholders through a shield gate to the cloud.">
+  <rect x="0" y="0" width="1280" height="400" fill="#FAF5EA"/>
+  <rect x="2" y="2" width="1276" height="396" fill="none" stroke="#17130C" stroke-width="4"/>
+  <text x="46" y="60" font-family="monospace" font-size="17" letter-spacing="3" fill="#17130C">LOCAL AI FILTER</text>
+  <text x="42" y="136" font-family="Arial Black, Arial, sans-serif" font-size="60" font-weight="900" fill="#17130C">SHADOWFENCED</text>
+  <text x="46" y="180" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#17130C">Nothing sensitive crosses the boundary.</text>
+  <rect x="46" y="200" width="400" height="6" fill="#17130C"/>
+  <rect x="46" y="226" width="190" height="48" fill="#2F6F9E" stroke="#17130C" stroke-width="2"/>
+  <text x="141" y="257" font-family="Arial, sans-serif" font-size="20" font-weight="900" letter-spacing="2" text-anchor="middle" fill="#FFFFFF">ALLOWED</text>
+  <rect x="248" y="226" width="190" height="48" fill="#FF5A1F" stroke="#17130C" stroke-width="2"/>
+  <text x="343" y="257" font-family="Arial, sans-serif" font-size="20" font-weight="900" letter-spacing="2" text-anchor="middle" fill="#FFFFFF">BLOCKED</text>
+  <text x="46" y="318" font-family="monospace" font-size="14" fill="#17130C">Local layer: the cloud sees redactions only.</text>
+  <text x="46" y="342" font-family="monospace" font-size="14" fill="#17130C">Type or upload - nothing raw leaves this PC.</text>
+  <rect x="620" y="330" width="620" height="4" fill="#17130C"/>
+  <rect x="648" y="196" width="170" height="108" fill="#FFFFFF" stroke="#17130C" stroke-width="2"/>
+  <rect x="648" y="196" width="170" height="26" fill="#2F6F9E" stroke="#17130C" stroke-width="2"/>
+  <text x="733" y="215" font-family="monospace" font-size="14" text-anchor="middle" fill="#FFFFFF">YOU TYPE</text>
+  <text x="658" y="252" font-family="monospace" font-size="14" fill="#17130C">ana@example.com</text>
+  <rect x="658" y="260" width="140" height="6" fill="#FF5A1F"/>
+  <text x="658" y="288" font-family="Arial, sans-serif" font-size="12" font-weight="900" letter-spacing="1" fill="#17130C">STAYS ON THIS PC</text>
+  <rect x="852" y="222" width="60" height="60" fill="#FF5A1F" stroke="#17130C" stroke-width="2"/>
+  <text x="882" y="249" font-family="Arial, sans-serif" font-size="26" font-weight="900" text-anchor="middle" fill="#FFFFFF">S</text>
+  <text x="882" y="270" font-family="monospace" font-size="10" text-anchor="middle" fill="#FFFFFF">GATE</text>
+  <rect x="852" y="222" width="60" height="60" fill="none" stroke="#17130C" stroke-width="2"/>
+  <line x1="818" y1="252" x2="852" y2="252" stroke="#17130C" stroke-width="2"/>
+  <polygon points="852,244 852,260 864,252" fill="#17130C"/>
+  <rect x="936" y="232" width="180" height="40" fill="#FFFFFF" stroke="#17130C" stroke-width="2"/>
+  <text x="1026" y="258" font-family="monospace" font-size="17" text-anchor="middle" fill="#17130C">[PII_EMAIL_1]</text>
+  <line x1="1116" y1="252" x2="1150" y2="252" stroke="#17130C" stroke-width="2"/>
+  <polygon points="1150,244 1150,260 1162,252" fill="#17130C"/>
+  <rect x="1162" y="212" width="72" height="80" fill="#2F6F9E" stroke="#17130C" stroke-width="2"/>
+  <text x="1198" y="248" font-family="Arial, sans-serif" font-size="28" font-weight="900" text-anchor="middle" fill="#FFFFFF">AI</text>
+  <text x="1198" y="270" font-family="monospace" font-size="10" text-anchor="middle" fill="#FFFFFF">CLOUD</text>
+  <text x="733" y="354" font-family="monospace" font-size="13" text-anchor="middle" fill="#17130C">YOU - VALUES STAY HERE</text>
+  <text x="936" y="354" font-family="monospace" font-size="13" text-anchor="middle" fill="#17130C">LOCAL FILTER</text>
+  <text x="1198" y="354" font-family="monospace" font-size="13" text-anchor="middle" fill="#17130C">UPSTREAM AI</text>
+</svg>

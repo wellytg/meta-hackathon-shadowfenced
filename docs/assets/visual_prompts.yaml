@@ -1,0 +1,143 @@
+# T46 visual prompts — Classic style (no narration text in any image).
+# The generator (scripts/make_visuals.py) sends `prompt` + `size` to the
+# Meta Muse Image model and saves `output` under docs/assets/generated/.
+# On-image text is short and spelled out EXACTLY in each prompt so the
+# model renders it verbatim.
+model: muse-image-1.0
+images:
+  - name: panel-1-typing
+    output: panel-1-typing.png
+    size: 1024x1024
+    on_image_text: ["New chat", "ana@example.com", "Project TALLOW"]
+    prompt: >-
+      Classic flat illustration, paper background #FAF5EA, ink-black #17130C
+      outlines, hard 2px strokes, square corners only (no rounded corners),
+      flat fills, Windows 3.11 pixel feel. A person typing a chat message on
+      a chunky laptop; the message box contains an email address and a
+      codename. No narration text, no captions, no watermark.
+      On-image text, exactly: window title "New chat", message words
+      "ana@example.com" and "Project TALLOW".
+
+  - name: panel-2-underlines
+    output: panel-2-underlines.png
+    size: 1024x1024
+    on_image_text: ["ana@example.com", "Project TALLOW"]
+    prompt: >-
+      Classic flat illustration, paper background #FAF5EA, ink-black #17130C
+      outlines, hard 2px strokes, square corners only, flat fills,
+      Windows 3.11 pixel feel. Close-up of the same laptop message with live
+      wavy underlines: safety-orange #FF5A1F underline under the email,
+      amber #E8A415 underline under the codename. No narration text, no
+      captions, no watermark. On-image text, exactly: "ana@example.com" and
+      "Project TALLOW".
+
+  - name: panel-3-risk-card
+    output: panel-3-risk-card.png
+    size: 1024x1024
+    on_image_text: ["Risk card", "BLOCKED", "REVIEW"]
+    prompt: >-
+      Classic flat illustration, paper background #FAF5EA, ink-black #17130C
+      outlines, hard 2px strokes, square corners only, flat fills,
+      Windows 3.11 pixel feel. A risk card next to the laptop with two rows:
+      a safety-orange #FF5A1F row and an amber #E8A415 row. No narration
+      text, no captions, no watermark. On-image text, exactly: card title
+      "Risk card", row labels "BLOCKED" and "REVIEW".
+
+  - name: panel-4-placeholders-leave
+    output: panel-4-placeholders-leave.png
+    size: 1024x1024
+    on_image_text: ["[PII_EMAIL_1]", "AI MODEL"]
+    prompt: >-
+      Classic flat illustration, paper background #FAF5EA, ink-black #17130C
+      outlines, hard 2px strokes, square corners only, flat fills,
+      Windows 3.11 pixel feel. A laptop on the left sends a placeholder tag
+      along an arrow to a small cloud labelled as the AI model; the raw
+      values stay behind on the laptop. No narration text, no captions, no
+      watermark. On-image text, exactly: placeholder "[PII_EMAIL_1]" and
+      cloud label "AI MODEL".
+
+  - name: panel-5-answer-restored
+    output: panel-5-answer-restored.png
+    size: 1024x1024
+    on_image_text: ["Answer (on your device)"]
+    prompt: >-
+      Classic flat illustration, paper background #FAF5EA, ink-black #17130C
+      outlines, hard 2px strokes, square corners only, flat fills,
+      Windows 3.11 pixel feel. An answer card shown on the laptop screen on
+      the user's device, with a steel-blue #2F6F9E header bar. No narration
+      text, no captions, no watermark. On-image text, exactly: header
+      "Answer (on your device)".
+
+  - name: panel-6-contract-clause
+    output: panel-6-contract-clause.png
+    size: 1024x1024
+    on_image_text: ["To AI (safe request)", "[CONTRACT_CLAUSE_1]"]
+    prompt: >-
+      Classic flat illustration, paper background #FAF5EA, ink-black #17130C
+      outlines, hard 2px strokes, square corners only, flat fills,
+      Windows 3.11 pixel feel. A safe-request card going from the laptop to
+      a small cloud; the contract clause in the card is replaced by a
+      placeholder tag. No narration text, no captions, no watermark.
+      On-image text, exactly: card header "To AI (safe request)" and tag
+      "[CONTRACT_CLAUSE_1]".
+
+  - name: panel-7-env-stopped
+    output: panel-7-env-stopped.png
+    size: 1024x1024
+    on_image_text: [".env", "BLOCKED"]
+    prompt: >-
+      Classic flat illustration, paper background #FAF5EA, ink-black #17130C
+      outlines, hard 2px strokes, square corners only, flat fills,
+      Windows 3.11 pixel feel. A small coding-agent robot reaching for a
+      file card while a safety-orange #FF5A1F stop badge blocks it. No
+      narration text, no captions, no watermark. On-image text, exactly:
+      file label ".env" and badge word "BLOCKED".
+
+  - name: panel-8-decision-log
+    output: panel-8-decision-log.png
+    size: 1024x1024
+    on_image_text: ["Decision log", "ALLOW", "BLOCKED"]
+    prompt: >-
+      Classic flat illustration, paper background #FAF5EA, ink-black #17130C
+      outlines, hard 2px strokes, square corners only, flat fills,
+      Windows 3.11 pixel feel. A ledger-style decision log table on the
+      laptop screen with two stamped rows, one steel-blue #2F6F9E and one
+      safety-orange #FF5A1F. No narration text, no captions, no watermark.
+      On-image text, exactly: title "Decision log" and stamps "ALLOW" and
+      "BLOCKED".
+
+  - name: banner
+    output: banner.png
+    size: 1280x400
+    on_image_text: ["SHADOWFENCED", "Nothing sensitive crosses the boundary.", "[PII_EMAIL_1]"]
+    prompt: >-
+      Classic flat illustration, extra-wide hero banner, paper background
+      #FAF5EA, ink-black #17130C outlines, hard 2px strokes, square corners
+      only, flat fills, Windows 3.11 pixel feel. Left: bold title and one
+      tagline line; middle: laptop sending a placeholder tag through a
+      shield gate; right: small cloud. No narration text, no captions, no
+      watermark. On-image text, exactly: title "SHADOWFENCED", tagline
+      "Nothing sensitive crosses the boundary.", tag "[PII_EMAIL_1]".
+
+  - name: where-muse-works-bg
+    output: where-muse-works-bg.png
+    size: 1280x600
+    on_image_text: []
+    prompt: >-
+      Classic flat illustration, extra-wide diagram background only, paper
+      background #FAF5EA with a faint square grid and small ink-black corner
+      ticks, flat fills, Windows 3.11 pixel feel, empty centre left clear
+      for diagram nodes. No words, no letters, no numbers, no narration
+      text, no captions, no watermark.
+
+  - name: social-preview
+    output: social-preview.png
+    size: 1200x630
+    on_image_text: ["SHADOWFENCED", "Nothing raw leaves this PC."]
+    prompt: >-
+      Classic flat illustration, paper background #FAF5EA, ink-black #17130C
+      outlines, hard 2px strokes, square corners only, flat fills,
+      Windows 3.11 pixel feel. Centred shield gate between a laptop on the
+      left and a small cloud on the right. No narration text, no captions,
+      no watermark. On-image text, exactly: title "SHADOWFENCED" and line
+      "Nothing raw leaves this PC.".
