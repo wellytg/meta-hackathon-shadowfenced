@@ -35,6 +35,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, field_validator
 
 from . import reid as reid_module
+from .glimmer import glimmer_keep_alive, glimmer_options
 
 # --- Trigger: people-search wording ------------------------------------------
 _SEARCH_PATTERNS = (
@@ -164,7 +165,10 @@ def local_glimmer_person_search(
             "format": schema,
             "stream": False,
             "think": False,
-            "options": {"temperature": 0, "seed": 7, "num_ctx": 2048, "num_predict": 150},
+            "keep_alive": glimmer_keep_alive(),
+            "options": glimmer_options(
+                settings, temperature=0, seed=7, num_predict=150
+            ),
         }
         timeout = float(timeout_s) if timeout_s else 10.0
         with httpx.Client(transport=transport, timeout=timeout) as client:
