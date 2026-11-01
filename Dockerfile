@@ -13,7 +13,7 @@ WORKDIR /app
 COPY pyproject.toml README.md LICENSE policy.yaml ./
 COPY src ./src
 
-RUN pip install --no-cache-dir . \
+RUN pip install --no-cache-dir -e . \
     && mkdir -p /app/runs \
     && chown -R sfuser:sfuser /app
 

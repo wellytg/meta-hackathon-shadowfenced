@@ -20,6 +20,7 @@ GateAction = Literal["block", "redact", "review", "allow"]
 _DEFAULT_PATH = Path(__file__).resolve().parents[2] / "policy.yaml"
 _LOCAL_DEFAULT = Path(__file__).resolve().parents[2] / "policy.local.yaml"
 _LOCAL_ENV_VAR = "SF_LOCAL_POLICY"
+_POLICY_ENV_VAR = "SF_POLICY_PATH"
 
 # Hosted demo (SF_HOSTED=1) keeps custom rules in process memory only:
 # they are never written to disk and are capped at MAX_HOSTED_RULES.
@@ -256,11 +257,22 @@ def base_rules(policy: Policy) -> list[dict[str, object]]:
     return entries
 
 
-def load_policy(path: str | Path = _DEFAULT_PATH) -> Policy:
+def default_policy_path() -> Path:
+    """Default policy file: `SF_POLICY_PATH` wins, else the repo root.
+
+    Read at call time so the variable can point at a different file per
+    process without reimporting this module.
+    """
+    override = os.environ.get(_POLICY_ENV_VAR, "").strip()
+    return Path(override) if override else _DEFAULT_PATH
+
+
+def load_policy(path: str | Path | None = None) -> Policy:
     """Load and validate the policy file, merging local custom rules."""
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    target = Path(path) if path is not None else default_policy_path()
+    raw = yaml.safe_load(target.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise ValueError(f"policy file {path} must contain a mapping")
+        raise ValueError(f"policy file {target} must contain a mapping")
     policy = Policy.model_validate(raw)
     policy.custom_rules = load_custom_rules()
     return policy
