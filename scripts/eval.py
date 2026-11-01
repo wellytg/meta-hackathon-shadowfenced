@@ -25,6 +25,8 @@ import sys
 import time
 from datetime import date, datetime
 from pathlib import Path
+
+import yaml
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,7 +40,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--judge", choices=("glimmer", "llama", "none"),
                         required=True)
     parser.add_argument("--limit", type=int, default=0)
-    parser.add_argument("--corpus", default="cases", help="corpus name under corpus/ (cases | holdout)")
+    parser.add_argument("--corpus", default="cases", help="corpus name under corpus/ (cases | holdout | reid)")
     parser.add_argument("--seed", default=None)
     return parser.parse_args(argv)
 
@@ -230,6 +232,118 @@ def build_report(rows: list[dict[str, Any]], metrics: dict[str, Any],
     return {"config": config, "metrics": metrics, "per_case": rows}
 
 
+def evaluate_reid_cases(cases, *, policy, registry):
+    """Score every reid case; conversations accumulate, residual reverses.
+
+    Each case contributes its messages (or its single text) to
+    ``engine.gate_reid`` with earlier messages as conversation context.
+    Cases carrying ``redacted_text`` that still gate OK get the
+    residual-context check on the redacted text (default local judge,
+    fail-closed). Risky cases count as caught when flagged WARN or HOLD;
+    safe cases count as false warnings when flagged.
+    """
+    import time as _time
+
+    from shadowfenced import engine, reid as reid_module
+
+    rows = []
+    for case in cases:
+        messages = case.get("messages") or [case.get("text", "")]
+        prior, last = messages[:-1], messages[-1]
+        gate_started = _time.perf_counter()
+        decision = engine.gate_reid(last, policy, registry,
+                                    conversation=prior)
+        gate_ms = (_time.perf_counter() - gate_started) * 1000
+        final = decision.decision
+        residual_note = ""
+        redacted = case.get("redacted_text")
+        if redacted and final == "OK":
+            residual = reid_module.residual_check(redacted)
+            residual_note = residual.reason
+            if residual.hold:
+                final = "HOLD"
+        risky = case.get("category") == "risky"
+        flagged = final in ("WARN", "HOLD")
+        rows.append({
+            "id": case.get("id"),
+            "kind": case.get("kind"),
+            "risky": risky,
+            "expected": case.get("expected"),
+            "gate": decision.decision,
+            "final": final,
+            "flagged": flagged,
+            "meets_expect": final == case.get("expected"),
+            "combination": ((decision.evidence or {}).get("reid", {})
+                            .get("combination", [])),
+            "residual_note": residual_note,
+            "gate_ms": round(gate_ms, 2),
+        })
+    return rows
+
+
+def compute_reid_metrics(rows):
+    """Aggregate reid rows into catch and false-warning rates."""
+    risky = [row for row in rows if row["risky"]]
+    safe = [row for row in rows if not row["risky"]]
+
+    def _share(part, whole):
+        return round(part / whole, 4) if whole else 0.0
+
+    return {
+        "n": len(rows),
+        "n_risky": len(risky),
+        "n_safe": len(safe),
+        "catch_rate": _share(
+            sum(1 for row in risky if row["flagged"]), len(risky)),
+        "false_warning_rate": _share(
+            sum(1 for row in safe if row["flagged"]), len(safe)),
+    }
+
+
+def print_reid_table(rows, metrics):
+    """Print one compact line per reid case plus the metric summary."""
+    print(f"{'id':<12}{'kind':<12}{'expected':<9}{'final':<7}combination")
+    for row in rows:
+        combo = "+".join(row["combination"]) or "-"
+        print(f"{row['id']:<12}{row['kind']:<12}{row['expected']:<9}"
+              f"{row['final']:<7}{combo}")
+    print(f"n={metrics['n']} risky={metrics['n_risky']} "
+          f"safe={metrics['n_safe']} catch_rate={metrics['catch_rate']} "
+          f"false_warning_rate={metrics['false_warning_rate']}")
+
+
+def _main_reid(args, seed, policy, registry):
+    """Run the reid eval; return the report dict (also written to runs/)."""
+    raw = yaml.safe_load(
+        (ROOT / "corpus" / "reid.yaml").read_text(encoding="utf-8"))
+    if args.limit:
+        raw = raw[:args.limit]
+    gate_started = time.perf_counter()
+    rows = evaluate_reid_cases(raw, policy=policy, registry=registry)
+    wall_s = round(time.perf_counter() - gate_started, 1)
+    metrics = compute_reid_metrics(rows)
+    report = build_report(
+        rows,
+        metrics,
+        {
+            "judge": args.judge,
+            "corpus": "reid",
+            "judge_model": None,
+            "seed": seed,
+            "git_sha": _git_sha(),
+            "date": datetime.now().isoformat(timespec="seconds"),
+            "keep_alive": "5m",
+            "wall_s": wall_s,
+        },
+    )
+    out = ROOT / "runs" / f"eval_{date.today().isoformat()}_reid_{args.judge}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print_reid_table(rows, metrics)
+    print(f"wrote {out}")
+    return report
+
+
 def main(argv: list[str] | None = None) -> dict[str, Any]:
     """Run the eval; return the report dict (also written to runs/)."""
     args = _parse_args(argv)
@@ -255,6 +369,8 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     settings = get_settings()
     policy = load_policy()
     registry = CanaryRegistry(settings.canary_seed, REGISTRY_KINDS)
+    if args.corpus == "reid":
+        return _main_reid(args, seed, policy, registry)
     raw = load_cases(ROOT / "corpus" / f"{args.corpus}.yaml")
     if args.limit:
         raw = raw[:args.limit]
