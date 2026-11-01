@@ -134,6 +134,16 @@ def _parse_int(raw: str | None, default: int) -> int:
         return default
 
 
+def _stored_provider_key(provider_id: str) -> str:
+    """One provider key from the OS store / ``.env`` fallback ("" if none)."""
+    try:
+        from . import providers as providers_module
+
+        return providers_module.get_key(provider_id)
+    except Exception:
+        return ""
+
+
 def get_settings(env: dict[str, str] | None = None) -> Settings:
     """Build settings from the environment (plus ``.env`` by default).
 
@@ -145,6 +155,10 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
     # MODEL_API_KEY is an accepted alias for META_API_KEY; neither value
     # is ever logged or printed by this module.
     meta_key = merged.get("META_API_KEY", "") or merged.get("MODEL_API_KEY", "")
+    if not meta_key and env is None:
+        # A key stored in the OS credential store (providers UI) counts
+        # exactly like an env-provided one; never logged or printed here.
+        meta_key = _stored_provider_key("meta")
     if file_or_env_upstream in ("meta", "ollama"):
         upstream = file_or_env_upstream
     else:

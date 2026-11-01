@@ -42,6 +42,20 @@ def _verify_for(url: str) -> Any:
         return True
 
 
+def _generic_openai_provider(name: str) -> tuple[str, str, str] | None:
+    """Base URL, model, and key for registry providers (None if N/A)."""
+    try:
+        from . import providers as providers_module
+    except Exception:
+        return None
+    provider = providers_module.get_provider(name)
+    if provider is None or not provider.needs_key:
+        return None
+    if provider.id in ("meta",):
+        return None
+    return provider.base_url, provider.default_model, providers_module.get_key(name)
+
+
 def _timeout_for(provider: str | None, timeout: float,
                  settings: Settings) -> float:
     """Effective timeout: Meta gets 90 s unless the caller overrode it."""
@@ -76,6 +90,14 @@ def build_request(
     if name == "ollama":
         url = settings.ollama_url.rstrip("/") + "/v1/chat/completions"
         return url, {}, {"model": settings.local_model, "messages": messages}
+    generic = _generic_openai_provider(name)
+    if generic is not None:
+        base_url, model, key = generic
+        if not key:
+            raise UpstreamError(f"{name} upstream unavailable: no API key stored")
+        url = base_url.rstrip("/") + "/chat/completions"
+        headers = {"Authorization": "Bearer " + key}
+        return url, headers, {"model": model, "messages": messages}
     raise UpstreamError(f"unknown provider {provider!r}")
 
 
