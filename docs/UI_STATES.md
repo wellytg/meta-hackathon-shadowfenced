@@ -31,7 +31,7 @@ Global rules that apply to every element below:
 | Idle, empty | Placeholder "Type a message — sensitive text gets underlined…", Send disabled | Type, paste, attach, dictate |
 | Typing | Text in ink; sensitive spans underlined (red secret, amber pii/business, dotted steel-blue suspicion) within ~250 ms; issue cards appear | Keep typing; Redact/Keep/Why per span |
 | Focus | 3px steel outline | Same as typing |
-| Busy (send in flight) | "Checking locally…" next to Send; box stays editable but Send is disabled | Wait; Jump to latest still works |
+| Busy (send in flight) | "Checking locally…" next to Send (after 2 s: "Muse Glimmer is checking on this PC…"); box stays editable but Send is disabled | Wait; Jump to latest still works |
 | Success | Box cleared (the server took the text) | Type the next message |
 | Error (send failed) | Text KEPT; one-line `#composer-error`: "Not sent — couldn't reach the checker. Your text was kept; try again." | Edit and press Send again |
 | Disabled | Never (always editable) | — |
@@ -46,7 +46,7 @@ busy is dropped (one request in flight).
 |---|---|---|
 | Disabled (empty, no files) | Greyed "Send" (55% opacity) | Nothing (click is a no-op guard) |
 | Enabled (text or files) | Ink button with orange offset shadow | Click or Enter to send |
-| Busy | Disabled + "Checking locally…" label beside it | Nothing until the check returns |
+| Busy | Disabled + "Checking locally…" label beside it (after 2 s: "Muse Glimmer is checking on this PC…") | Nothing until the check returns |
 | Hover/focus | Steel background / steel outline | Same as enabled |
 
 ## 3. Attach (`button#paperclip`, `data-testid="attach"`, `input#file-input`, chips)
@@ -147,6 +147,16 @@ one loads the turn into the details drawer.
 Buttons disable the moment one is clicked (no double ruling). A failed
 poll retries silently; the spinner keeps counting.
 
+Cue-word background review (T57) shows a compact CHECKING card instead:
+title "CHECKING", Sending = the message text, Why = "Contains a word that
+can point to personal data ('cue'); Muse Glimmer is checking it on this PC",
+What = "Checking... (Ns)". No choice buttons appear unless the review ends
+in a real hold (`needs_human`), when the card switches to the normal HOLD
+card with its choices. On release the card is removed and the receipt
+becomes the quiet receipt "✓ Checked by Muse Glimmer · nothing sensitive"
+(Why still available); the details drawer moves from HOLD to the final
+decision.
+
 ## 12. Generalise and Send-anyway choices
 
 - Person-search WARN: note in the receipt + "Generalise"
@@ -220,4 +230,8 @@ done (Replaced with placeholders / Blocked — not sent / Waiting for
 you: Generalise · Send anyway · Cancel). Compact by default (one line
 per row; "Show details" expands the full trace); single column at
 390px. HOLD review renders the same card (`evidence-card` hook kept)
-with its live review section inside.
+with its live review section inside. A cue-word background review (T57)
+renders a compact CHECKING card instead (message text as Sending, the
+named cue in Why, "Checking... (Ns)" as What, no choice buttons); on
+release it is replaced by the quiet receipt and on `needs_human` it
+switches to the normal HOLD card with its choices.

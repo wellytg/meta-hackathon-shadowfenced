@@ -208,6 +208,23 @@ _SCREEN_UNC_RE = re.compile(r"\\\\[A-Za-z0-9_.$-]+")
 MESSAGE_PENDING_CHARS = 2000
 
 
+def cue_word(text: str) -> str | None:
+    """Name the sensitivity cue that fired, without echoing message text.
+
+    Returns the matched cue word lowercased with internal whitespace
+    collapsed (``"born"`` for the Ada Lovelace message), ``"unc path"``
+    for a bare UNC server path, or None when nothing fired. Only this
+    cue fragment may appear in a user-facing reason: never any other
+    part of the message.
+    """
+    match = _SCREEN_CUE_RE.search(text)
+    if match is not None:
+        return re.sub(r"\s+", " ", match.group(0)).strip().lower()
+    if _SCREEN_UNC_RE.search(text) is not None:
+        return "unc path"
+    return None
+
+
 def has_sensitivity_cue(text: str) -> bool:
     """True when text holds a sensitivity cue word or UNC server path."""
     return (
@@ -261,7 +278,13 @@ def _gate_send(
                 f"{len(ambiguous)} ambiguous span(s) need Glimmer review -> HOLD"
             )
         else:
-            reasons.append("sensitivity cue word needs Glimmer review -> HOLD")
+            cue = cue_word(text)
+            if cue is not None:
+                reasons.append(
+                    f"sensitivity cue word needs Glimmer review (cue='{cue}') -> HOLD"
+                )
+            else:
+                reasons.append("sensitivity cue word needs Glimmer review -> HOLD")
         pending: list[dict[str, Any]] = [
             {"kind": "message", "text": text[:MESSAGE_PENDING_CHARS]}
         ]
@@ -569,6 +592,7 @@ def _gate_impl(
                                 "text": text[:MESSAGE_PENDING_CHARS],
                             }
                         ],
+                        "confidential_contract": True,
                     },
                     status="reviewing",
                 )
@@ -695,8 +719,15 @@ def _append_gate_trace(
 
 
 def _is_cue_only_hold(decision: Decision) -> bool:
-    """True when a HOLD came only from a sensitivity cue (no ambiguous spans)."""
+    """True when a HOLD came only from a sensitivity cue (no ambiguous spans).
+
+    A classified-contract HOLD is never cue-only: the handling-caveat
+    stamp plus the contract classification require human review, so
+    re-id or person-search noise must not downgrade them to WARN.
+    """
     if decision.decision != "HOLD":
+        return False
+    if (decision.evidence or {}).get("confidential_contract"):
         return False
     return not any(s.status == "ambiguous" for s in decision.spans)
 
@@ -994,8 +1025,9 @@ def _downgrade_verified_public_figure(
 ) -> Decision | None:
     """ALLOW when Glimmer verifies a public figure in encyclopedic framing.
 
-    Tier 3 coordination for T48 rule 2: the re-identification layer may
-    still warn on a published birthday plus a name, but when Glimmer has
+    Tier 3 coordination for T48 rule 2, extended in T53 to pure cue-word
+    HOLDs with no re-id case: the layer may still warn on a published
+    birthday plus a name, but when Glimmer has
     verified (exact-substring subject, confidence >= 0.6) that the
     subject is a public figure, the question uses encyclopedic framing
     and no current contact detail or ID number is present, there is no
@@ -1005,8 +1037,15 @@ def _downgrade_verified_public_figure(
     if decision.decision not in ("WARN", "HOLD"):
         return None
     reid_info = (decision.evidence or {}).get("reid")
-    if not reid_info or reid_info.get("outcome") not in ("WARN", "HOLD"):
+    if reid_info is not None and reid_info.get("outcome") not in ("WARN", "HOLD"):
         return None
+    if reid_info is None:
+        if not decision.reasons or not all(
+            "sensitivity cue word" in reason for reason in decision.reasons
+        ):
+            return None
+        if any(getattr(span, "proof", "") == "custom" for span in decision.spans):
+            return None
     if result.warn or not result.triggered:
         return None
     if result.subject_public is not True or not result.verified_subject:
@@ -1024,7 +1063,7 @@ def _downgrade_verified_public_figure(
            and getattr(span, "cls", "") in ("pii", "secret")
            for span in decision.spans):
         return None
-    combo = set(reid_info.get("combination") or [])
+    combo = set(reid_info.get("combination") or []) if reid_info is not None else {str(item.get("kind", "")) for item in (current or [])}
     if combo & set(reid_module.CONTACT_KINDS):
         return None
     if not reid_module.has_encyclopedic_framing(text, conversation):

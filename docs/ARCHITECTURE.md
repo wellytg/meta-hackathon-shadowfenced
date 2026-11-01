@@ -88,6 +88,24 @@ verdict; an unverified model claim holds; `engine.gate` wraps unexpected
 errors as HOLD; unscannable uploads hold the send; transcription failure
 marks the file unscannable instead of passing unchecked audio.
 
+Glimmer call order on one send (T53): every local Glimmer text call
+shares one timeout (`SF_GLIMMER_TIMEOUT_S`, default 45 s; image calls
+keep the longer `SF_IMAGE_TIMEOUT_S`)
+and the checks run in a fixed order, so a later call is skipped when an
+earlier result already decides the outcome:
+
+1. person-search intent (`person_search.py`, inline in the gate);
+2. residual-context check (`reid.py`, tier-1/residual flows only; deferred
+   in send mode);
+3. whole-message judge (background review of send-mode HOLDs only).
+
+Skip rules: a residual HOLD skips the person-search call; a verified
+public-figure verdict lifts a pure cue-word HOLD to ALLOW so no
+background review is queued; re-identification OK plus no person-search
+trigger (or Tier 2 off) means no Glimmer call at all; WARN/ALLOW/REDACT
+never queue a review. A send-mode HOLD is always reviewed — the
+background judge never skips (fail closed).
+
 ## 3. Modules
 
 One box per Python module and static script, each with its one-line job.

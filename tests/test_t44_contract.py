@@ -271,6 +271,62 @@ def test_send_holds_confidential_msa(mock_upstream):
     )
 
 
+# --- T54: every numbered clause in a pasted excerpt is protected ---
+
+
+T54_EXCERPT = (
+    "MUTUAL NON-DISCLOSURE AGREEMENT\n"
+    "This Agreement is made between Quillfern Systems Ltd (the Discloser) "
+    "and Brackenmoor Analytics LLC (the Recipient).\n"
+    "4.2 Termination. Either party may terminate this Agreement upon "
+    "thirty (30) days written notice, provided that the obligations in "
+    "Section 5 shall survive termination for a period of five (5) years.\n"
+    "5.1 Confidentiality. The Recipient shall not disclose any "
+    "Confidential Information to any third party without the prior "
+    "written consent of the Discloser, notwithstanding any other "
+    "provision herein.\n"
+    "Can you explain these clauses in plain English?"
+)
+
+
+def test_t54_excerpt_protects_parties_and_every_numbered_clause(policy):
+    decision = gate(T54_EXCERPT, policy, None)
+    assert decision.decision == "REDACT"
+    assert decision.sent_text is not None
+    for token in (
+        "[CONTRACT_CLAUSE_1]",
+        "[CONTRACT_CLAUSE_2]",
+        "[CONTRACT_CLAUSE_3]",
+    ):
+        assert token in decision.sent_text
+    bodies = " ".join(decision.placeholders.values())
+    assert "between Quillfern Systems Ltd" in bodies
+    assert "4.2 Termination" in bodies
+    assert "5.1 Confidentiality" in bodies
+    # The document heading and the user question stay visible.
+    assert "MUTUAL NON-DISCLOSURE AGREEMENT" in decision.sent_text
+    assert "Can you explain these clauses in plain English?" in decision.sent_text
+    # No clause body leaks: parties, 4.2, and the 5.1 clause carrying
+    # the phrase "Confidential Information" are all redacted.
+    for phrase in (
+        "Quillfern",
+        "shall survive termination",
+        "shall not disclose",
+        "Confidential Information",
+        "notwithstanding any other provision",
+    ):
+        assert phrase not in decision.sent_text
+    restored, highlights, unmatched = rehydrate(
+        "got [CONTRACT_CLAUSE_1], [CONTRACT_CLAUSE_2], [CONTRACT_CLAUSE_3]",
+        decision.placeholders,
+    )
+    assert unmatched == []
+    assert len(highlights) == 3
+    assert "between Quillfern Systems Ltd" in restored
+    assert "shall survive termination" in restored
+    assert "Confidential Information" in restored
+
+
 def test_short_quote_with_clause_number_redacts(policy):
     decision = gate("4.2 Termination.", policy, None)
     assert decision.decision == "REDACT"

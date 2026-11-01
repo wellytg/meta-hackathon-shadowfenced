@@ -106,7 +106,26 @@ def _provider_spans(payload: dict) -> list[dict]:
 
 
 def _expected_message(label: str) -> str:
-    return f"A {label} API key \u2014 not sent"
+    from shadowfenced.tier1 import _article_for
+
+    return f"{_article_for(label)} {label} API key \u2014 not sent"
+
+
+@pytest.mark.parametrize(
+    ("label", "article"),
+    [
+        ("OpenAI", "An"),
+        ("Anthropic", "An"),
+        ("AWS", "An"),
+        ("Hugging Face", "A"),
+        ("xAI", "An"),
+    ],
+)
+def test_provider_article_uses_first_sound(label: str, article: str) -> None:
+    from shadowfenced.tier1 import _article_for, _provider_message
+
+    assert _article_for(label) == article
+    assert _provider_message(label) == f"{article} {label} API key \u2014 not sent"
 
 
 @pytest.mark.parametrize("index", range(len(_BUILDERS)), ids=_IDS)

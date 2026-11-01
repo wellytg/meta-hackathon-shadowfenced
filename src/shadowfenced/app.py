@@ -1718,6 +1718,11 @@ def _handle_audio_upload(
     }
 
 
+#: Honest "clean" wording when Glimmer saw text but neither pass found
+#: anything sensitive (T55): an empty region answer must not mean "clean".
+HONEST_CLEAN_TEXT = "clean — checked by Muse Glimmer on this PC"
+
+
 def _handle_image_upload(filename: str, data: bytes, *, settings: Settings | None = None, glimmer_transport: Any | None = None, sam_transport: Any | None = None) -> dict[str, Any]:
     """Redact one screenshot/photo, or ask for consent first (T43).
 
@@ -1775,6 +1780,8 @@ def _handle_image_upload(filename: str, data: bytes, *, settings: Settings | Non
             glimmer_transport=glimmer_transport,
             sam_transport=sam_transport,
             sam_enabled=(mode == "on"),
+            policy=get_policy(),
+            registry=get_registry(),
         )
     except (FileTooLarge, image_redact_module.ImageRedactError) as exc:
         record = UPLOADS.save(
@@ -1820,7 +1827,7 @@ def _handle_image_upload(filename: str, data: bytes, *, settings: Settings | Non
         extra = ", ".join(engine.describe_placeholders(mapping))
         summary_text = region_word + (f" ({extra})" if extra else " (needs review)")
     else:
-        summary_text = region_word if count else "clean"
+        summary_text = region_word if count else HONEST_CLEAN_TEXT if redacted.saw_text else "clean"
     return {
         "file_id": record.file_id,
         "name": filename,

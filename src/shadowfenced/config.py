@@ -27,9 +27,10 @@ _ENV_KEYS = (
     "SF_LIVE_MODEL",
     "SF_JUDGE_MODEL",
     "SF_GLIMMER_NUM_CTX",
-    "SF_JUDGE_TIMEOUT_S",
+    "SF_GLIMMER_TIMEOUT_S",
     "SF_LIVE_TIMEOUT_S",
     "SF_IMAGE_TIMEOUT_S",
+    "SF_IMAGE_SECOND_PASS",
     "SF_LIVE_NUM_GPU",
     "SF_TIER2_MODE",
     "SF_IMAGE_REDACTION",
@@ -92,9 +93,10 @@ class Settings(BaseModel):
     live_model: str = "llama3.2:3b"
     judge_model: str = "muse-glimmer:30b"
     glimmer_num_ctx: int = 2048
-    judge_timeout_s: float = 60.0
+    glimmer_timeout_s: float = 45.0
     live_timeout_s: float = 4.0
     image_timeout_s: float = 120.0
+    image_second_pass: bool = True
     live_num_gpu: int = 0
     tier2_mode: str = "live"
     image_redaction: str = "off"
@@ -193,9 +195,10 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
         live_model=merged.get("SF_LIVE_MODEL", "llama3.2:3b"),
         judge_model=merged.get("SF_JUDGE_MODEL", "muse-glimmer:30b"),
         glimmer_num_ctx=_parse_int(merged.get("SF_GLIMMER_NUM_CTX"), 2048),
-        judge_timeout_s=_parse_float(merged.get("SF_JUDGE_TIMEOUT_S"), 60.0),
+        glimmer_timeout_s=_parse_float(merged.get("SF_GLIMMER_TIMEOUT_S"), 45.0),
         live_timeout_s=_parse_float(merged.get("SF_LIVE_TIMEOUT_S"), 4.0),
         image_timeout_s=_parse_float(merged.get("SF_IMAGE_TIMEOUT_S"), 120.0),
+        image_second_pass=_parse_flag(merged.get("SF_IMAGE_SECOND_PASS"), True),
         live_num_gpu=_parse_int(merged.get("SF_LIVE_NUM_GPU"), 0),
         tier2_mode=_tier2_mode(merged.get("SF_TIER2_MODE")),
         image_redaction=_image_redaction(merged.get("SF_IMAGE_REDACTION")),

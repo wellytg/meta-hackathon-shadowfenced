@@ -324,6 +324,10 @@ def _locate(text: str, span_text: str) -> tuple[int | None, int | None]:
     return None, None
 
 
+#: Max message chars judged in background review: the front decides it.
+MESSAGE_JUDGE_CHARS = 1000
+
+
 def _judge_for_review(
     hold: Hold,
     window: str,
@@ -386,7 +390,7 @@ def _review_message_item(
     if not isinstance(message_text, str):
         message_text = ""
     judgement = _judge_for_review(
-        hold, message_text, model, judge_transport, meta_transport
+        hold, message_text[:MESSAGE_JUDGE_CHARS], model, judge_transport, meta_transport
     )
     if judgement is None:
         suspicions.append(

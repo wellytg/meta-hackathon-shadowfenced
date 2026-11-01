@@ -168,6 +168,7 @@ class RedactedImage:
     texts: list[str] = field(default_factory=list)  # Tier 1 scans these
     method: str = "none"  # "sam" | "box" | "none"
     method_label: str = ""  # human-readable chip text, e.g. "Box fill"
+    saw_text: bool = False  # pass B saw text lines (honest "clean" wording)
 
 
 def _clamp_box(box: Any, width: int, height: int) -> tuple[int, int, int, int] | None:
@@ -243,6 +244,14 @@ The image is {w}x{h} pixels. Reply with JSON only, exactly:
 One entry per sensitive region; pixel coordinates in 0..{w} and 0..{h}.
 Use a tight box around each region. Empty list when nothing is sensitive."""
 
+#: Pass B prompt: transcribe-only, no sensitivity judgement. Short JSON so
+#: the second Glimmer call stays cheap; the Tier 1 detectors in
+#: :func:`_screen_transcribed_lines` decide what is sensitive.
+_TRANSCRIBE_PROMPT = """Transcribe every line of visible text in this screenshot, top to bottom. \
+Reply with JSON only, exactly: {"lines": [{"text": "<exact line text>", \
+"box": [x1, y1, x2, y2]}]} The image is {w}x{h} pixels; coordinates in \
+0..{w} and 0..{h}. One tight box per line. Empty list when no text is visible."""
+
 
 def find_regions(
     image_bytes: bytes,
@@ -315,6 +324,139 @@ def find_regions(
             continue
         regions.append(Region(prompt=prompt, box=box, text=text))
     return regions, (width, height)
+
+
+def transcribe_lines(
+    image_bytes: bytes,
+    *,
+    settings: Settings | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> tuple[list[Region], tuple[int, int]]:
+    """Ask local Glimmer to transcribe visible text lines with boxes.
+
+    Pass B of the screenshot check: returns ``(lines, (width, height))``
+    where each line is a :class:`Region` carrying ``text`` and ``box``
+    (``prompt`` stays empty until Tier 1 screening names the hit).
+    Raises :class:`GlimmerError` when Glimmer cannot answer so the
+    caller fails closed. Shares the ``options``/``keep_alive`` helpers
+    with pass A so the vision model never reloads mid-image.
+    """
+    cfg = settings or get_settings()
+    try:
+        image = _open_image(image_bytes)
+    except ImageRedactError as exc:
+        raise GlimmerError(str(exc)) from exc
+    width, height = image.size
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    prompt = _TRANSCRIBE_PROMPT.replace("{w}", str(width)).replace("{h}", str(height))
+    body = {
+        "model": GLIMMER_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+                "images": [b64],
+            }
+        ],
+        "format": "json",
+        "stream": False,
+        "think": False,
+        "keep_alive": glimmer_keep_alive(),
+        "options": glimmer_options(cfg),
+    }
+    url = cfg.ollama_url.rstrip("/") + "/api/chat"
+    try:
+        with httpx.Client(
+            transport=transport, timeout=cfg.image_timeout_s,
+            verify=_verify_for(url),
+        ) as client:
+            response = client.post(url, json=body)
+    except Exception as exc:
+        raise GlimmerError(
+            f"glimmer unreachable: {type(exc).__name__}"
+        ) from exc
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise GlimmerError("glimmer returned bad JSON") from exc
+    if response.status_code != 200:
+        raise GlimmerError(f"glimmer status {response.status_code}")
+    message = payload.get("message", {}) if isinstance(payload, dict) else {}
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise GlimmerError("glimmer returned no content")
+    parsed = parse_glimmer_json(content)
+    items = parsed.get("lines", []) if isinstance(parsed, dict) else []
+    if not isinstance(items, list):
+        raise GlimmerError("glimmer returned a bad line list")
+    lines: list[Region] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text", "") or "").strip()
+        if not text:
+            continue
+        box = _clamp_box(item.get("box"), width, height)
+        lines.append(Region(prompt="", box=box, text=text))
+    return lines, (width, height)
+
+
+def _default_screening_policy(
+    policy: Any | None, registry: Any | None
+) -> tuple[Any, Any]:
+    """Default Tier 1 policy/registry for pass B screening (never raises)."""
+    if policy is None:
+        try:
+            from .policy import load_policy
+
+            policy = load_policy()
+        except Exception:
+            from .policy import Policy
+
+            policy = Policy()
+    if registry is None:
+        try:
+            from .canary import DEFAULT_KINDS, CanaryRegistry
+
+            registry = CanaryRegistry(get_settings().canary_seed, DEFAULT_KINDS)
+        except Exception:
+            registry = None
+    return policy, registry
+
+
+def _screen_transcribed_lines(
+    lines: list[Region],
+    *,
+    policy: Any | None = None,
+    registry: Any | None = None,
+) -> list[Region]:
+    """Promote transcribed lines with Tier 1 hits to redaction regions.
+
+    Every line whose text trips a Tier 1 detector becomes a region on its
+    line box, even when pass A missed it. A hit with no usable box raises
+    :class:`ImageRedactError` so the original is never sent. Lines
+    without hits are dropped.
+    """
+    policy, registry = _default_screening_policy(policy, registry)
+    from . import tier1 as tier1_module
+
+    found: list[Region] = []
+    for line in lines:
+        spans = tier1_module.scan(line.text, policy, registry)
+        if not spans:
+            continue
+        if line.box is None:
+            raise ImageRedactError(
+                "transcribed sensitive text found but not localizable; "
+                "refusing to send original"
+            )
+        label = spans[0].subclass or "sensitive text"
+        found.append(
+            Region(prompt=f"transcribed {label}", box=line.box, text=line.text)
+        )
+    return found
 
 
 def _object_prompt(regions: list[Region], width: int, height: int) -> str:
@@ -579,22 +721,51 @@ def redact_image(
     glimmer_transport: httpx.BaseTransport | None = None,
     sam_transport: httpx.BaseTransport | None = None,
     sam_enabled: bool = True,
+    policy: Any | None = None,
+    registry: Any | None = None,
 ) -> RedactedImage:
-    """Full pipeline: Glimmer regions, SAM masks, black fill.
+    """Full pipeline: Glimmer regions, pass-B transcription screen, SAM masks, black fill.
 
     ``sam_enabled=False`` (the "keep images local" choice) skips the
     cloud call and fills Glimmer boxes directly. Any SAM failure also
     falls back to boxes; when a found region has neither a mask nor a
     box, raises :class:`ImageRedactError` so the original is never sent.
+    Pass B transcribes text lines and promotes Tier 1 hits to regions;
+    ``saw_text`` records whether any text was seen for the honest
+    "clean" wording. ``policy``/``registry`` default to the app's own.
     """
     cfg = settings or get_settings()
     regions, size = find_regions(
         image_bytes, settings=cfg, transport=glimmer_transport
     )
+    saw_text = False
+    if not regions or cfg.image_second_pass:
+        # Pass B: ask Glimmer to transcribe visible text line by line, then
+        # screen the lines with the Tier 1 detectors. It always runs when
+        # pass A found nothing (an empty answer must not mean "clean");
+        # otherwise only when cheap (SF_IMAGE_SECOND_PASS, default on).
+        # A pass B failure with no pass A regions propagates, so the
+        # upload becomes "unscannable" and the image is held, never sent.
+        try:
+            lines, _ = transcribe_lines(
+                image_bytes, settings=cfg, transport=glimmer_transport
+            )
+        except GlimmerError:
+            if not regions:
+                raise
+            lines = []
+        saw_text = any(line.text.strip() for line in lines)
+        # Pass B is a safety net, not a double counter: drop lines pass A
+        # already reported with the identical text and box.
+        have = {(region.text, region.box) for region in regions}
+        regions = list(regions) + _screen_transcribed_lines(
+            [line for line in lines if (line.text, line.box) not in have],
+            policy=policy, registry=registry,
+        )
     if not regions:
         image = _open_image(image_bytes)
         return RedactedImage(
-            png=encode_png(image), method="none",
+            png=encode_png(image), method="none", saw_text=saw_text,
             method_label=describe_method("none"),
         )
     texts = [r.text for r in regions if r.text]

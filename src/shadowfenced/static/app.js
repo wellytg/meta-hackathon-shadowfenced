@@ -18,6 +18,7 @@
   var redactedCache = {}; // file_id -> object URL for the full redacted PNG
   var pendingOriginals = {}; // name:size -> original data URL until the upload lands
   var sending = false;
+  var sendSeq = 0; // latest send; the 2 s status timer only fires for it
   var composerError = document.getElementById("composer-error");
 
   // One-line composer error next to the control that failed; it
@@ -775,6 +776,12 @@
     clearComposer();
     setMembrane("inspecting");
     checking.hidden = false;
+    var mySend = ++sendSeq;
+    setTimeout(function () {
+      if (mySend === sendSeq && sending && checking && !checking.hidden) {
+        checking.textContent = "Muse Glimmer is checking on this PC…";
+      }
+    }, 2000);
     sending = true;
     paintSend();
 
@@ -809,7 +816,7 @@
         }
         thread.appendChild(banner);
         renderReceipt(decision, body, banner);
-        noteTurn(decision, body);
+        var turnEntry = noteTurn(decision, body);
         setMembrane(membraneFor(decision));
         if (body && body.evidence && body.evidence.person_search && body.evidence.person_search.banner) {
           var personHost = (banner.querySelector && banner.querySelector(".receipt-notes")) || banner;
@@ -872,7 +879,7 @@
           thread.appendChild(src);
         }
         if (decision === "HOLD" && body.decision_id) {
-          renderHoldCard(body.decision_id, banner, body);
+          renderHoldCard(body.decision_id, banner, body, turnEntry);
         }
         updateEmptyHint();
         refreshStats();
@@ -911,9 +918,143 @@
 
   // Evidence card for one HOLD: two columns (proven vs suspicion),
   // a reviewing spinner with elapsed seconds, then the final outcome.
-  function renderHoldCard(holdId, banner, body) {
+  var QUIET_RELEASE_LABEL = "✓ Checked by Muse Glimmer · nothing sensitive";
+
+  function holdCueWord(resp) {
+    var reasons = [];
+    if (resp && resp.evidence && Array.isArray(resp.evidence.reasons)) {
+      reasons = resp.evidence.reasons;
+    } else if (resp && Array.isArray(resp.reasons)) {
+      reasons = resp.reasons;
+    }
+    for (var i = 0; i < reasons.length; i++) {
+      var m = String(reasons[i]).match(/cue='([^']+)'/);
+      if (m) return m[1];
+    }
+    return "";
+  }
+
+  function holdPendingMessage(resp) {
+    var pending = resp && resp.evidence && resp.evidence.pending;
+    if (Array.isArray(pending)) {
+      for (var i = 0; i < pending.length; i++) {
+        var item = pending[i];
+        if (item && typeof item === "object" && item.kind === "message" &&
+            typeof item.text === "string") {
+          return item.text;
+        }
+        if (typeof item === "string" && item) return item;
+      }
+    }
+    return "";
+  }
+
+  function isCueCheckingHold(resp) {
+    if (!resp || String(resp.decision || "").toUpperCase() !== "HOLD") return false;
+    var spans = (resp.evidence && resp.evidence.spans) || resp.spans || [];
+    if (Array.isArray(spans)) {
+      for (var i = 0; i < spans.length; i++) {
+        if (spans[i] && spans[i].status === "ambiguous") return false;
+      }
+    }
+    var reasons = (resp.evidence && resp.evidence.reasons) || resp.reasons || [];
+    if (!Array.isArray(reasons)) return false;
+    return reasons.some(function (r) {
+      return /sensitivity cue word/i.test(String(r));
+    });
+  }
+
+  function checkingCardModel(resp, elapsedSec) {
+    var cue = holdCueWord(resp);
+    var why = cue
+      ? "Contains a word that can point to personal data ('" + cue + "'); " +
+        "Muse Glimmer is checking it on this PC"
+      : "Contains a word that can point to personal data; " +
+        "Muse Glimmer is checking it on this PC";
+    var sending = holdPendingMessage(resp);
+    if (typeof resp.sent_text === "string" && resp.sent_text) sending = resp.sent_text;
+    var action = "Checking… (" + (elapsedSec || 0) + "s)";
+    return {
+      decision: "CHECKING",
+      title: "CHECKING",
+      sending: sending,
+      why: [why],
+      action: action,
+      trace: [],
+      rows: [
+        { id: "sending", label: "Sending", text: sending },
+        { id: "why", label: "Why", text: why },
+        { id: "action", label: "What", text: action }
+      ]
+    };
+  }
+
+  function updateHoldTurn(turn, banner, finalDecision, labelText, releaseBody) {
+    if (banner && banner.setAttribute) {
+      banner.setAttribute("data-decision", finalDecision);
+      var headLabel = banner.querySelector ? banner.querySelector(".receipt-label") : null;
+      if (headLabel) headLabel.textContent = labelText;
+      var headWhy = banner.querySelector ? banner.querySelector(".receipt-why") : null;
+      if (headWhy) {
+        var whyBits = [];
+        if (releaseBody && typeof releaseBody.user_message === "string" && releaseBody.user_message) {
+          whyBits.push(releaseBody.user_message);
+        }
+        whyBits.push("resolved at tier 3");
+        headWhy.textContent = whyBits.join(" · ");
+      }
+    }
+    if (turn) {
+      var key = KNOWN_DECISIONS.indexOf(finalDecision) >= 0 ? finalDecision : "UNKNOWN";
+      turn.decision = key;
+      turn.label = labelText;
+      turn.userMessage = (releaseBody && typeof releaseBody.user_message === "string")
+        ? releaseBody.user_message : "";
+      turn.labels = describePlaceholders(releaseBody);
+      if (selectedTurn === turn) paintTurn(turn);
+    }
+  }
+
+  function paintHoldModel(card, model) {
+    card.setAttribute("data-decision", model.decision);
+    card.setAttribute("aria-label", model.title + " risk card");
+    var titleEl = card.querySelector ? card.querySelector(".risk-title") : null;
+    if (titleEl) titleEl.textContent = model.title;
+    var rowsEl = card.querySelector ? card.querySelector(".risk-rows") : null;
+    if (rowsEl) {
+      rowsEl.innerHTML = "";
+      model.rows.forEach(function (row) {
+        var line = document.createElement("div");
+        line.className = "risk-row risk-row-" + row.id;
+        var name = document.createElement("span");
+        name.className = "risk-label";
+        name.textContent = row.label;
+        var value = document.createElement("span");
+        value.className = "risk-value";
+        value.setAttribute("data-testid", "risk-" + row.id);
+        if (row.id === "sending") {
+          if (row.text) value.innerHTML = highlightPlaceholders(row.text);
+          else value.textContent = "(nothing left to send)";
+        } else {
+          value.textContent = row.text;
+        }
+        line.appendChild(name);
+        line.appendChild(value);
+        rowsEl.appendChild(line);
+      });
+    }
+    var colsEl = card.querySelector ? card.querySelector(".ev-cols") : null;
+    if (colsEl) colsEl.hidden = false;
+    var previewEl = card.querySelector ? card.querySelector(".ev-preview") : null;
+    if (previewEl) previewEl.hidden = false;
+  }
+
+  function renderHoldCard(holdId, banner, body, turnEntry) {
     var holdBody = (body && typeof body === "object") ? body : { decision: "HOLD" };
-    var holdModel = riskCardModel(holdBody) || riskCardModel({ decision: "HOLD" });
+    var checkingCue = isCueCheckingHold(holdBody);
+    var holdModel = checkingCue
+      ? checkingCardModel(holdBody, 0)
+      : (riskCardModel(holdBody) || riskCardModel({ decision: "HOLD" }));
     var card = document.createElement("div");
     card.className = "evidence-card risk-card";
     card.setAttribute("data-testid", "evidence-card");
@@ -928,7 +1069,7 @@
     spinner.className = "spinner";
     var label = document.createElement("span");
     label.className = "ev-label";
-    label.textContent = "Local Muse Glimmer (30B, on this PC) is reviewing\u2026 ";
+    label.textContent = checkingCue ? "Muse Glimmer is checking it on this PC… " : "Local Muse Glimmer (30B, on this PC) is reviewing\u2026 ";
     var elapsed = document.createElement("span");
     elapsed.className = "ev-elapsed";
     elapsed.textContent = "0s";
@@ -953,6 +1094,7 @@
     }
     var provenList = makeCol("Proven by code");
     var suspList = makeCol("Model suspicion only");
+    cols.hidden = !!checkingCue;
     card.appendChild(cols);
 
     var previewWrap = document.createElement("div");
@@ -963,6 +1105,7 @@
     preview.className = "ev-preview-text";
     previewWrap.appendChild(previewHead);
     previewWrap.appendChild(preview);
+    previewWrap.hidden = !!checkingCue;
     card.appendChild(previewWrap);
 
     var actions = document.createElement("div");
@@ -973,9 +1116,15 @@
     thread.appendChild(card);
 
     var startedAt = Date.now();
+    var checkingWhat = checkingCue ? card.querySelector(".risk-row-action .risk-value") : null;
+    function paintCheckingSecs() {
+      if (!checkingCue || !checkingWhat) return;
+      checkingWhat.textContent = "Checking… (" + Math.floor((Date.now() - startedAt) / 1000) + "s)";
+    }
     var polls = 0;
     var timer = setInterval(function () {
       elapsed.textContent = Math.floor((Date.now() - startedAt) / 1000) + "s";
+      paintCheckingSecs();
     }, 1000);
 
     // Redacted preview with suspicion spans in purple and proven
@@ -1118,6 +1267,10 @@
     function poll() {
       if (polls++ > 180) {
         stop();
+        if (checkingCue) {
+          checkingCue = false;
+          paintHoldModel(card, riskCardModel(holdBody) || riskCardModel({ decision: "HOLD" }));
+        }
         label.textContent = "Review timed out. Decide below.";
         offerChoice();
         return;
@@ -1132,8 +1285,8 @@
           fillList(suspList, suspicions.map(function (m) { return m.span || ""; }));
           renderPreview(preview, body.redacted_preview || "", body.preview_marks);
           var st = body.status;
-          if (body.title) label.textContent = body.title;
-          if (st === "reviewing") {
+          if (body.title && !checkingCue) label.textContent = body.title;
+          if (st === "reviewing") { paintCheckingSecs();
             setTimeout(poll, 1000);
             return;
           }
@@ -1142,15 +1295,23 @@
             finishBanner("REDACT", body.user_message || "Sent with redactions.");
             if (body.answer != null) showHoldAnswer(body.answer, body.provider);
             label.textContent = body.title || body.user_message || "Sent with redactions.";
+            updateHoldTurn(turnEntry, banner, "REDACT", body.user_message || "Sent with redactions.", body);
           } else if (st === "released") {
             var sent = body.sent_text || "";
+            var releaseFinal = sent.indexOf("[") >= 0 ? "REDACT" : "ALLOW";
+            var releaseLabel = releaseFinal === "ALLOW" ? QUIET_RELEASE_LABEL : (body.user_message || "Sent.");
+            if (card.parentNode) card.parentNode.removeChild(card);
             finishBanner(
               sent.indexOf("[") >= 0 ? "REDACT" : "ALLOW",
               body.user_message || "Sent."
             );
             if (body.answer != null) showHoldAnswer(body.answer, body.provider);
-            label.textContent = body.title || body.user_message || "Sent.";
+            updateHoldTurn(turnEntry, banner, releaseFinal, releaseLabel, body);
           } else if (st === "needs_human") {
+            if (checkingCue) {
+              checkingCue = false;
+              paintHoldModel(card, riskCardModel(holdBody) || riskCardModel({ decision: "HOLD" }));
+            }
             label.textContent = body.title || "Glimmer could not clear this \u2014 your call.";
             suspicions.forEach(function (m) {
               var judgement = m.judgement || {};
@@ -1174,6 +1335,7 @@
             );
             if (body.answer != null) showHoldAnswer(body.answer, body.provider);
             label.textContent = body.user_message || "Sent.";
+            updateHoldTurn(turnEntry, banner, (body.sent_text || "").indexOf("[") >= 0 ? "REDACT" : "ALLOW", body.user_message || "Sent.", body);
           }
           updateEmptyHint();
           refreshStats();
@@ -2143,6 +2305,10 @@
   window.ShadowfencedUI = {
     receiptLabel: receiptLabel,
     riskCardModel: riskCardModel,
+    holdCueWord: holdCueWord,
+    isCueCheckingHold: isCueCheckingHold,
+    checkingCardModel: checkingCardModel,
+    holdPendingMessage: holdPendingMessage,
     receiptIcon: receiptIcon,
     membraneFor: membraneFor,
     isSendEnabled: function (text, hasAttachments, busy) {

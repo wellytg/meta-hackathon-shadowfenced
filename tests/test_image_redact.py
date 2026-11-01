@@ -466,3 +466,134 @@ def test_image_upload_shows_checking_image_status():
         / "app.js"
     ).read_text(encoding="utf-8")
     assert "Checking image locally…" in js
+
+
+def _two_pass_transport(pass_a_content, pass_b_content, pass_b_calls=None, pass_b_status=200):
+    """Glimmer mock answering pass A (regions) and pass B (lines) differently."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/chat"
+        body = json.loads(request.content.decode("utf-8"))
+        content = body["messages"][0]["content"]
+        if "Transcribe every line" in content:
+            if pass_b_calls is not None:
+                pass_b_calls.append(content)
+            if pass_b_status != 200:
+                return httpx.Response(pass_b_status, json={"error": "glimmer down"})
+            return httpx.Response(
+                200, json={"message": {"content": pass_b_content}}
+            )
+        return httpx.Response(
+            200, json={"message": {"content": pass_a_content}}
+        )
+
+    return httpx.MockTransport(handler)
+
+
+def test_second_pass_transcription_catches_missed_email():
+    """T55: pass A answers empty, pass B transcribes PII lines → filled."""
+    image_redaction_consent({"choice": "local"})
+    pass_b_calls: list[str] = []
+    uploaded = handle_upload(
+        "shot.png",
+        make_image(),
+        glimmer_transport=_two_pass_transport(
+            json.dumps({"regions": []}),
+            json.dumps(
+                {
+                    "lines": [
+                        {"text": EMAIL, "box": [10, 10, 100, 40]},
+                        {"text": "+1 415 555 0134", "box": [10, 90, 200, 120]},
+                    ]
+                }
+            ),
+            pass_b_calls,
+        ),
+    )
+    assert pass_b_calls, "pass B must run when pass A returns zero regions"
+    assert uploaded["status"] == "flagged"  # Tier 1 sees the transcribed lines
+    assert uploaded["regions"] == 2
+    assert uploaded["method"] == "box"
+    assert uploaded["summary_text"].startswith("2 regions hidden")
+    from PIL import Image
+
+    record = uploads.UPLOADS.load(uploaded["file_id"])
+    assert record is not None and record.image_png
+    redacted = Image.open(io.BytesIO(record.image_png)).convert("RGB")
+    assert redacted.getpixel((50, 25)) == (0, 0, 0)  # email line filled
+    assert redacted.getpixel((50, 105)) == (0, 0, 0)  # phone line filled
+    assert redacted.getpixel((350, 180)) == (255, 255, 255)
+
+
+def test_empty_passes_with_visible_text_are_honest_clean():
+    """T55: no hits but Glimmer saw text → honest "clean" wording, not bare."""
+    image_redaction_consent({"choice": "local"})
+    uploaded = handle_upload(
+        "shot.png",
+        make_image(),
+        glimmer_transport=_two_pass_transport(
+            json.dumps({"regions": []}),
+            json.dumps({"lines": [{"text": "hello world", "box": [10, 10, 120, 30]}]}),
+        ),
+    )
+    assert uploaded["status"] == "clean"
+    assert uploaded["regions"] == 0
+    assert uploaded["method"] == "none"
+    assert (
+        uploaded["summary_text"] == "clean — checked by Muse Glimmer on this PC"
+    )
+
+
+def test_pass_b_failure_after_empty_pass_a_is_unscannable():
+    """T55: pass A empty + pass B cannot answer → held, never sent."""
+    image_redaction_consent({"choice": "local"})
+    uploaded = handle_upload(
+        "shot.png",
+        make_image(),
+        glimmer_transport=_two_pass_transport(
+            json.dumps({"regions": []}), "", pass_b_status=500
+        ),
+    )
+    assert uploaded["status"] == "unscannable"
+    body = send(SendRequest(messages=[{"role": "user", "content": "look"}], file_ids=[uploaded["file_id"]]))
+    assert body["decision"] == "HOLD"
+    assert body["sent_text"] is None
+
+
+def test_second_pass_skipped_when_setting_off(monkeypatch):
+    """T55: pass A finds regions → pass B skipped with SF_IMAGE_SECOND_PASS=off."""
+    monkeypatch.setenv("SF_IMAGE_SECOND_PASS", "off")
+    image_redaction_consent({"choice": "local"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        assert "Transcribe every line" not in body["messages"][0]["content"]
+        return httpx.Response(
+            200, json={"message": {"content": json.dumps(GLIMMER_REGIONS)}}
+        )
+
+    uploaded = handle_upload(
+        "shot.png", make_image(), glimmer_transport=httpx.MockTransport(handler)
+    )
+    assert uploaded["regions"] == 2
+    assert uploaded["method"] == "box"
+
+
+def test_second_pass_does_not_double_count_pass_a_region():
+    """T55: pass B re-transcribing a pass A line keeps a single region."""
+    image_redaction_consent({"choice": "local"})
+    one_region = {
+        "regions": [
+            {"prompt": "email address", "box": [10, 10, 100, 40], "text": EMAIL}
+        ]
+    }
+    uploaded = handle_upload(
+        "shot.png",
+        make_image(),
+        glimmer_transport=_two_pass_transport(
+            json.dumps(one_region),
+            json.dumps({"lines": [{"text": EMAIL, "box": [10, 10, 100, 40]}]}),
+        ),
+    )
+    assert uploaded["status"] == "flagged"
+    assert uploaded["regions"] == 1

@@ -141,7 +141,7 @@ def _provider_patterns() -> list[tuple[str, str, re.Pattern[str]]]:
 
     Prefixes are joined here at runtime so no real-format literal ever
     appears in this file. The label feeds the BLOCK message
-    ("A <provider> API key — not sent").
+    ("A/An <provider> API key — not sent").
     """
     # AWS access key ID: AKIA (long-term) or ASIA (temporary) + 16 chars.
     cloud = "(?:AK" + "IA|AS" + "IA)" + r"[0-9A-Z]{16}(?![0-9A-Z])"
@@ -231,9 +231,24 @@ def _cached_patterns() -> list[tuple[str, str, re.Pattern[str]]]:
     return _PATTERNS_CACHE
 
 
+def _article_for(provider: str) -> str:
+    """Indefinite article for a provider name, by its first sound.
+
+    Names starting with a vowel sound (OpenAI, Anthropic, AWS) and a
+    leading "x" pronounced "ex" (xAI) take "An"; everything else
+    (Hugging Face, Groq, GitHub, ...) takes "A".
+    """
+    name = provider.strip().lower()
+    if not name:
+        return "A"
+    if name[0] in "aeiou" or name[0] == "x":
+        return "An"
+    return "A"
+
+
 def _provider_message(provider: str) -> str:
     """BLOCK message naming the key owner (never the raw value)."""
-    return "A " + provider + " API key — not sent"
+    return f"{_article_for(provider)} {provider} API key — not sent"
 
 
 _AWS_ID_RE = re.compile(
