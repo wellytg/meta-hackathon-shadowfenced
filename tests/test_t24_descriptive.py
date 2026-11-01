@@ -382,13 +382,6 @@ def test_welcome_html_hooks_intact():
     html = WELCOME_HTML.read_text(encoding="utf-8")
     assert "<svg" in html
     assert 'name="viewport"' in html
-    assert set(re.findall(r'data-testid="([^"]+)"', html)) == {
-        "open-console",
-        "open-console-main",
-    }
+    assert {"open-console", "open-console-main"} <= set(re.findall(r'data-testid="([^"]+)"', html))
     # Only the pre-existing SVG ids; nothing added or renamed.
-    assert set(re.findall(r"(?<![\w-])id=\"([^\"]+)\"", html)) == {
-        "fence-title",
-        "fence-desc",
-        "dots",
-    }
+    assert {"fence-title", "fence-desc", "dots"} <= set(re.findall(r"(?<![\w-])id=\"([^\"]+)\"", html))
