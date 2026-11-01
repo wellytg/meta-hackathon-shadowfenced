@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shadowfenced — Nothing sensitive crosses the boundary</title>
+<meta name="description" content="Shadowfenced checks what you type on your own machine and only lets clean or redacted text reach the AI.">
+<link rel="icon" href="../assets/block-chip.svg" type="image/svg+xml">
+<link rel="stylesheet" href="welcome.css">
+</head>
+<body>
+<div class="sheet">
+
+  <header class="masthead">
+    <div class="brand">
+      <img class="brand-badge" src="../assets/badge.svg" alt="" width="44" height="44">
+      <div>
+        <p class="wordmark">Shadowfenced</p>
+        <p class="issue">Field manual N°01 · runs on this machine</p>
+      </div>
+    </div>
+    <nav class="masthead-nav">
+      <a class="console-link" href="/" data-testid="open-console">Open the console →</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="intro">
+      <p class="kicker">What it is</p>
+      <h1>Nothing sensitive<br>crosses the boundary.</h1>
+      <p class="standfirst">Shadowfenced sits between you and the AI. It reads what you type
+        <strong>on your own computer</strong>, spots the sensitive parts, and only lets
+        clean or redacted text leave. The real values never leave your side.</p>
+    </section>
+
+    <figure class="figure">
+      <svg viewBox="0 0 660 400" role="img" aria-labelledby="fence-title fence-desc">
+        <title id="fence-title">How Shadowfenced works</title>
+        <desc id="fence-desc">A laptop on the left holds the real value. A fence of isometric blocks in the middle lets only a placeholder tag through to the cloud on the right.</desc>
+        <defs>
+          <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+            <circle cx="1.5" cy="1.5" r="1.5" fill="#16130E" opacity="0.14"/>
+          </pattern>
+        </defs>
+        <rect x="8" y="8" width="644" height="384" fill="url(#dots)"/>
+
+        <!-- ground lines -->
+        <line x1="30" y1="330" x2="630" y2="330" stroke="#16130E" stroke-width="2"/>
+        <line x1="30" y1="338" x2="630" y2="338" stroke="#16130E" stroke-width="1" opacity="0.35"/>
+
+        <!-- ===== LAPTOP (left) ===== -->
+        <g stroke="#16130E" stroke-width="2.5" stroke-linejoin="miter">
+          <!-- screen -->
+          <polygon points="60,300 60,180 190,140 190,260" fill="#F7F2E7"/>
+          <!-- screen inner -->
+          <polygon points="72,288 72,186 178,154 178,252" fill="#FFFFFF" stroke-width="1.5"/>
+          <!-- text lines on screen -->
+          <rect x="84" y="196" width="70" height="7" fill="#16130E" stroke="none"/>
+          <rect x="84" y="210" width="82" height="7" fill="#16130E" stroke="none"/>
+          <rect x="84" y="224" width="52" height="7" fill="#16130E" stroke="none"/>
+          <rect x="84" y="231" width="52" height="3" fill="#FF5A1F" stroke="none"/>
+          <!-- base slab -->
+          <polygon points="48,302 190,258 214,268 72,312" fill="#D8C9A8"/>
+          <polygon points="72,312 214,268 214,278 72,322" fill="#2F6B8A"/>
+        </g>
+        <!-- real value chip: stays on the laptop side -->
+        <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+          <rect x="56" y="238" width="118" height="24" fill="#16130E"/>
+          <text x="65" y="254" font-size="12" fill="#F7F2E7">ada@… &#183; stays</text>
+          <rect x="56" y="238" width="118" height="24" fill="none" stroke="#16130E" stroke-width="2"/>
+        </g>
+
+        <!-- ===== FENCE (middle): five isometric posts, one gap ===== -->
+        <g stroke="#16130E" stroke-width="2.5" stroke-linejoin="miter">
+          <!-- rails -->
+          <polygon points="252,224 500,224 500,236 252,236" fill="#D8C9A8"/>
+          <polygon points="252,262 500,262 500,274 252,274" fill="#D8C9A8"/>
+          <!-- post 1 : paper -->
+          <polygon points="262,160 286,174 286,300 262,286" fill="#EFE6D2"/>
+          <polygon points="286,174 310,160 310,286 286,300" fill="#D8C9A8"/>
+          <polygon points="262,160 286,146 310,160 286,174" fill="#FFFDF6"/>
+          <!-- post 2 : steel -->
+          <polygon points="322,160 346,174 346,300 322,286" fill="#2F6B8A"/>
+          <polygon points="346,174 370,160 370,286 346,300" fill="#1D4257"/>
+          <polygon points="322,160 346,146 370,160 346,174" fill="#9FC0D1"/>
+          <!-- post 3 : paper -->
+          <polygon points="382,160 406,174 406,300 382,286" fill="#EFE6D2"/>
+          <polygon points="406,174 430,160 430,286 406,300" fill="#D8C9A8"/>
+          <polygon points="382,160 406,146 430,160 406,174" fill="#FFFDF6"/>
+          <!-- post 4 : orange (the one that stops things) -->
+          <polygon points="442,160 466,174 466,300 442,286" fill="#FF5A1F"/>
+          <polygon points="466,174 490,160 490,286 466,300" fill="#B23A0E"/>
+          <polygon points="442,160 466,146 490,160 466,174" fill="#FFB08A"/>
+        </g>
+
+        <!-- the tag travelling through the gap, laptop -> cloud -->
+        <path class="travel" d="M 182 200 C 280 160, 340 150, 470 190 S 540 210, 560 218"
+          fill="none" stroke="#16130E" stroke-width="2" stroke-dasharray="7 6"/>
+        <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+          <rect x="352" y="150" width="118" height="26" fill="#FFFFFF" stroke="#16130E" stroke-width="2.5"/>
+          <text x="361" y="167" font-size="12.5" fill="#16130E">[PII_EMAIL_1]</text>
+        </g>
+
+        <!-- ===== CLOUD (right) ===== -->
+        <g stroke="#16130E" stroke-width="2.5" stroke-linejoin="round">
+          <path d="M 512 252
+                   a 22 22 0 0 1 4 -43.6
+                   a 28 28 0 0 1 54 -8
+                   a 20 20 0 0 1 30 17.6
+                   a 18 18 0 0 1 -8 34
+                   Z" fill="#F7F2E7"/>
+          <!-- iso slab under the cloud -->
+          <polygon points="504,254 608,254 596,268 516,268" fill="#9FC0D1"/>
+          <polygon points="516,268 596,268 596,278 516,278" fill="#2F6B8A"/>
+        </g>
+        <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+          <text x="512" y="300" font-size="11" fill="#16130E">tag arrives,</text>
+          <text x="512" y="314" font-size="11" fill="#16130E">value does not</text>
+        </g>
+
+        <!-- captions -->
+        <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12">
+          <text x="60" y="356" fill="#16130E" font-weight="bold">YOUR MACHINE</text>
+          <text x="60" y="372" fill="#16130E" font-size="10.5">real values stay here</text>
+          <text x="300" y="356" fill="#16130E" font-weight="bold">THE FENCE</text>
+          <text x="300" y="372" fill="#16130E" font-size="10.5">only tags cross</text>
+          <text x="512" y="356" fill="#16130E" font-weight="bold">CLOUD AI</text>
+        </g>
+      </svg>
+      <figcaption class="figure-caption">
+        <span class="swatch swatch-ink" aria-hidden="true"></span> Real value stays on your machine
+        <span class="swatch swatch-tag" aria-hidden="true"></span> Only the placeholder tag travels
+      </figcaption>
+    </figure>
+
+    <section class="points" aria-label="Three things to know">
+      <p class="kicker">Three things to know</p>
+      <ol>
+        <li>
+          <span class="num" aria-hidden="true">01</span>
+          <div>
+            <h2>Underlines as you type</h2>
+            <p>Sensitive text is underlined in the composer before you hit send, so there are no surprises.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num" aria-hidden="true">02</span>
+          <div>
+            <h2>Only clean or redacted text leaves</h2>
+            <p>Anything risky is blocked or swapped for a placeholder like <code>[PII_EMAIL_1]</code>. The cloud only ever sees the tag.</p>
+          </div>
+        </li>
+        <li>
+          <span class="num" aria-hidden="true">03</span>
+          <div>
+            <h2>Real values come back on your machine</h2>
+            <p>The AI answers with the same tags, and your computer swaps the real values back in. Nothing to copy, nothing leaks.</p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <section class="try">
+      <div class="try-text">
+        <h2>Try it now</h2>
+        <p>Type a made-up email address into the console and watch it get underlined, then redacted.</p>
+      </div>
+      <a class="console-button" href="/" data-testid="open-console-main">Open the console</a>
+    </section>
+  </main>
+
+  <footer class="colophon">
+    <p>Shadowfenced · local-first demo · no account · no tracking · works offline once loaded</p>
+  </footer>
+
+</div>
+</body>
+</html>

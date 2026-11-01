@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88" role="img" aria-label="Shadowfenced fence mark">
+  <rect x="2" y="2" width="84" height="84" fill="#F7F2E7" stroke="#16130E" stroke-width="4"/>
+  <!-- three flat-shaded isometric blocks: paper, steel, signal -->
+  <g stroke="#16130E" stroke-width="3" stroke-linejoin="miter">
+    <polygon points="14,52 24,58 24,74 14,68" fill="#EFE6D2"/>
+    <polygon points="24,58 34,52 34,68 24,74" fill="#D8C9A8"/>
+    <polygon points="14,52 24,46 34,52 24,58" fill="#FFFDF6"/>
+    <polygon points="34,44 44,50 44,74 34,68" fill="#2F6B8A"/>
+    <polygon points="44,50 54,44 54,68 44,74" fill="#1D4257"/>
+    <polygon points="34,44 44,38 54,44 44,50" fill="#9FC0D1"/>
+    <polygon points="54,52 64,58 64,74 54,68" fill="#FF5A1F"/>
+    <polygon points="64,58 74,52 74,68 64,74" fill="#B23A0E"/>
+    <polygon points="54,52 64,46 74,52 64,58" fill="#FFB08A"/>
+  </g>
+</svg>
