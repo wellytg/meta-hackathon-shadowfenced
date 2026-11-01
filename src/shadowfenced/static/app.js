@@ -18,6 +18,7 @@
   var redactedCache = {}; // file_id -> object URL for the full redacted PNG
   var pendingOriginals = {}; // name:size -> original data URL until the upload lands
   var sending = false;
+  var sendSeq = 0; // latest send; the 2 s status timer only fires for it
   var composerError = document.getElementById("composer-error");
 
   // One-line composer error next to the control that failed; it
@@ -775,6 +776,12 @@
     clearComposer();
     setMembrane("inspecting");
     checking.hidden = false;
+    var mySend = ++sendSeq;
+    setTimeout(function () {
+      if (mySend === sendSeq && sending && checking && !checking.hidden) {
+        checking.textContent = "Muse Glimmer is checking on this PC…";
+      }
+    }, 2000);
     sending = true;
     paintSend();
 

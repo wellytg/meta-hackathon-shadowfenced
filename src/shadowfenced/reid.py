@@ -81,7 +81,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .glimmer import glimmer_keep_alive, glimmer_options
+from .glimmer import glimmer_keep_alive, glimmer_options, glimmer_timeout_s
 
 # --- Weights ----------------------------------------------------------------
 # One point per unit of joining power. Contact anchors (phone, email),
@@ -1236,21 +1236,27 @@ PUBLIC_FIGURE_SYSTEM = (
 )
 
 
+#: Max user chars sent to Glimmer: framing plus a name fits in 500.
+PUBLIC_FIGURE_TEXT_CHARS = 500
+
+
 def local_glimmer_public_figure(
     text: str,
-    timeout_s: float = 2.0,
+    timeout_s: float | None = None,
     transport: Any = None,
 ) -> bool | None:
     """Ask local Muse Glimmer whether the text is about a public figure.
 
     Local Ollama only (``/api/chat`` on the configured Ollama URL with the
     configured judge model). Never touches a cloud model or the Meta
-    upstream client. The timeout is deliberately short; Tier 2 ``off``
-    and any transport error, timeout or unparsable answer return None
-    so the caller falls back to the code-only rules.
+    upstream client. ``timeout_s`` defaults to the shared Glimmer timeout.
+    Tier 2 ``off`` and any transport error, timeout or unparsable answer
+    return None so the caller falls back to the code-only rules.
     """
     try:
         from .judge import tier2_mode
+        if not timeout_s:
+            timeout_s = glimmer_timeout_s()
         if tier2_mode() == "off":
             return None
     except Exception:
@@ -1269,7 +1275,7 @@ def local_glimmer_public_figure(
                     "model": settings.judge_model,
                     "messages": [
                         {"role": "system", "content": PUBLIC_FIGURE_SYSTEM},
-                        {"role": "user", "content": text[:2000]},
+                        {"role": "user", "content": text[:PUBLIC_FIGURE_TEXT_CHARS]},
                     ],
                     "stream": False,
                     "think": False,
@@ -1355,9 +1361,13 @@ def _parse_judge_answer(raw: Any) -> dict[str, Any] | None:
         return None
 
 
+#: Max redacted chars sent to Glimmer: residue shows up early or not at all.
+RESIDUAL_TEXT_CHARS = 1000
+
+
 def local_glimmer_judge(
     redacted_text: str,
-    timeout_s: float = 10.0,
+    timeout_s: float | None = None,
     transport: Any = None,
 ) -> dict[str, Any] | None:
     """Ask local Muse Glimmer about redacted text; None on any failure.
@@ -1371,18 +1381,18 @@ def local_glimmer_judge(
         import httpx
 
         from .config import get_settings
-        from .glimmer import glimmer_keep_alive, glimmer_options
 
         settings = get_settings()
         url = settings.ollama_url.rstrip("/") + "/api/chat"
+        if not timeout_s:
+            timeout_s = glimmer_timeout_s(settings)
         prompt = (
-            "You are an OSINT analyst. Decide whether the redacted text "
-            "below still identifies or locates a specific private person. "
-            "Reply with JSON only: "
+            "Decide if the redacted text still identifies or locates a "
+            "specific private person. Reply with JSON only: "
             '{"can_identify": bool, "can_locate": bool, '
-            '"clues": ["<exact substring of the text>", ...]}. '
+            '"clues": ["<exact substring of the text>", ...], up to 5}. '
             "Each clue must be copied word-for-word from the text.\n\n"
-            + redacted_text[:2000]
+            + redacted_text[-RESIDUAL_TEXT_CHARS:]
         )
         body = {
             "model": settings.judge_model,
@@ -1390,7 +1400,7 @@ def local_glimmer_judge(
             "stream": False,
             "think": False,
             "keep_alive": glimmer_keep_alive(),
-            "options": glimmer_options(settings),
+            "options": glimmer_options(settings, temperature=0, seed=7, num_predict=120),
         }
         with httpx.Client(transport=transport, timeout=timeout_s) as client:
             response = client.post(url, json=body)
@@ -1507,6 +1517,20 @@ def trace_combine(
         "step": step, "tool": "reid",
         "detail": f"score={score} ({'+'.join(labels) or 'none'})",
         "result": outcome, "ms": 0.0,
+    })
+
+
+def trace_residual_skipped(
+    trace: list[dict[str, Any]] | None,
+    reason: str,
+    step: str = "reid.residual",
+) -> None:
+    """Append a ``reid.residual`` skip step (an earlier verdict decided)."""
+    if trace is None:
+        return
+    trace.append({
+        "step": step, "tool": "reid", "detail": reason,
+        "result": "skipped", "ms": 0.0,
     })
 
 

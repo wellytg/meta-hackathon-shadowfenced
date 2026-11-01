@@ -31,7 +31,7 @@ Global rules that apply to every element below:
 | Idle, empty | Placeholder "Type a message — sensitive text gets underlined…", Send disabled | Type, paste, attach, dictate |
 | Typing | Text in ink; sensitive spans underlined (red secret, amber pii/business, dotted steel-blue suspicion) within ~250 ms; issue cards appear | Keep typing; Redact/Keep/Why per span |
 | Focus | 3px steel outline | Same as typing |
-| Busy (send in flight) | "Checking locally…" next to Send; box stays editable but Send is disabled | Wait; Jump to latest still works |
+| Busy (send in flight) | "Checking locally…" next to Send (after 2 s: "Muse Glimmer is checking on this PC…"); box stays editable but Send is disabled | Wait; Jump to latest still works |
 | Success | Box cleared (the server took the text) | Type the next message |
 | Error (send failed) | Text KEPT; one-line `#composer-error`: "Not sent — couldn't reach the checker. Your text was kept; try again." | Edit and press Send again |
 | Disabled | Never (always editable) | — |
@@ -46,7 +46,7 @@ busy is dropped (one request in flight).
 |---|---|---|
 | Disabled (empty, no files) | Greyed "Send" (55% opacity) | Nothing (click is a no-op guard) |
 | Enabled (text or files) | Ink button with orange offset shadow | Click or Enter to send |
-| Busy | Disabled + "Checking locally…" label beside it | Nothing until the check returns |
+| Busy | Disabled + "Checking locally…" label beside it (after 2 s: "Muse Glimmer is checking on this PC…") | Nothing until the check returns |
 | Hover/focus | Steel background / steel outline | Same as enabled |
 
 ## 3. Attach (`button#paperclip`, `data-testid="attach"`, `input#file-input`, chips)

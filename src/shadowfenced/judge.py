@@ -25,7 +25,7 @@ import httpx
 from pydantic import BaseModel, field_validator
 
 from .config import get_settings
-from .glimmer import glimmer_keep_alive, glimmer_options
+from .glimmer import glimmer_keep_alive, glimmer_options, glimmer_timeout_s
 
 def _keep_alive() -> Any:
     """Shared Ollama keep_alive (see glimmer.glimmer_keep_alive)."""
@@ -154,7 +154,7 @@ def judge(
             return _replay_lookup(text_window)
         settings = get_settings()
         timeout = (
-            settings.live_timeout_s if live else settings.judge_timeout_s
+            settings.live_timeout_s if live else glimmer_timeout_s(settings)
         )
         url = settings.ollama_url.rstrip("/") + "/api/chat"
         body = _request_body(text_window, model, live=live)
@@ -189,7 +189,7 @@ def _ping(
         }
         if live:
             body["options"]["num_gpu"] = settings.live_num_gpu
-        with httpx.Client(transport=transport, timeout=60.0) as client:
+        with httpx.Client(transport=transport, timeout=glimmer_timeout_s(settings)) as client:
             client.post(url, json=body)
     except Exception:
         pass

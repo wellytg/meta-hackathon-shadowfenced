@@ -35,7 +35,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, field_validator
 
 from . import reid as reid_module
-from .glimmer import glimmer_keep_alive, glimmer_options
+from .glimmer import glimmer_keep_alive, glimmer_options, glimmer_timeout_s
 
 # --- Trigger: people-search wording ------------------------------------------
 _SEARCH_PATTERNS = (
@@ -80,7 +80,7 @@ def should_check(text: str, conversation: list[str] | None = None) -> bool:
 
 # --- Typed Glimmer answer ------------------------------------------------------
 class PersonSearchJudgement(BaseModel):
-    """One Glimmer verdict on person-search intent (no free-text reason)."""
+    """One Glimmer verdict on person-search intent (at most 5 short items)."""
 
     person_search: bool
     subject_public: bool
@@ -109,27 +109,27 @@ class PersonSearchJudgement(BaseModel):
     def _inferred_is_list(cls, value: Any) -> list[str]:
         if not isinstance(value, list):
             raise ValueError("inferred must be a list")
-        return [item for item in value if isinstance(item, str)]
+        return [item for item in value if isinstance(item, str)][:5]
 
 
 PERSON_SEARCH_SYSTEM = (
-    "Decide whether a user message is a search for a private person. "
-    "person_search is true when the message tries to find, identify, or "
-    "collect details about a named private individual (including asking "
-    "where they live, their background, or their contact details). "
-    "Ordinary research about a historical figure or a public figure in "
-    "their public role is not a person search (person_search false, "
-    "subject_public true when the subject is public/historical). "
-    "subject is the exact full name copied word-for-word from the text, "
-    "or empty when there is none. inferred lists short facts the message "
-    "reveals or seeks, each copied word-for-word from the text. "
-    "confidence is 0-1. JSON only."
+    "Decide if a message seeks a private person (identity, "
+    "whereabouts, background, contacts). Historical or public-"
+    "figure research is not a person search. subject is the "
+    "exact full name from the text, or empty when there is "
+    "none. inferred lists up to 5 short facts copied "
+    "word-for-word from the text. confidence is 0-1. "
+    "JSON only."
 )
+
+
+#: Max user chars sent to Glimmer: the check needs the message, not history.
+PERSON_SEARCH_TEXT_CHARS = 1000
 
 
 def local_glimmer_person_search(
     text: str,
-    timeout_s: float = 10.0,
+    timeout_s: float | None = None,
     transport: Any = None,
 ) -> dict[str, Any] | None:
     """Ask local Muse Glimmer about person-search intent; None on failure.
@@ -138,6 +138,9 @@ def local_glimmer_person_search(
     configured judge model). Never touches a cloud model or the Meta
     upstream client. Any transport error, timeout or unparsable answer
     returns None so the caller falls back to the code-only result.
+
+    ``timeout_s`` defaults to the shared Glimmer text timeout; at most
+    the last ``PERSON_SEARCH_TEXT_CHARS`` chars are sent.
     """
     try:
         import httpx
@@ -160,17 +163,17 @@ def local_glimmer_person_search(
             "model": settings.judge_model,
             "messages": [
                 {"role": "system", "content": PERSON_SEARCH_SYSTEM},
-                {"role": "user", "content": text[:2000]},
+                {"role": "user", "content": text[-PERSON_SEARCH_TEXT_CHARS:]},
             ],
             "format": schema,
             "stream": False,
             "think": False,
             "keep_alive": glimmer_keep_alive(),
             "options": glimmer_options(
-                settings, temperature=0, seed=7, num_predict=150
+                settings, temperature=0, seed=7, num_predict=120
             ),
         }
-        timeout = float(timeout_s) if timeout_s else 10.0
+        timeout = float(timeout_s) if timeout_s else glimmer_timeout_s(settings)
         with httpx.Client(transport=transport, timeout=timeout) as client:
             response = client.post(url, json=body)
         try:
