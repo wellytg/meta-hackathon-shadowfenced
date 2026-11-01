@@ -81,6 +81,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .glimmer import glimmer_keep_alive, glimmer_options
+
 # --- Weights ----------------------------------------------------------------
 # One point per unit of joining power. Contact anchors (phone, email),
 # full dates of birth, street addresses and plates identify on their own;
@@ -1271,8 +1273,10 @@ def local_glimmer_public_figure(
                     ],
                     "stream": False,
                     "think": False,
-                    "options": {"temperature": 0, "seed": 7,
-                                "num_ctx": 2048, "num_predict": 20},
+                    "keep_alive": glimmer_keep_alive(),
+                    "options": glimmer_options(
+                        settings, temperature=0, seed=7, num_predict=20
+                    ),
                 },
             )
         payload = response.json()
