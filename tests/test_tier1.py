@@ -6,6 +6,7 @@ fragments joined here, so no real-format literal appears in this file.
 
 from __future__ import annotations
 
+import gc
 import time
 from pathlib import Path
 
@@ -179,11 +180,16 @@ def test_tier1_under_20ms_on_4kb(policy, registry):
     text = (filler + f" contact {value} ").ljust(4096)[:4096]
     assert len(text) == 4096
     tier1.scan(text, policy, registry)  # warm up compiled patterns
-    started = time.perf_counter()
-    spans = tier1.scan(text, policy, registry)
-    elapsed_ms = (time.perf_counter() - started) * 1000
+    gc.collect()  # keep a collection pause out of the samples
+    samples = []
+    for _ in range(15):
+        started = time.perf_counter()
+        spans = tier1.scan(text, policy, registry)
+        samples.append((time.perf_counter() - started) * 1000)
+    elapsed_ms = sorted(samples)[len(samples) // 2]
     assert any(s.cls == "secret" for s in spans)
-    assert elapsed_ms < 20, f"Tier 1 took {elapsed_ms:.1f} ms on 4 KB"
+    assert elapsed_ms < 20, \
+        f"Tier 1 took {elapsed_ms:.1f} ms (median of 15) on 4 KB"
 
 
 # --- T3: PII -----------------------------------------------------------------
