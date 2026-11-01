@@ -488,6 +488,45 @@
       .catch(function () { /* badge keeps its last state */ });
   }
 
+  /* T40 system status: per-component OK / Degraded / Down / Off labels
+     in the details drawer, from GET /api/health/components. Text labels
+     carry the meaning (never colour alone); details stay advisory. */
+  function refreshSystemStatus() {
+    var box = document.getElementById("system-status");
+    if (!box) return;
+    var labels = { ok: "OK", degraded: "Degraded", down: "Down", off: "Off" };
+    fetch("/api/health/components")
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        var items = (body && body.components) || [];
+        box.innerHTML = "";
+        if (!items.length) {
+          box.textContent = "no component data";
+          return;
+        }
+        items.forEach(function (entry) {
+          var status = (entry && entry.status) || "down";
+          if (!labels[status]) status = "down";
+          var row = document.createElement("div");
+          row.className = "sys-row";
+          var name = document.createElement("span");
+          name.className = "sys-name";
+          name.textContent = (entry && entry.name) || "?";
+          var badge = document.createElement("span");
+          badge.className = "sys-badge sys-" + status;
+          badge.textContent = labels[status];
+          row.appendChild(name);
+          row.appendChild(badge);
+          var detail = document.createElement("span");
+          detail.className = "sys-detail";
+          detail.textContent = (entry && entry.detail) || "";
+          row.appendChild(detail);
+          box.appendChild(row);
+        });
+      })
+      .catch(function () { /* badge keeps its last state */ });
+  }
+
   function clearComposer() {
     composer.value = "";
     spans = [];
@@ -1187,6 +1226,16 @@
   loadProviders();
   loadExtToken();
   refreshStats();
+  refreshSystemStatus();
+  /* T40: re-check components whenever the drawer is opened. */
+  (function () {
+    var drawer = document.getElementById("details-drawer");
+    if (drawer) {
+      drawer.addEventListener("toggle", function () {
+        if (drawer.open) refreshSystemStatus();
+      });
+    }
+  })();
 
   /* T31b details drawer: per-turn decision, reasons, redaction summary,
      descriptive trace, model and timing; plus session counts (kept above).

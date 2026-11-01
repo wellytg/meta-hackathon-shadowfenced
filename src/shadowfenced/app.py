@@ -825,6 +825,21 @@ def health() -> dict[str, Any]:
     return {"status": "ok", "live_hints": get_settings().live_hints}
 
 
+@app.get("/api/health/components")
+def health_components() -> dict[str, Any]:
+    """Per-component status from cheap local checks only.
+
+    Never calls a paid API and never returns secrets: the Meta and
+    Voice checks report key presence only, and the Ollama check only
+    asks loopback ``/api/version`` and ``/api/tags``. Tests inject an
+    httpx transport via ``app.state.components_transport``.
+    """
+    from . import health as health_module
+
+    transport = getattr(app.state, "components_transport", None)
+    return {"components": health_module.collect_components(transport=transport)}
+
+
 @app.get("/api/hosted")
 def hosted_status() -> dict[str, Any]:
     """Hosted demo flag plus the public-demo banner (shown when hosted)."""
