@@ -773,6 +773,7 @@ body {
 }
 .receipt[data-decision="ALLOW"] { border-left-color: var(--steel); }
 .receipt[data-decision="REDACT"] { border-left-color: var(--steel); }
+.receipt[data-decision="WARN"] { border-left-color: var(--hold); }
 .receipt[data-decision="HOLD"] { border-left-color: var(--hold); }
 .receipt[data-decision="BLOCK"] { border-left-color: var(--signal); }
 .receipt[data-decision="UNKNOWN"] { border-left-color: var(--muted); }
@@ -994,6 +995,7 @@ summary:focus-visible {
 }
 .receipt[data-decision="ALLOW"] .receipt-icon { color: var(--steel); }
 .receipt[data-decision="REDACT"] .receipt-icon { color: var(--steel); }
+.receipt[data-decision="WARN"] .receipt-icon { color: var(--hold-ink); }
 .receipt[data-decision="HOLD"] .receipt-icon { color: var(--hold-ink); }
 .receipt[data-decision="BLOCK"] .receipt-icon { color: var(--signal-deep); }
 .receipt[data-decision="UNKNOWN"] .receipt-icon { color: var(--muted); }
@@ -1015,6 +1017,7 @@ summary:focus-visible {
 }
 .receipt[data-decision="ALLOW"] { border-left-color: var(--steel); }
 .receipt[data-decision="REDACT"] { border-left-color: var(--steel); }
+.receipt[data-decision="WARN"] { border-left-color: var(--hold); }
 .receipt[data-decision="HOLD"] { border-left-color: var(--hold); }
 .receipt[data-decision="BLOCK"] { border-left-color: var(--signal); }
 .receipt[data-decision="UNKNOWN"] { border-left-color: var(--muted); }
@@ -1369,3 +1372,124 @@ body {
   text-overflow: ellipsis;
 }
 .composer-error[hidden] { display: none; }
+/*T45 risk card: one component for every risky decision. Square Classic
+  chrome (hard 2px outlines, radius 0): safety orange when blocked, amber
+  when waiting on review, steel blue otherwise. Compact by default: one
+  line per row until "Show details" expands the full trace. Single column
+  down to 390px.*/
+.risk-card {
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: var(--paper-2);
+  box-shadow: 4px 4px 0 var(--line);
+  padding: 10px 12px;
+  font-size: 13px;
+  max-width: 85%;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.risk-card[data-decision="BLOCK"] { border-left: 6px solid var(--signal); }
+.risk-card[data-decision="HOLD"] { border-left: 6px solid var(--hold); }
+.risk-card[data-decision="WARN"] { border-left: 6px solid var(--hold); }
+.risk-card[data-decision="REDACT"] { border-left: 6px solid var(--steel); }
+.risk-card[data-decision="ALLOW"] { border-left: 6px solid var(--steel); }
+.risk-card[data-decision="UNKNOWN"] { border-left: 6px solid var(--muted); }
+.risk-title {
+  font-weight: 800;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.risk-card[data-decision="BLOCK"] .risk-title { color: var(--signal-deep); }
+.risk-card[data-decision="HOLD"] .risk-title,
+.risk-card[data-decision="WARN"] .risk-title { color: var(--hold-ink); }
+.risk-card[data-decision="REDACT"] .risk-title,
+.risk-card[data-decision="ALLOW"] .risk-title { color: var(--steel-deep); }
+.risk-rows { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.risk-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+.risk-label {
+  font-weight: 800;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.risk-value {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow-wrap: break-word;
+}
+.risk-card[data-expanded="true"] .risk-value {
+  white-space: normal;
+  overflow: visible;
+}
+.risk-value .ph {
+  background: var(--hold);
+  padding: 0 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.risk-choices { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.risk-choices button {
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: var(--paper);
+  box-shadow: 2px 2px 0 var(--line);
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 44px;
+}
+.risk-choices button:hover { background: var(--sand); }
+.risk-choices button:active { transform: translate(1px, 1px); box-shadow: none; }
+.risk-choices button:disabled { opacity: 0.45; cursor: default; }
+.risk-toggle {
+  align-self: flex-start;
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 10px;
+  min-height: 36px;
+  cursor: pointer;
+}
+.risk-toggle:hover { background: var(--sand); }
+.risk-trace {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: break-word;
+}
+.risk-trace[hidden] { display: none; }
+.risk-trace ol { margin: 0; padding-left: 18px; }
+/*T45 quiet receipt: one small steel-blue line, no card. "Why" still opens.*/
+.receipt[data-decision="ALLOW"] .receipt-label {
+  color: var(--steel-deep);
+  font-size: 12px;
+  font-weight: 600;
+}
+@media (max-width: 720px) {
+  .risk-card { max-width: 100%; }
+}
+@media (max-width: 480px) {
+  .risk-row { grid-template-columns: 88px minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .risk-card, .risk-toggle, .risk-choices button { transition: none; animation: none; }
+  .risk-choices button:active { transform: none; }
+}

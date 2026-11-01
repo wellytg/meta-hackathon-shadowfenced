@@ -733,11 +733,29 @@
     renderChips();
   }
 
+  // Failure keeps the sent text: restore it when the box is empty,
+  // otherwise keep the new typing and offer a one-click Restore.
+  function showComposerErrorWithRestore(sentText) {
+    showComposerError("Not sent — couldn't reach the checker. ");
+    var restore = document.createElement("button");
+    restore.type = "button";
+    restore.className = "composer-restore";
+    restore.setAttribute("data-testid", "composer-restore");
+    restore.textContent = "Restore";
+    restore.addEventListener("click", function () {
+      composer.value = sentText + (composer.value ? "\n" + composer.value : "");
+      composer.dispatchEvent(new Event("input", { bubbles: true }));
+      composer.focus();
+      clearComposerError();
+    });
+    composerError.appendChild(restore);
+  }
   function sendNow() {
     if (sending) return; // one request in flight at a time
     var text = composer.value;
     if (!text && !attachedFiles.length) return;
     clearComposerError();
+    var sentText = text;
     // Only spans the user explicitly clicked Redact/Keep on are sent;
     // anything untouched redacts by default without a recorded choice.
     var choiceList = spans
@@ -752,6 +770,9 @@
     userBubble.textContent = text;
     thread.appendChild(userBubble);
     noteUserMessage(text);
+    // The text is already in its bubble: clear the box now so anything
+    // typed while the reply loads is kept.
+    clearComposer();
     setMembrane("inspecting");
     checking.hidden = false;
     sending = true;
@@ -815,6 +836,12 @@
 
         var toggle = document.createElement("button");
         toggle.type = "button";
+        var riskModel = riskCardModel(body);
+        if (riskModel && decision !== "HOLD") {
+          var riskCard = renderRiskCard(riskModel, body, "risk-card");
+          if (decision === "WARN") appendWarnChoices(riskCard, body, banner);
+          thread.appendChild(riskCard);
+        }
         toggle.className = "ai-toggle";
         toggle.setAttribute("data-testid", "ai-saw-toggle");
         toggle.textContent = "What the AI saw";
@@ -845,12 +872,12 @@
           thread.appendChild(src);
         }
         if (decision === "HOLD" && body.decision_id) {
-          renderHoldCard(body.decision_id, banner);
+          renderHoldCard(body.decision_id, banner, body);
         }
         updateEmptyHint();
         refreshStats();
-        // The server took the text, so a fresh box is safe here.
-        clearComposer();
+        // The composer was already cleared on send, so typing that landed
+        // while the reply was in flight is kept as-is.
         clearAttachments();
       })
       .catch(function () {
@@ -863,8 +890,17 @@
         noteTurn("UNKNOWN", null);
         setMembrane("unknown");
         updateEmptyHint();
-        showComposerError("Not sent \u2014 couldn't reach the checker. " +
-          "Your text was kept; try again.");
+        if (!composer.value && sentText) {
+          composer.value = sentText;
+          composer.dispatchEvent(new Event("input", { bubbles: true }));
+          showComposerError("Not sent \u2014 couldn't reach the checker. " +
+            "Your text was kept; try again.");
+        } else if (sentText) {
+          showComposerErrorWithRestore(sentText);
+        } else {
+          showComposerError("Not sent \u2014 couldn't reach the checker. " +
+            "Try again.");
+        }
       })
       .then(function () {
         checking.hidden = true;
@@ -875,10 +911,16 @@
 
   // Evidence card for one HOLD: two columns (proven vs suspicion),
   // a reviewing spinner with elapsed seconds, then the final outcome.
-  function renderHoldCard(holdId, banner) {
+  function renderHoldCard(holdId, banner, body) {
+    var holdBody = (body && typeof body === "object") ? body : { decision: "HOLD" };
+    var holdModel = riskCardModel(holdBody) || riskCardModel({ decision: "HOLD" });
     var card = document.createElement("div");
-    card.className = "evidence-card";
+    card.className = "evidence-card risk-card";
     card.setAttribute("data-testid", "evidence-card");
+    card.setAttribute("data-decision", holdModel.decision);
+    card.setAttribute("role", "group");
+    card.setAttribute("aria-label", holdModel.title + " risk card");
+    riskCardHead(card, holdModel);
 
     var status = document.createElement("div");
     status.className = "ev-status";
@@ -927,6 +969,7 @@
     actions.className = "ev-actions";
     card.appendChild(actions);
 
+    riskCardTail(card, holdModel);
     thread.appendChild(card);
 
     var startedAt = Date.now();
@@ -1044,6 +1087,20 @@
     }
 
     function offerChoice() {
+      var holdGeneralised = riskGeneralisedText(holdBody);
+      if (holdGeneralised) {
+        var holdGen = document.createElement("button");
+        holdGen.type = "button";
+        holdGen.className = "reid-generalise";
+        holdGen.setAttribute("data-testid", "reid-generalise");
+        holdGen.textContent = "Generalise";
+        holdGen.addEventListener("click", function () {
+          composer.value = holdGeneralised;
+          composer.dispatchEvent(new Event("input", { bubbles: true }));
+          composer.focus();
+        });
+        actions.appendChild(holdGen);
+      }
       var approveBtn = document.createElement("button");
       approveBtn.type = "button";
       approveBtn.setAttribute("data-testid", "btn-approve");
@@ -1318,9 +1375,9 @@
 
   loadLiveHintsFlag();
   /* T31 decision receipts: one compact marker per turn. */
-  var KNOWN_DECISIONS = ["ALLOW", "REDACT", "BLOCK", "HOLD"];
+  var KNOWN_DECISIONS = ["ALLOW", "REDACT", "WARN", "HOLD", "BLOCK"];
 
-  var RECEIPT_ICONS = { ALLOW: "○", REDACT: "◐", HOLD: "△", BLOCK: "✕", UNKNOWN: "?" };
+  var RECEIPT_ICONS = { ALLOW: "○", REDACT: "◐", WARN: "△", HOLD: "△", BLOCK: "✕", UNKNOWN: "?" };
 
   function receiptIcon(decision) {
     var key = KNOWN_DECISIONS.indexOf(decision) >= 0 ? decision : "UNKNOWN";
@@ -1328,7 +1385,7 @@
   }
 
   function receiptLabel(decision, body) {
-    if (decision === "ALLOW") return "Sent";
+    if (decision === "ALLOW") return "✓ Checked · nothing sensitive"; // T45 quiet receipt (legacy "Sent" lives on in "Sent clean" below)
     if (decision === "REDACT") {
       var n = 0;
       if (body && body.sent_text) {
@@ -1337,6 +1394,7 @@
       }
       return n > 0 ? n + " sensitive details protected" : "Sent with redactions";
     }
+    if (decision === "WARN") return "Waiting for you — review";
     if (decision === "HOLD") return "Review required" + " — nothing sent";
     if (decision === "BLOCK") return "Blocked" + " — not sent";
     return "Not sent" + " — couldn't check";
@@ -1345,6 +1403,7 @@
   function membraneFor(decision) {
     if (decision === "ALLOW") return "released";
     if (decision === "REDACT") return "redacted";
+    if (decision === "WARN") return "review";
     if (decision === "HOLD") return "review";
     if (decision === "BLOCK") return "blocked";
     return "unknown";
@@ -1356,6 +1415,400 @@
   // attributes, or the membrane state. Unknown -> neutral, never "sent".
   // The receipt keeps the legacy "banner" hook via its class so recorders
   // and the descriptive trace pairing still find it.
+  function riskPlaceholderBase(placeholder) {
+    var inner = String(placeholder).replace(/^\[/, "").replace(/\]$/, "");
+    var cut = inner.lastIndexOf("_");
+    if (cut > 0 && /^\d+$/.test(inner.slice(cut + 1))) return inner.slice(0, cut);
+    return inner;
+  }
+  var RISK_PLACEHOLDER_LABELS = {
+    SECRET: "secret", PII_EMAIL: "email address", PII_PHONE: "phone number",
+    PII_ACCOUNT: "account number", PII_ROUTING: "routing number",
+    PII_IBAN: "IBAN", PII_SWIFT: "SWIFT code", PII_SORT_CODE: "sort code",
+    PII_HOLDER_NAME: "account holder name", PII_NAME: "name", NAME: "name",
+    PII_ADDRESS: "street address", ADDRESS: "street address",
+    PII_DOB: "date of birth", DOB: "date of birth",
+    PII_SSN: "social security number", SSN: "social security number",
+    PII_CARD: "card number", CARD: "card number",
+    PII_EMPLOYEE_ID: "employee ID", EMPLOYEE_ID: "employee ID",
+    PII_ACCOUNT: "account number", ACCOUNT: "account number",
+    PII_ROUTING: "routing number", ROUTING: "routing number",
+    PII_IBAN: "IBAN", IBAN: "IBAN",
+    PII_SWIFT: "SWIFT code", SWIFT: "SWIFT code", SWIFT_CODE: "SWIFT code",
+    PII_SORT_CODE: "sort code", SORT_CODE: "sort code",
+    PROVIDER_KEY: "API key", API_KEY: "API key",
+    PASSWORD: "password", PASSWORD_ASSIGNMENT: "password",
+    ENTROPY: "possible secret",
+    CONTRACT: "contract clause", CUSTOM_PATTERN: "contract clause",
+    CODENAME: "project codename", CLIENT: "client name",
+    FIGURE: "unreleased figure", BEACON: "possible sensitive pointer"
+  };
+  var RISK_REID_LABELS = {
+    name: "name", dob: "date of birth", age: "age", street: "street address",
+    postcode: "postcode", city: "city", employer: "employer",
+    jobtitle: "job title", school: "school", gender: "gender",
+    medical: "medical details", plate: "vehicle plate", vehicle: "vehicle",
+    phone: "phone number", email: "email address", dated_event: "dates"
+  };
+  function riskLabelForBase(base) {
+    if (RISK_PLACEHOLDER_LABELS[base]) return RISK_PLACEHOLDER_LABELS[base];
+    return riskHumanLabel(base);
+  }
+  function riskArticle(word, first) {
+    var an = /^[aeiou]/i.test(word || "");
+    if (first) return an ? "An" : "A";
+    return an ? "an" : "a";
+  }
+  function riskJoinLabels(labels) {
+    var out = "";
+    for (var i = 0; i < labels.length; i++) {
+      if (i > 0) out += (i === labels.length - 1) ? " and " : ", ";
+      out += riskArticle(labels[i], i === 0) + " " + labels[i];
+    }
+    return out;
+  }
+  // One human label per finding class, shared by placeholder bases and
+  // span classes so the same finding never appears twice under two names.
+  // Plain words only: never internal class names ("pii", "cls", ...).
+  var RISK_HUMAN_LABELS = {
+    "secret": "secret",
+    "canary": "canary token", "canary token": "canary token",
+    "provider key": "API key", "api key": "API key",
+    "password": "password", "password assignment": "password",
+    "entropy": "possible secret",
+    "email": "email address", "email address": "email address",
+    "phone": "phone number", "phone number": "phone number",
+    "address": "street address", "street": "street address",
+    "street address": "street address",
+    "dob": "date of birth", "date of birth": "date of birth",
+    "name": "name", "holder name": "account holder name",
+    "account holder name": "account holder name",
+    "codename": "project codename", "project codename": "project codename",
+    "client": "client name", "client name": "client name",
+    "custom pattern": "contract clause", "contract": "contract clause",
+    "contract clause": "contract clause",
+    "figure": "unreleased figure", "unreleased figure": "unreleased figure",
+    "beacon": "possible sensitive pointer",
+    "beacon cue": "possible sensitive pointer",
+    "possible sensitive pointer": "possible sensitive pointer",
+    "account": "account number", "account number": "account number",
+    "routing": "routing number", "routing number": "routing number",
+    "iban": "IBAN", "swift": "SWIFT code", "swift code": "SWIFT code",
+    "sort code": "sort code",
+    "card": "card number", "card number": "card number",
+    "employee id": "employee ID",
+    "ssn": "social security number",
+    "social security number": "social security number"
+  };
+  function riskHumanLabel(raw) {
+    var key = String(raw || "").toLowerCase().replace(/_/g, " ")
+      .replace(/\s+/g, " ").trim();
+    if (RISK_HUMAN_LABELS[key]) return RISK_HUMAN_LABELS[key];
+    var short = key.replace(/^pii\s+/, "");
+    if (RISK_HUMAN_LABELS[short]) return RISK_HUMAN_LABELS[short];
+    if (!short || short === "pii" || short === "business" ||
+        short === "beacon" || short === "secret" || short === "unknown") {
+      return "sensitive detail";
+    }
+    return short;
+  }
+  function riskSpanLabel(span) {
+    var cls = String((span && span.cls) || "").toLowerCase();
+    var sub = String((span && span.subclass) || "").toLowerCase();
+    if (sub.indexOf("canary") >= 0) return "canary token";
+    var label = riskHumanLabel(sub);
+    if (label === "sensitive detail" || label === "secret") {
+      label = riskHumanLabel(cls);
+    }
+    if (label === "sensitive detail" || label === "secret") {
+      label = riskHumanLabel((sub + " " + cls).trim());
+    }
+    return label;
+  }
+  function riskActionFor(decision) {
+    if (decision === "REDACT") return "Replaced with placeholders";
+    if (decision === "BLOCK") return "Blocked — not sent";
+    if (decision === "HOLD" || decision === "WARN") {
+      return "Waiting for you: Generalise · Send anyway · Cancel";
+    }
+    if (decision === "UNKNOWN") return "Not sent — couldn't check";
+    return "Sent";
+  }
+  function riskCardModel(resp) {
+    if (!resp || typeof resp !== "object") return null;
+    var decision = String(resp.decision || "UNKNOWN").toUpperCase();
+    var evidence = (resp.evidence && typeof resp.evidence === "object") ? resp.evidence : {};
+    var spans = evidence.spans || resp.spans || [];
+    if (!Array.isArray(spans)) spans = [];
+    var placeholders = (resp.placeholders && typeof resp.placeholders === "object") ? resp.placeholders : {};
+    var names = Object.keys(placeholders);
+    var sending = (typeof resp.sent_text === "string") ? resp.sent_text : "";
+    var i;
+    if (!names.length && sending) {
+      var seen = sending.match(/\[[A-Z0-9 _-]*\d[^\]]*\]/g) || [];
+      for (i = 0; i < seen.length; i++) {
+        if (names.indexOf(seen[i]) < 0) names.push(seen[i]);
+      }
+    }
+    var reid = evidence.reid || {};
+    var person = evidence.person_search || {};
+    var combination = reid.combination || [];
+    if (!Array.isArray(combination)) combination = [];
+    var banner = person.banner || reid.banner || "";
+    var inferred = person.inferred_labels || person.inferred || [];
+    if (!Array.isArray(inferred)) inferred = [];
+    var reasons = evidence.reasons || resp.reasons || [];
+    if (!Array.isArray(reasons)) reasons = [];
+    var liveReasons = reasons.filter(function (r) {
+      return !/no spans\s*->\s*ALLOW/i.test(String(r));
+    });
+    var hasFindings = names.length > 0 || spans.length > 0 ||
+      combination.length > 0 || !!banner || inferred.length > 0 ||
+      liveReasons.length > 0 || /\[[A-Z0-9 _-]*\d[^\]]*\]/.test(sending);
+    if (decision === "ALLOW" && !hasFindings) return null;
+    var labels = [];
+    var seenLabels = {};
+    function addLabel(label) {
+      if (!label || seenLabels[label]) return;
+      seenLabels[label] = true;
+      labels.push(label);
+    }
+    names.forEach(function (ph) { addLabel(riskLabelForBase(riskPlaceholderBase(ph))); });
+    spans.forEach(function (s) { addLabel(riskSpanLabel(s)); });
+    var why = [];
+    var canary = spans.some(function (s) {
+      return String((s && s.subclass) || "").toLowerCase().indexOf("canary") >= 0;
+    }) || liveReasons.some(function (r) { return /canary/i.test(String(r)); });
+    if (decision === "BLOCK" && canary) {
+      why.push("A planted canary token was found.");
+    }
+    var otherLabels = labels.filter(function (l) { return l !== "canary token"; });
+    var specificLabels = otherLabels.filter(function (l) {
+      return l !== "secret" && l !== "sensitive detail";
+    });
+    if (specificLabels.length) otherLabels = specificLabels;
+    if (otherLabels.length) {
+      why.push(riskJoinLabels(otherLabels) + ".");
+    } else if (decision === "BLOCK" && !why.length) {
+      why.push("A secret that must never leave this PC was found.");
+    }
+    if (combination.length) {
+      var comboLabels = combination.map(function (k) {
+        return RISK_REID_LABELS[String(k)] || String(k).replace(/_/g, " ");
+      });
+      why.push("Together these identify you: " + comboLabels.join(" + ") + ".");
+    } else if (banner && decision !== "BLOCK") {
+      why.push(String(banner));
+    }
+    if (decision === "HOLD" && !why.length) {
+      why.push("A possible pointer to sensitive data needs review.");
+    }
+    if (!why.length) {
+      why.push((typeof resp.user_message === "string" && resp.user_message) ||
+        "Sensitive content was found.");
+    }
+    var traceLines = [];
+    (Array.isArray(resp.trace) ? resp.trace : []).forEach(function (entry) {
+      var step = String((entry && entry.step) || "?");
+      var result = entry && entry.result ? " · " + String(entry.result) : "";
+      traceLines.push(step + result);
+    });
+    var action = riskActionFor(decision);
+    return {
+      decision: decision,
+      title: decision,
+      sending: sending,
+      why: why,
+      action: action,
+      trace: traceLines,
+      rows: [
+        { id: "sending", label: "Sending", text: sending },
+        { id: "why", label: "Why it's risky", text: why.join(" ") },
+        { id: "action", label: "What was done", text: action }
+      ]
+    };
+  }
+  function riskCardHead(card, model) {
+    var title = document.createElement("div");
+    title.className = "risk-title";
+    title.textContent = model.title;
+    card.appendChild(title);
+    var rows = document.createElement("div");
+    rows.className = "risk-rows";
+    model.rows.forEach(function (row) {
+      var line = document.createElement("div");
+      line.className = "risk-row risk-row-" + row.id;
+      var name = document.createElement("span");
+      name.className = "risk-label";
+      name.textContent = row.label;
+      var value = document.createElement("span");
+      value.className = "risk-value";
+      value.setAttribute("data-testid", "risk-" + row.id);
+      if (row.id === "sending") {
+        if (row.text) value.innerHTML = highlightPlaceholders(row.text);
+        else value.textContent = "(nothing left to send)";
+      } else {
+        value.textContent = row.text;
+      }
+      line.appendChild(name);
+      line.appendChild(value);
+      rows.appendChild(line);
+    });
+    card.appendChild(rows);
+  }
+  function riskCardTail(card, model) {
+    var toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "risk-toggle";
+    toggle.setAttribute("data-testid", "risk-toggle");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = "Show details";
+    var trace = document.createElement("div");
+    trace.className = "risk-trace";
+    trace.setAttribute("data-testid", "risk-trace");
+    trace.hidden = true;
+    if (model.trace.length) {
+      var list = document.createElement("ol");
+      model.trace.forEach(function (step) {
+        var item = document.createElement("li");
+        item.textContent = step;
+        list.appendChild(item);
+      });
+      trace.appendChild(list);
+    } else {
+      trace.textContent = "No further details.";
+    }
+    toggle.addEventListener("click", function () {
+      var open = trace.hidden;
+      trace.hidden = !open;
+      card.setAttribute("data-expanded", open ? "true" : "false");
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      toggle.textContent = open ? "Hide details" : "Show details";
+    });
+    card.appendChild(toggle);
+    card.appendChild(trace);
+  }
+  function renderRiskCard(model, body, testid) {
+    var card = document.createElement("div");
+    card.className = "risk-card";
+    card.setAttribute("data-testid", testid || "risk-card");
+    card.setAttribute("data-decision", model.decision);
+    card.setAttribute("role", "group");
+    card.setAttribute("aria-label", model.title + " risk card");
+    riskCardHead(card, model);
+    riskCardTail(card, model);
+    return card;
+  }
+  function riskGeneralisedText(body) {
+    if (!body || !body.evidence) return "";
+    var person = body.evidence.person_search || {};
+    var reid = body.evidence.reid || {};
+    return person.generalised_text || reid.generalised_text || "";
+  }
+  function riskLockChoices(holder) {
+    var btns = holder.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
+  }
+  function riskUnlockChoices(holder) {
+    var btns = holder.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+  }
+  function riskConfirmWarn(card, banner, body, url, choice) {
+    var finalText = choice === "send_generalised" ?
+      "Sent generalised" : "Sent anyway — you chose to send";
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ choice: choice })
+    })
+      .then(function (resp) {
+        return resp.json().then(function (b) { return { ok: resp.ok, body: b }; });
+      })
+      .then(function (res) {
+        var holder = card.querySelector(".risk-choices");
+        var actionVal = card.querySelector(".risk-row-action .risk-value");
+        if (res.ok) {
+          if (actionVal) actionVal.textContent = finalText;
+          if (holder) holder.remove();
+          if (banner) {
+            renderReceipt(res.body.decision || "WARN", res.body, banner);
+            var receiptLabelEl = banner.querySelector ? banner.querySelector(".receipt-label") : null;
+            if (receiptLabelEl) receiptLabelEl.textContent = finalText;
+          }
+          var oldLabel = receiptLabel(body.decision || "WARN", body);
+          for (var i = turns.length - 1; i >= 0; i--) {
+            if (turns[i].label === oldLabel) {
+              turns[i].label = finalText;
+              if (selectedTurn === turns[i]) paintTurn(turns[i]);
+              break;
+            }
+          }
+          if (res.body && res.body.answer != null) {
+            var bubble = document.createElement("div");
+            bubble.className = "bubble answer";
+            bubble.setAttribute("data-testid", "answer");
+            bubble.innerHTML = highlightRanges(res.body.answer, res.body.answer_highlights);
+            thread.appendChild(bubble);
+            var src = document.createElement("div");
+            src.className = "answer-src";
+            src.textContent = "via " + providerLabel(res.body.provider || (providerSel && providerSel.value));
+            thread.appendChild(src);
+          }
+          refreshStats();
+        } else {
+          if (holder) riskUnlockChoices(holder);
+          if (actionVal) actionVal.textContent = "Something went wrong; try again.";
+        }
+        updateEmptyHint();
+      })
+      .catch(function () {
+        var holder = card.querySelector(".risk-choices");
+        if (holder) riskUnlockChoices(holder);
+        var actionVal = card.querySelector(".risk-row-action .risk-value");
+        if (actionVal) actionVal.textContent = "Something went wrong; try again.";
+      });
+  }
+  function appendWarnChoices(card, body, banner) {
+    var holder = document.createElement("div");
+    holder.className = "risk-choices";
+    var generalised = riskGeneralisedText(body);
+    var warnUrl = (body && body.confirm_url) ||
+      ("/api/warns/" + encodeURIComponent((body && body.decision_id) || "") + "/confirm");
+    if (generalised) {
+      var gen = document.createElement("button");
+      gen.type = "button";
+      gen.className = "reid-generalise";
+      gen.setAttribute("data-testid", "reid-generalise");
+      gen.textContent = "Generalise";
+      gen.addEventListener("click", function () {
+        riskLockChoices(holder);
+        riskConfirmWarn(card, banner, body, warnUrl, "send_generalised");
+      });
+      holder.appendChild(gen);
+    }
+    var sendBtn2 = document.createElement("button");
+    sendBtn2.type = "button";
+    sendBtn2.setAttribute("data-testid", "risk-send-anyway");
+    sendBtn2.textContent = "Send anyway";
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.setAttribute("data-testid", "risk-cancel");
+    cancel.textContent = "Cancel";
+    sendBtn2.addEventListener("click", function () {
+      riskLockChoices(holder);
+      riskConfirmWarn(card, banner, body, warnUrl, "send_anyway");
+    });
+    cancel.addEventListener("click", function () {
+      riskLockChoices(holder);
+      var actionVal = card.querySelector(".risk-row-action .risk-value");
+      if (actionVal) actionVal.textContent = "Cancelled — nothing was sent.";
+    });
+    holder.appendChild(sendBtn2);
+    holder.appendChild(cancel);
+    var toggle = card.querySelector(".risk-toggle");
+    if (toggle) card.insertBefore(holder, toggle);
+    else card.appendChild(holder);
+  }
   function renderReceipt(decision, body, anchor) {
     var key = KNOWN_DECISIONS.indexOf(decision) >= 0 ? decision : "UNKNOWN";
     var item = anchor && anchor.classList && anchor.classList.contains("receipt")
@@ -1689,6 +2142,7 @@
   // Pure state helpers, exported for tests (no DOM inside).
   window.ShadowfencedUI = {
     receiptLabel: receiptLabel,
+    riskCardModel: riskCardModel,
     receiptIcon: receiptIcon,
     membraneFor: membraneFor,
     isSendEnabled: function (text, hasAttachments, busy) {
