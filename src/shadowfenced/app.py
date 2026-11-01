@@ -2115,6 +2115,70 @@ def log_verify() -> dict[str, Any]:
     return {"ok": ok, "events": count}
 
 
+@app.get("/api/log/events")
+def log_events(limit: int = 50) -> dict[str, Any]:
+    """Return recent decision-log entries plus the chain-verified status.
+
+    Each entry carries ``ts``, ``decision_id``, ``decision`` (outcome),
+    ``tier``, ``reasons`` (class labels) and ``fingerprints``
+    (``sha256(value)[:12]``) only -- raw values are never written to
+    the log and never returned here.
+    """
+    import json as _json
+
+    from . import ecs_log
+
+    ok, _count = ecs_log.verify(get_settings().log_path)
+    clamped = max(1, min(int(limit), 200))
+    path = Path(ecs_log.resolve_path(get_settings().log_path))
+    rows: list[dict[str, Any]] = []
+    if path.is_file():
+        try:
+            with path.open(encoding="utf-8") as handle:
+                lines = [line.strip() for line in handle if line.strip()]
+        except OSError:
+            lines = []
+        for line in lines[-clamped:]:
+            try:
+                record = _json.loads(line)
+            except ValueError:
+                continue
+            rows.append(
+                {
+                    "ts": record.get("ts"),
+                    "decision_id": record.get("decision_id"),
+                    "decision": record.get("decision"),
+                    "tier": record.get("tier"),
+                    "reasons": record.get("classes", []),
+                    "fingerprints": record.get("fingerprints", []),
+                }
+            )
+    return {"ok": ok, "events": rows}
+
+
+@app.get("/api/guard")
+def guard_status() -> dict[str, Any]:
+    """Report whether the local guard model is reachable.
+
+    ``glimmer`` is True when the local model endpoint answers for the
+    configured judge model; otherwise the gate still runs its code
+    checks (``glimmer`` False). Never raises: any failure means
+    code-checks-only.
+    """
+    import httpx
+
+    settings = get_settings()
+    reachable = False
+    try:
+        url = settings.ollama_url.rstrip("/") + "/api/show"
+        with httpx.Client(timeout=2.0) as client:
+            response = client.post(url, json={"name": settings.judge_model})
+        reachable = response.status_code == 200
+    except Exception:
+        reachable = False
+    return {"guard": "on", "glimmer": reachable}
+
+
 def _stream_response(
     decision: engine.Decision, model: str, content: str
 ) -> StreamingResponse:

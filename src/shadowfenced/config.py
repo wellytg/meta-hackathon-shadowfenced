@@ -216,6 +216,42 @@ def ext_token_path(settings=None) -> "Path":
     return Path.home() / ".shadowfenced" / "ext_token"
 
 
+_MEMORY_EXT_TOKEN: str | None = None
+
+
+def reset_ext_token_override() -> None:
+    """Forget the in-process pairing-token override (tests only)."""
+    global _MEMORY_EXT_TOKEN
+    _MEMORY_EXT_TOKEN = None
+
+
+def rotate_ext_token(settings=None) -> str:
+    """Create a fresh pairing token, invalidating the previous one.
+
+    The new token takes precedence immediately (in-process override)
+    and is also written to the token file so it survives restarts. The
+    token value itself is never logged.
+    """
+    import secrets as _secrets
+
+    global _MEMORY_EXT_TOKEN
+    fresh = _secrets.token_urlsafe(24)
+    _MEMORY_EXT_TOKEN = fresh
+    path = ext_token_path(settings)
+    try:
+        import os as _os
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(fresh + "\n", encoding="utf-8")
+        try:
+            _os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        pass
+    return fresh
+
+
 def load_or_create_ext_token(settings=None) -> str:
     """Return the pairing token, generating and persisting it on first run.
 
@@ -230,6 +266,8 @@ def load_or_create_ext_token(settings=None) -> str:
             settings = get_settings()
         except Exception:
             settings = None
+    if _MEMORY_EXT_TOKEN:
+        return _MEMORY_EXT_TOKEN
     if settings is not None and (settings.ext_token or "").strip():
         return settings.ext_token.strip()
     path = ext_token_path(settings)
