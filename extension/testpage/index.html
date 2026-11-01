@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shadowfenced test page (local demo)</title>
+<style>
+  /* Square Windows 3.11 look, same palette as the extension. */
+  body { margin: 0; background: #f4f1e8; color: #1a1a1a;
+    font: 14px/1.5 "Segoe UI", system-ui, Tahoma, Verdana, sans-serif; }
+  .wrap { max-width: 640px; margin: 24px auto; border: 2px solid #1a1a1a;
+    background: #fffdf6; box-shadow: 4px 4px 0 rgba(0,0,0,.3); }
+  .titlebar { background: #2f5d8a; color: #fff; font-weight: 700;
+    padding: 6px 10px; border-bottom: 2px solid #1a1a1a; }
+  .body { padding: 12px 14px 16px; }
+  .hint { font-size: 12px; opacity: .8; }
+  .modes { display: flex; gap: 8px; margin: 10px 0; }
+  button { cursor: pointer; color: #1a1a1a; background: #e8e2d2;
+    border: 2px solid #1a1a1a;
+    box-shadow: inset -2px -2px 0 #a39d8a, inset 2px 2px 0 #fffdf6;
+    padding: 6px 12px; font: inherit; }
+  button:active { box-shadow: inset 2px 2px 0 #a39d8a; }
+  button[aria-pressed="true"] { background: #cfe0ef; }
+  #composer-text, #composer-edit { width: 100%; box-sizing: border-box;
+    min-height: 96px; padding: 8px; color: #1a1a1a; background: #fff;
+    border: 2px solid #1a1a1a; font: inherit; }
+  #composer-edit { white-space: pre-wrap; word-wrap: break-word; }
+  .sendrow { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+  #replyArea { margin-top: 14px; border: 2px solid #1a1a1a; padding: 8px;
+    min-height: 64px; background: #fff; }
+  #log { margin-top: 14px; border: 2px solid #1a1a1a; padding: 8px;
+    min-height: 40px; background: #f4f1e8; font-size: 13px; }
+  code { background: #e8e2d2; padding: 0 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="titlebar">Shadowfenced test page (local demo)</div>
+  <div class="body">
+    <p class="hint">This page imitates a chat composer so the extension can be
+    demonstrated without logging into any real site. Serve it with
+    <code>python -m http.server 8000</code> from
+    <code>extension/testpage</code>, open
+    <code>http://127.0.0.1:8000/index.html</code>, and load the
+    <strong>dev</strong> build (<code>python extension/build.py --dev</code>).
+    Type something sensitive, hover the underline, then press send.</p>
+
+    <div class="modes" role="group" aria-label="Composer variant">
+      <button id="modeText" type="button" aria-pressed="true">Textarea composer</button>
+      <button id="modeEdit" type="button" aria-pressed="false">Contenteditable composer</button>
+    </div>
+
+    <label class="hint" for="composer-text">Message</label>
+    <textarea id="composer-text" data-sf-test-composer rows="4"
+      placeholder="Type here, e.g. My email is ada@example.com"></textarea>
+    <div id="composer-edit" data-sf-test-composer contenteditable="true" hidden
+      aria-label="Message (contenteditable)"></div>
+
+    <div class="sendrow">
+      <button id="sendBtn" type="button">Send</button>
+      <label class="hint" for="attachInput">Attachment (warns only):
+        <input id="attachInput" type="file">
+      </label>
+    </div>
+
+    <div id="replyArea" aria-label="Reply area"></div>
+
+    <div class="sendrow">
+      <button id="sampleReply" type="button">Insert sample reply with placeholder</button>
+    </div>
+
+    <div id="log" aria-label="Sent messages">Nothing sent yet.</div>
+  </div>
+</div>
+<script>
+(function () {
+  'use strict';
+  var text = document.getElementById('composer-text');
+  var edit = document.getElementById('composer-edit');
+  var modeText = document.getElementById('modeText');
+  var modeEdit = document.getElementById('modeEdit');
+  var sendBtn = document.getElementById('sendBtn');
+  var replyArea = document.getElementById('replyArea');
+  var log = document.getElementById('log');
+  var sampleReply = document.getElementById('sampleReply');
+  var cleared = false;
+
+  function activeComposer() { return edit.hidden ? text : edit; }
+  function composerText() {
+    return edit.hidden ? text.value : (edit.innerText || edit.textContent || '');
+  }
+  function setMode(useEdit) {
+    edit.hidden = !useEdit;
+    text.hidden = useEdit;
+    modeText.setAttribute('aria-pressed', String(!useEdit));
+    modeEdit.setAttribute('aria-pressed', String(useEdit));
+    activeComposer().focus();
+  }
+  modeText.addEventListener('click', function () { setMode(false); });
+  modeEdit.addEventListener('click', function () { setMode(true); });
+
+  // Fake local echo so the page is useful with no extension installed.
+  // When the extension intercepts a send, it stops propagation in the
+  // capture phase and this handler never runs for that send.
+  sendBtn.addEventListener('click', function () {
+    var msg = composerText();
+    if (!msg.trim()) return;
+    if (!cleared) { log.textContent = ''; cleared = true; }
+    var line = document.createElement('div');
+    line.textContent = 'Sent: ' + msg;
+    log.appendChild(line);
+    var reply = document.createElement('div');
+    reply.textContent = 'Demo reply: got ' + msg.length + ' characters.';
+    replyArea.appendChild(reply);
+  });
+
+  sampleReply.addEventListener('click', function () {
+    var p = document.createElement('div');
+    p.textContent = 'Demo reply referencing [PII_EMAIL_1] for display only.';
+    replyArea.appendChild(p);
+  });
+})();
+</script>
+</body>
+</html>

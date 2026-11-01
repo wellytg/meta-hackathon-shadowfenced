@@ -1,6 +1,7 @@
 'use strict';
 
-/* Site adapters — all four supported chat sites in this one file.
+/* Site adapters — the four supported chat sites plus the local
+ * demo-page adapter in this one file.
  * Each adapter carries CSS selectors for the message editor, the send
  * button, the AI reply area, and file-attachment affordances.
  * Reuses selectAdapter from logic.js (loaded first in content_scripts);
@@ -92,6 +93,28 @@ var ADAPTERS = [
     attachment: [
       'input[type="file"]',
       '[aria-label*="Attach" i]'
+    ]
+  },
+  {
+    id: 'testpage',
+    // Local demo page only. The release manifest never matches loopback,
+    // so this adapter is reachable solely through the dev build
+    // (build.py --dev), which adds the test-page match pattern.
+    hosts: ['127.0.0.1', 'localhost'],
+    editor: [
+      '#composer-text',
+      '#composer-edit',
+      '[data-sf-test-composer]'
+    ],
+    sendButton: [
+      '#sendBtn'
+    ],
+    replyArea: [
+      '#replyArea'
+    ],
+    attachment: [
+      '#attachInput',
+      'input[type="file"]'
     ]
   }
 ];

@@ -7,12 +7,17 @@
 </head>
 <body>
 <main class="sf-popup">
-  <h1>Shadowfenced</h1>
-  <p id="status" class="sf-status sf-unknown">Checking app&hellip;</p>
+  <div class="sf-titlebar"><span>Shadowfenced</span></div>
+
+  <div class="sf-statusrow" role="status" aria-live="polite">
+    <span id="statusIcon" class="sf-dot sf-unknown" aria-hidden="true"></span>
+    <span id="status">Checking locally&hellip;</span>
+  </div>
 
   <label class="sf-label" for="token">Pairing token</label>
   <div class="sf-row">
     <input id="token" type="password" autocomplete="off" placeholder="Paste pairing token">
+    <button id="paste" type="button">Paste</button>
     <button id="save" type="button">Save</button>
   </div>
   <p id="saved" class="sf-hint" hidden>Saved.</p>
@@ -24,6 +29,13 @@
     <label><input type="checkbox" data-site="gemini" checked> gemini.google.com</label>
     <label><input type="checkbox" data-site="meta" checked> meta.ai</label>
   </div>
+
+  <h2>Check the local app</h2>
+  <p class="sf-hint">Sends one sample sentence to the local app and shows what it says.</p>
+  <div class="sf-row">
+    <button id="test" type="button">Test</button>
+  </div>
+  <p id="testResult" class="sf-result" hidden></p>
 
   <p class="sf-hint">Files you attach are never scanned &mdash; you only get a warning badge.</p>
 </main>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" shape-rendering="crispEdges">
+  <title>Shadowfenced icon</title>
+  <desc>Square pixel-style artwork: paper field, ink outline, steel-blue title bar, safety-orange fence emblem.</desc>
+  <!-- paper field -->
+  <rect x="0" y="0" width="64" height="64" fill="#F4F1E8"/>
+  <!-- steel-blue title bar -->
+  <rect x="4" y="4" width="56" height="14" fill="#2F6F9F"/>
+  <!-- window button -->
+  <rect x="52" y="8" width="6" height="6" fill="#FFFFFF"/>
+  <!-- emblem: ink outline, orange field, three paper pickets -->
+  <rect x="18" y="26" width="28" height="28" fill="#1A1A1A"/>
+  <rect x="20" y="28" width="24" height="24" fill="#E85D1F"/>
+  <rect x="23" y="30" width="4" height="20" fill="#F4F1E8"/>
+  <rect x="30" y="30" width="4" height="20" fill="#F4F1E8"/>
+  <rect x="37" y="30" width="4" height="20" fill="#F4F1E8"/>
+  <!-- ink frame (2px-style hard outline) -->
+  <rect x="0" y="0" width="64" height="4" fill="#1A1A1A"/>
+  <rect x="0" y="60" width="64" height="4" fill="#1A1A1A"/>
+  <rect x="0" y="0" width="4" height="64" fill="#1A1A1A"/>
+  <rect x="60" y="0" width="4" height="64" fill="#1A1A1A"/>
+</svg>
