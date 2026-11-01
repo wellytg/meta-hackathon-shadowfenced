@@ -518,6 +518,8 @@
     userBubble.className = "bubble user";
     userBubble.textContent = text;
     thread.appendChild(userBubble);
+    noteUserMessage(text);
+    setMembrane("inspecting");
     checking.hidden = false;
     sendBtn.disabled = true;
 
@@ -535,13 +537,14 @@
       .then(function (body) {
         if (body.provider) setPill(body.provider);
         var decision = body.decision || "HOLD";
-        var banner = document.createElement("div");
-        banner.className = "banner";
-        banner.setAttribute("data-testid", "banner");
+        // One compact receipt per turn (keeps the legacy banner class so
+        // recorders and trace pairing still find it). No full-width banner.
+        var banner = document.createElement("details");
+        banner.className = "receipt banner";
+        banner.setAttribute("data-testid", "receipt");
         banner.setAttribute("data-decision", decision);
         // Plain user-facing line only; machine reasons (span ids, hashes)
         // stay in the log and are never rendered here.
-        banner.textContent = bannerText(decision, body);
         if (body && typeof body.doc_warning === "string" && body.doc_warning) {
           var docWarning = document.createElement("div");
           docWarning.className = "doc-warning";
@@ -550,6 +553,9 @@
           thread.appendChild(docWarning);
         }
         thread.appendChild(banner);
+        renderReceipt(decision, body, banner);
+        noteTurn(decision, body);
+        setMembrane(membraneFor(decision));
 
         var toggle = document.createElement("button");
         toggle.type = "button";
@@ -589,12 +595,14 @@
         refreshStats();
       })
       .catch(function () {
-        var banner = document.createElement("div");
-        banner.className = "banner";
-        banner.setAttribute("data-testid", "banner");
-        banner.setAttribute("data-decision", "HOLD");
-        banner.textContent = "Held for review: possible pointer to sensitive data.";
+        var banner = document.createElement("details");
+        banner.className = "receipt banner";
+        banner.setAttribute("data-testid", "receipt");
+        banner.setAttribute("data-decision", "UNKNOWN");
         thread.appendChild(banner);
+        renderReceipt("UNKNOWN", null, banner);
+        noteTurn("UNKNOWN", null);
+        setMembrane("unknown");
         updateEmptyHint();
       })
       .then(function () {
@@ -710,7 +718,14 @@
 
     function finishBanner(decision, text) {
       banner.setAttribute("data-decision", decision);
-      banner.textContent = text;
+      var label = banner.querySelector ? banner.querySelector(".receipt-label") : null;
+      if (label) {
+        label.textContent = text;
+      } else {
+        banner.textContent = text;
+      }
+      var why = banner.querySelector ? banner.querySelector(".receipt-why") : null;
+      if (why && text) why.textContent = text;
     }
 
     function showHoldAnswer(answerText, providerId) {
@@ -856,6 +871,7 @@
   }
 
   composer.addEventListener("input", function () {
+    setMembrane("idle");
     liveSpans = [];
     liveSeq++; // drop any in-flight live response
     renderBackdrop(composer.value, spans.filter(function () { return false; }));
@@ -867,11 +883,356 @@
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) sendNow();
   });
 
+  /* T32 layout: only the thread scrolls. New turns stick to the bottom
+     unless the user scrolled up, in which case "Jump to latest" appears.
+     The composer grows to ~8 lines, then scrolls internally without moving
+     its position. The details drawer scrolls on its own (see style.css). */
+  var jumpBtn = document.getElementById("jump-latest");
+  var stickToBottom = true;
+  function threadAtBottom() {
+    if (!thread) return true;
+    return (thread.scrollHeight - thread.scrollTop - thread.clientHeight) < 24;
+  }
+  function scrollThreadToBottom() {
+    if (!thread) return;
+    thread.scrollTop = thread.scrollHeight;
+  }
+  function paintJump() {
+    if (!jumpBtn || !thread) return;
+    jumpBtn.hidden = threadAtBottom();
+  }
+  if (thread) {
+    thread.addEventListener("scroll", function () {
+      stickToBottom = threadAtBottom();
+      paintJump();
+    }, { passive: true });
+    if (window.MutationObserver) {
+      new MutationObserver(function () {
+        if (stickToBottom) scrollThreadToBottom();
+        paintJump();
+      }).observe(thread, { childList: true, subtree: true });
+    }
+  }
+  if (jumpBtn) {
+    jumpBtn.addEventListener("click", function () {
+      stickToBottom = true;
+      scrollThreadToBottom();
+      paintJump();
+      composer.focus();
+    });
+  }
+  function fitComposer() {
+    if (!composer) return;
+    composer.style.height = "auto";
+    var maxPx = Math.round(8 * 14 * 1.5 + 16);
+    composer.style.height = Math.min(composer.scrollHeight, maxPx) + "px";
+    if (stickToBottom) scrollThreadToBottom();
+  }
+  composer.addEventListener("input", fitComposer);
+  fitComposer();
+  paintJump();
+
   renderBackdrop("", []);
   updateEmptyHint();
   setPill();
+  /* T32 chat shell: Classic is the single theme + memory-only sessions. */
+  var THEME_KEY = "shadowfenced.theme";
+  var THEME_NAMES = ["classic"];
+  var themeSel = document.getElementById("theme");
+  var composerBlock = document.getElementById("composer-block");
+
+  function applyTheme(name) {
+    if (THEME_NAMES.indexOf(name) < 0) name = "classic";
+    document.documentElement.setAttribute("data-theme", name);
+    return name;
+  }
+
+  // Only the theme name is persisted in localStorage; chats never are.
+  // Classic is the only theme, so a missing picker is expected.
+  try {
+    applyTheme(window.localStorage.getItem(THEME_KEY) || "classic");
+    window.localStorage.setItem(THEME_KEY, "classic");
+  } catch (e) { applyTheme("classic"); }
+
+  function setMembrane(state) {
+    if (composerBlock) composerBlock.setAttribute("data-membrane", state);
+  }
+
+  // Sessions live in page memory only: never localStorage, never fetched.
+  var HINT_HTML = '<div id="empty-hint" data-testid="empty-hint" class="thread-hint">' +
+    "Type or paste anything. Sensitive text is underlined as you type, " +
+    "and only clean or redacted text is sent to the AI.</div>";
+  var chats = [];
+  var activeChat = null;
+  var chatSeq = 0;
+  var chatList = document.getElementById("chat-list");
+  var newChatBtn = document.getElementById("new-chat");
+
+  function saveActive() {
+    if (!activeChat) return;
+    activeChat.html = thread.innerHTML;
+    activeChat.draft = composer.value;
+  }
+
+  function renderChatList() {
+    if (!chatList) return;
+    chatList.innerHTML = "";
+    chats.forEach(function (chat) {
+      var item = document.createElement("li");
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = chat.title;
+      if (chat === activeChat) btn.setAttribute("aria-current", "true");
+      btn.addEventListener("click", function () {
+        saveActive();
+        activeChat = chat;
+        thread.innerHTML = chat.html;
+        composer.value = chat.draft || "";
+        emptyHint = document.getElementById("empty-hint");
+        spans = [];
+        choices = {};
+        renderBackdrop(composer.value, []);
+        renderIssues([], null);
+        setMembrane("idle");
+        updateEmptyHint();
+        renderChatList();
+      });
+      item.appendChild(btn);
+      chatList.appendChild(item);
+    });
+  }
+
+  function ensureChat() {
+    if (activeChat) return activeChat;
+    chatSeq += 1;
+    activeChat = {
+      id: "chat-" + chatSeq,
+      title: "Chat " + chatSeq,
+      html: thread.innerHTML,
+      draft: ""
+    };
+    chats.push(activeChat);
+    renderChatList();
+    return activeChat;
+  }
+
+  function noteUserMessage(text) {
+    var chat = ensureChat();
+    if (chat.titled) return;
+    var first = (text || "").split("\n")[0].slice(0, 42);
+    if (first) {
+      chat.title = first;
+      chat.titled = true;
+      renderChatList();
+    }
+  }
+
+  if (newChatBtn) {
+    newChatBtn.addEventListener("click", function () {
+      saveActive();
+      chatSeq += 1;
+      activeChat = {
+        id: "chat-" + chatSeq,
+        title: "Chat " + chatSeq,
+        html: HINT_HTML,
+        draft: ""
+      };
+      chats.push(activeChat);
+      thread.innerHTML = HINT_HTML;
+      emptyHint = document.getElementById("empty-hint");
+      clearComposer();
+      clearAttachments();
+      setMembrane("idle");
+      updateEmptyHint();
+      renderChatList();
+      composer.focus();
+    });
+  }
+
   loadLiveHintsFlag();
+  /* T31 decision receipts: one compact marker per turn. */
+  var KNOWN_DECISIONS = ["ALLOW", "REDACT", "BLOCK", "HOLD"];
+
+  var RECEIPT_ICONS = { ALLOW: "○", REDACT: "◐", HOLD: "△", BLOCK: "✕", UNKNOWN: "?" };
+
+  function receiptIcon(decision) {
+    var key = KNOWN_DECISIONS.indexOf(decision) >= 0 ? decision : "UNKNOWN";
+    return RECEIPT_ICONS[key] || "?";
+  }
+
+  function receiptLabel(decision, body) {
+    if (decision === "ALLOW") return "Sent";
+    if (decision === "REDACT") {
+      var n = 0;
+      if (body && body.sent_text) {
+        var found = body.sent_text.match(/\[[^\]]*\]/g);
+        n = found ? found.length : 0;
+      }
+      return n > 0 ? n + " sensitive details protected" : "Sent with redactions";
+    }
+    if (decision === "HOLD") return "Review required" + " — nothing sent";
+    if (decision === "BLOCK") return "Blocked" + " — not sent";
+    return "Not sent" + " — couldn't check";
+  }
+
+  function membraneFor(decision) {
+    if (decision === "ALLOW") return "released";
+    if (decision === "REDACT") return "redacted";
+    if (decision === "HOLD") return "review";
+    if (decision === "BLOCK") return "blocked";
+    return "unknown";
+  }
+
+  // Compact per-turn receipt built only from server-response fields
+  // (decision, user_message, resolved_tier, trace step names). Raw message
+  // text, span values, ids and hashes never enter the receipt, its
+  // attributes, or the membrane state. Unknown -> neutral, never "sent".
+  // The receipt keeps the legacy "banner" hook via its class so recorders
+  // and the descriptive trace pairing still find it.
+  function renderReceipt(decision, body, anchor) {
+    var key = KNOWN_DECISIONS.indexOf(decision) >= 0 ? decision : "UNKNOWN";
+    var item = anchor && anchor.classList && anchor.classList.contains("receipt")
+      ? anchor : document.createElement("details");
+    item.className = "receipt banner";
+    item.setAttribute("data-testid", "receipt");
+    item.setAttribute("data-decision", key);
+    item.innerHTML = "";
+    var head = document.createElement("summary");
+    head.className = "receipt-head";
+    var icon = document.createElement("span");
+    icon.className = "receipt-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = receiptIcon(decision);
+    var label = document.createElement("span");
+    label.className = "receipt-label";
+    label.textContent = receiptLabel(decision, body);
+    var whyLink = document.createElement("span");
+    whyLink.className = "receipt-why-link";
+    whyLink.textContent = "Why";
+    head.appendChild(icon);
+    head.appendChild(label);
+    head.appendChild(whyLink);
+    item.appendChild(head);
+    var why = document.createElement("div");
+    why.className = "receipt-why";
+    var bits = [];
+    if (body && typeof body.user_message === "string" && body.user_message) {
+      bits.push(body.user_message);
+    }
+    if (body && body.resolved_tier != null) {
+      bits.push("resolved at tier " + body.resolved_tier);
+    }
+    var steps = body && body.trace ? body.trace.map(function (entry) {
+      return String((entry && entry.step) || "?");
+    }) : [];
+    if (steps.length) bits.push("trace: " + steps.join(" > "));
+    if (!bits.length) bits.push("no server confirmation yet");
+    why.textContent = bits.join(" · ");
+    item.appendChild(why);
+    var notes = document.createElement("div");
+    notes.className = "receipt-notes";
+    notes.setAttribute("data-testid", "receipt-notes");
+    item.appendChild(notes);
+    if (item !== anchor && anchor && anchor.insertAdjacentElement) {
+      anchor.insertAdjacentElement("afterend", item);
+    }
+    return item;
+  }
+
   loadHostedBanner();
   loadProviders();
   refreshStats();
+
+  /* T31b details drawer: per-turn decision, reasons, redaction summary,
+     descriptive trace, model and timing; plus session counts (kept above).
+     Raw values never enter: only placeholder labels from the send response,
+     reason strings, and trace step names. Unknown turns stay neutral. */
+  var turns = [];
+  var turnSeq = 0;
+  var selectedTurn = null;
+
+  function describePlaceholders(body) {
+    if (!body || typeof body.sent_text !== "string") return [];
+    var found = body.sent_text.match(/\[[^\]]*\]/g);
+    return found ? found : [];
+  }
+
+  function noteTurn(decision, body) {
+    turnSeq += 1;
+    var key = KNOWN_DECISIONS.indexOf(decision) >= 0 ? decision : "UNKNOWN";
+    var entry = {
+      id: turnSeq,
+      decision: key,
+      label: receiptLabel(decision, body),
+      userMessage: body && typeof body.user_message === "string" ? body.user_message : "",
+      reasons: body && body.evidence && Array.isArray(body.evidence.reasons)
+        ? body.evidence.reasons.slice(0, 6) : [],
+      labels: describePlaceholders(body),
+      tier: body && body.resolved_tier != null ? body.resolved_tier : null,
+      trace: body && Array.isArray(body.trace) ? body.trace.slice(0, 12) : [],
+      provider: body && body.provider ? body.provider : (providerSel ? providerSel.value : ""),
+      ms: body && body.latency_ms && body.latency_ms.total != null
+        ? body.latency_ms.total : null
+    };
+    turns.push(entry);
+    if (turns.length > 50) turns.shift();
+    selectedTurn = entry;
+    paintTurn(entry);
+    return entry;
+  }
+
+  function paintTurn(entry) {
+    var empty = document.querySelector("[data-turn-empty]");
+    var facts = document.querySelector("[data-turn-facts]");
+    if (!empty || !facts) return;
+    if (!entry) {
+      empty.hidden = false;
+      facts.hidden = true;
+      return;
+    }
+    empty.hidden = true;
+    facts.hidden = false;
+    var set = function (name, value) {
+      var el = document.querySelector('[data-turn-' + name + ']');
+      if (el) el.textContent = value;
+    };
+    set("decision", entry.decision);
+    set("reasons", entry.reasons.length ? entry.reasons.join("; ") : "—");
+    set("redactions", entry.labels.length ? entry.labels.join(" ") : "none");
+    set("model", entry.provider ? providerLabel(entry.provider) : "—");
+    set("timing", entry.ms != null ? Number(entry.ms).toFixed(1) + " ms" : "—");
+    var wrap = document.querySelector("[data-turn-trace]");
+    var list = document.querySelector("[data-turn-trace-list]");
+    if (wrap && list) {
+      list.innerHTML = "";
+      entry.trace.forEach(function (step) {
+        var li = document.createElement("li");
+        li.textContent = String((step && step.step) || "?") + " · " +
+          String((step && step.result) || "");
+        list.appendChild(li);
+      });
+      wrap.hidden = !entry.trace.length;
+    }
+    var drawer = document.getElementById("details-drawer");
+    if (drawer && !drawer.open && window.innerWidth > 1020) drawer.open = true;
+  }
+
+  document.getElementById("thread").addEventListener("click", function (event) {
+    var node = event.target;
+    while (node && node !== event.currentTarget) {
+      if (node.classList && node.classList.contains("receipt")) break;
+      node = node.parentNode;
+    }
+    if (!node || node === event.currentTarget) return;
+    var label = node.querySelector ? node.querySelector(".receipt-label") : null;
+    var text = label ? label.textContent : "";
+    for (var i = turns.length - 1; i >= 0; i--) {
+      if (turns[i].label === text) {
+        selectedTurn = turns[i];
+        paintTurn(selectedTurn);
+        return;
+      }
+    }
+    paintTurn(selectedTurn);
+  });
 })();
