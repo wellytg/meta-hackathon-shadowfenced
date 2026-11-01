@@ -1,0 +1,18 @@
+/* Shadowfenced popup styles. (In-page overlay/hover/banner styling lives
+   inside content.js's closed shadow root so site CSS can never clash.) */
+:root { color-scheme: light dark; }
+body { margin: 0; font: 13px/1.45 system-ui, sans-serif; }
+.sf-popup { width: 300px; padding: 14px 16px 16px; }
+.sf-popup h1 { font-size: 16px; margin: 0 0 6px; }
+.sf-popup h2 { font-size: 13px; margin: 14px 0 6px; }
+.sf-status { border-radius: 8px; padding: 8px 10px; margin: 0 0 12px; }
+.sf-unknown { background: #eee; color: #333; }
+.sf-ok { background: #dff3e2; color: #14532d; }
+.sf-bad { background: #fde4e4; color: #7f1d1d; }
+.sf-label { display: block; font-weight: 600; margin-bottom: 4px; }
+.sf-row { display: flex; gap: 8px; }
+.sf-row input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid #999; border-radius: 6px; }
+.sf-row button { cursor: pointer; border: 1px solid #666; border-radius: 6px; padding: 6px 12px; background: #f0f0f0; }
+#sites { display: grid; gap: 6px; }
+#sites label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+.sf-hint { opacity: .75; font-size: 12px; }

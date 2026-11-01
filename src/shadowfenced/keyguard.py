@@ -40,13 +40,38 @@ _COUNTS: dict[str, int] = {}
 # Configured variable names from the last refresh (even value-less ones).
 _NAMES: list[str] = []
 
+# Extra guard names registered at runtime for provider keys stored via
+# the OS credential store (``providers.store_key``). Values stay
+# transient: they are re-read from the store on every gate call, so
+# long-lived state still holds only salted hashes.
+_EXTRA_NAMES: set[str] = set()
+
+
+def register_extra_name(name: str) -> None:
+    """Protect one more value (a stored provider key) under ``name``."""
+    if name:
+        _EXTRA_NAMES.add(name)
+        _COUNTS.setdefault(name, 0)
+
+
+def unregister_extra_name(name: str) -> None:
+    """Stop protecting one runtime-registered name."""
+    _EXTRA_NAMES.discard(name)
+    _HASHES.pop(name, None)
+    _LENGTHS.pop(name, None)
+    _COUNTS.pop(name, None)
+
 
 def _configured_names() -> list[str]:
     """Variable names from the settings source (default META+MODEL keys)."""
     from .config import get_settings
 
     raw = get_settings().protect_keys or ""
-    return [name.strip() for name in raw.split(",") if name.strip()]
+    names = [name.strip() for name in raw.split(",") if name.strip()]
+    for extra in sorted(_EXTRA_NAMES):
+        if extra not in names:
+            names.append(extra)
+    return names
 
 
 def _current_values(names: list[str]) -> dict[str, str]:
@@ -66,7 +91,18 @@ def _current_values(names: list[str]) -> dict[str, str]:
         file_values = {}
     merged = dict(file_values)
     merged.update(os.environ)
-    return {name: merged.get(name, "") for name in names}
+    out = {name: merged.get(name, "") for name in names}
+    missing = [name for name, value in out.items() if not value]
+    if missing:
+        try:
+            from . import providers as providers_module
+            for name in missing:
+                value = providers_module.get_key_by_guard(name)
+                if value:
+                    out[name] = value
+        except Exception:
+            pass
+    return out
 
 
 def _digest(value: str) -> str:
@@ -159,9 +195,16 @@ def snapshot() -> list[dict[str, int | str]]:
     ]
 
 
+def reset_all_for_tests() -> None:
+    """Forget hashes, counts, and runtime-registered names (tests only)."""
+    reset()
+    _EXTRA_NAMES.clear()
+
+
 def reset() -> None:
-    """Forget hashes and counts (tests only)."""
+    """Forget hashes, counts, and runtime-registered names (tests only)."""
     _HASHES.clear()
     _LENGTHS.clear()
     _COUNTS.clear()
     _NAMES.clear()
+    _EXTRA_NAMES.clear()

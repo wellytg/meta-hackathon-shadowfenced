@@ -1,52 +1,69 @@
-/* Shadowfenced re-identification (T30) banner styles. */
+/* Shadowfenced re-identification (T30) banner styles.
+   T32: Classic language only — paper background, ink text, hard 2px
+   outlines, safety orange for blocked, steel blue for allowed/safe, amber
+   for review/warn, monospace for data. System fonts only. */
 
 .reid-banner {
   margin-top: 8px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border: 2px solid #16130e;
+  border-radius: 0;
+  box-shadow: 3px 3px 0 #16130e;
   font-size: 14px;
   line-height: 1.5;
+  background: #fffdf6;
+  color: #16130e;
 }
 
 .reid-banner.reid-warn {
-  background: #fff8e1;
-  border: 1px solid #e0c35a;
-  color: #5d4a00;
+  background: #f2c230;
+  border: 2px solid #16130e;
+  color: #16130e;
 }
 
 .reid-banner.reid-hold {
-  background: #fdecea;
-  border: 1px solid #d98a84;
-  color: #7a1f1a;
+  background: #ff5a1f;
+  border: 2px solid #16130e;
+  color: #16130e;
 }
 
 .reid-banner .reid-generalise {
   margin-left: 10px;
   padding: 2px 10px;
-  border-radius: 4px;
-  border: 1px solid currentColor;
+  border-radius: 0;
+  border: 2px solid currentColor;
   background: transparent;
   color: inherit;
   cursor: pointer;
   font-size: 13px;
+  font-weight: 700;
+  min-height: 32px;
 }
 
 .reid-banner .reid-generalise:hover {
-  background: rgba(0, 0, 0, 0.06);
+  background: rgba(22, 19, 14, 0.12);
 }
 
 .reid-note {
   margin-top: 6px;
   font-size: 13px;
-  opacity: 0.85;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #1d4257;
 }
 
 .reid-undo {
   margin-top: 4px;
   padding: 2px 10px;
-  border-radius: 4px;
-  border: 1px solid #888;
-  background: transparent;
+  border-radius: 0;
+  border: 2px solid #16130e;
+  background: #f7f2e7;
+  color: #16130e;
   cursor: pointer;
   font-size: 13px;
+  font-weight: 700;
+  min-height: 32px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reid-banner { transition: none; }
 }

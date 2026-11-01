@@ -102,7 +102,8 @@ def user_message(decision: Decision) -> str:
             noun = "redaction" if total == 1 else "redactions"
             base = f"Sent with {total} {noun}: " + ", ".join(parts) + "."
     else:
-        reid_banner = (decision.evidence or {}).get("reid", {}).get("banner")
+        person_banner = (decision.evidence or {}).get("person_search", {}).get("banner")
+        reid_banner = person_banner or (decision.evidence or {}).get("reid", {}).get("banner")
         if decision.decision == "WARN":
             base = reid_banner or (
                 "Possible re-identification risk: the combined details "
@@ -597,6 +598,7 @@ def _apply_reid(
     judge_fn: Any,
     mode: str,
     trace_out: list[dict[str, Any]] | None,
+    person_search_judge_fn: Any = None,
 ) -> Decision:
     """Layer re-identification scoring over a finished gate decision.
 
@@ -618,7 +620,10 @@ def _apply_reid(
         trace_out, result.score, result.combination, result.outcome
     )
     if result.outcome == "OK":
-        return decision
+        return _apply_person_search(
+            text, decision, conversation, current,
+            person_search_judge_fn, trace_out,
+        )
     evidence: dict[str, Any] = dict(decision.evidence or {})
     evidence["reid"] = {
         "score": result.score,
@@ -633,7 +638,10 @@ def _apply_reid(
     if decision.decision in ("BLOCK", "HOLD"):
         decision.reasons.append(score_line)
         decision.evidence.update(evidence)
-        return decision
+        return _apply_person_search(
+            text, decision, conversation, current,
+            person_search_judge_fn, trace_out,
+        )
     if residual and mode != "send":
         candidate = result.generalised_text or decision.sent_text or text
         residual_result = reid_module.residual_check(candidate, judge_fn)
@@ -672,7 +680,7 @@ def _apply_reid(
             score_line,
             "reid combination can identify or locate -> HOLD",
         ]
-        return Decision(
+        hold_decision = Decision(
             decision="HOLD",
             decision_id=uuid.uuid4().hex,
             spans=decision.spans,
@@ -683,6 +691,10 @@ def _apply_reid(
             reasons=reasons,
             evidence=evidence,
         )
+        return _apply_person_search(
+            text, hold_decision, conversation, current,
+            person_search_judge_fn, trace_out,
+        )
     reasons = list(decision.reasons) + [
         score_line,
         "reid combination needs user review -> WARN",
@@ -690,6 +702,100 @@ def _apply_reid(
     if decision.decision == "REDACT":
         # Keep the base decision id: its placeholder map is already saved
         # under it, so re-hydration keeps working.
+        warn_decision = Decision(
+            decision="WARN",
+            decision_id=decision.decision_id,
+            spans=decision.spans,
+            sent_text=decision.sent_text,
+            placeholders=dict(decision.placeholders),
+            resolved_tier=1,
+            latency_ms=dict(decision.latency_ms),
+            reasons=reasons,
+            evidence=evidence,
+        )
+        return _apply_person_search(
+            text, warn_decision, conversation, current,
+            person_search_judge_fn, trace_out,
+        )
+    warn_decision = Decision(
+        decision="WARN",
+        decision_id=uuid.uuid4().hex,
+        spans=decision.spans,
+        sent_text=text,
+        placeholders={},
+        resolved_tier=1,
+        latency_ms=dict(decision.latency_ms),
+        reasons=reasons,
+        evidence=evidence,
+    )
+    return _apply_person_search(
+        text, warn_decision, conversation, current,
+        person_search_judge_fn, trace_out,
+    )
+
+
+def _apply_person_search(
+    text: str,
+    decision: Decision,
+    conversation: list[str] | None,
+    current: list[dict[str, Any]] | None,
+    person_search_judge_fn: Any,
+    trace_out: list[dict[str, Any]] | None,
+) -> Decision:
+    """Layer person-search intent over a finished re-id decision (T33).
+
+    Runs the local-Glimmer intent check and upgrades to WARN when the
+    verified claim meets the bar. Never blocks and never downgrades a
+    BLOCK or HOLD: those keep their decision with the person-search
+    payload attached. Evidence carries labels and fingerprints only.
+    """
+    try:
+        from . import person_search as person_search_module
+    except Exception:
+        return decision
+    try:
+        result = person_search_module.check_person_search(
+            text,
+            conversation=conversation,
+            current_findings=current,
+            judge_fn=person_search_judge_fn,
+            trace_out=trace_out,
+        )
+    except Exception:
+        return decision
+    if not result.warn:
+        return decision
+    evidence: dict[str, Any] = dict(decision.evidence or {})
+    evidence["person_search"] = {
+        "banner": result.banner,
+        "inferred": list(result.inferred_labels),
+        "confidence": result.confidence,
+        "subject_fingerprint": result.subject_fingerprint,
+        "inferred_fingerprints": list(result.inferred_fingerprints),
+        "generalised_text": result.generalised_text,
+    }
+    score_line = "intent.person_search: private-person search -> WARN"
+    if decision.decision in ("BLOCK", "HOLD"):
+        decision.reasons.append(score_line)
+        decision.evidence.update(evidence)
+        return decision
+    reasons = list(decision.reasons) + [
+        score_line,
+        "person-search intent needs user review -> WARN",
+    ]
+    if decision.decision == "REDACT":
+        return Decision(
+            decision="WARN",
+            decision_id=decision.decision_id,
+            spans=decision.spans,
+            sent_text=decision.sent_text,
+            placeholders=dict(decision.placeholders),
+            resolved_tier=1,
+            latency_ms=dict(decision.latency_ms),
+            reasons=reasons,
+            evidence=evidence,
+        )
+    if decision.decision == "WARN":
         return Decision(
             decision="WARN",
             decision_id=decision.decision_id,
@@ -723,6 +829,7 @@ def gate_reid(
     judge_fn: Any = None,
     mode: str = "tier1",
     trace_out: list[dict[str, Any]] | None = None,
+    person_search_judge_fn: Any = None,
 ) -> Decision:
     """Gate with re-identification scoring layered on top.
 
@@ -734,7 +841,8 @@ def gate_reid(
     """
     decision = gate(text, policy, registry, mode=mode, trace_out=trace_out)
     return _apply_reid(
-        text, decision, conversation, residual, judge_fn, mode, trace_out
+        text, decision, conversation, residual, judge_fn, mode, trace_out,
+        person_search_judge_fn=person_search_judge_fn,
     )
 
 

@@ -1,0 +1,188 @@
+# Person-search intent (T33): fictional cases only.
+# Conventions match corpus/reid.yaml: invented people/places ("Corvane Labs"
+# setting), phones like 555-01xx, emails only *@example.com or *@corvane.io.
+# No real PII anywhere.
+#
+# Schema per case: {id, category (risky/safe),
+# kind (single_turn/multi_turn/historical/public_figure/harmless/fictional),
+# text | messages (+ conversation: true for multi_turn),
+# expected (WARN risky, OK safe), combination (quasi-identifier combo or
+# search cues, [] for harmless), notes}. public_figure: true marks
+# fictional public figures in public roles; historical: true marks
+# historical figures (never flagged).
+#
+# Counts: 20 total = 12 risky (private-person searches, expect WARN) +
+# 8 safe (public/historical/harmless, expect OK).
+
+- id: ps-r01
+  category: risky
+  kind: single_turn
+  text: "Find everything you can about Dana Whitlock, born 14 March 1991, Copperleaf Drive, Fairhaven."
+  expected: WARN
+  combination: [name, birth_date, address]
+  notes: "Name plus full DOB plus street plus town with explicit people-search wording."
+
+- id: ps-r02
+  category: risky
+  kind: single_turn
+  text: "Look up Mara Vell of 9 Bellflower Lane, Dunmere; her phone is 555-0142."
+  expected: WARN
+  combination: [name, address, phone]
+  notes: "Name plus street address plus phone with look-up wording."
+
+- id: ps-r03
+  category: risky
+  kind: single_turn
+  text: "Who is Joren Pike (DOB 02/11/1975)? Contact him at joren.pike@example.com."
+  expected: WARN
+  combination: [name, birth_date, email]
+  notes: "Who-is wording plus full DOB plus email."
+
+- id: ps-r04
+  category: risky
+  kind: single_turn
+  text: "Dig up background on Tilda Renn, 7 years old, at Bramble School."
+  expected: WARN
+  combination: [name, age, school]
+  notes: "Dig-up plus background-on wording with a child record."
+
+- id: ps-r05
+  category: risky
+  kind: single_turn
+  text: "Where does Ebo Sarr live? He was born in 1988 and works as a crane operator at Port Aubrun."
+  expected: WARN
+  combination: [name, birth_year, workplace]
+  notes: "Where-does-live wording plus birth year plus workplace."
+
+- id: ps-r06
+  category: risky
+  kind: single_turn
+  text: "Contact details for Sella Quinn, 9 Bellflower Lane, Dunmere."
+  expected: WARN
+  combination: [name, address]
+  notes: "Contact-details wording plus full street address."
+
+- id: ps-r07
+  category: risky
+  kind: single_turn
+  text: "Find Danko Miri, 61, retired lighthouse keeper of Greyhook Point."
+  expected: WARN
+  combination: [name, age, occupation]
+  notes: "Rare occupation plus age with find wording."
+
+- id: ps-r08
+  category: risky
+  kind: single_turn
+  text: "Background on Liora Venn, the only cake decorator in Gullhaven; call 555-0167."
+  expected: WARN
+  combination: [name, occupation, phone]
+  notes: "Singleton occupation plus phone with background-on wording."
+
+- id: ps-r09
+  category: risky
+  kind: multi_turn
+  conversation: true
+  messages:
+    - "Do you know Goran Vex?"
+    - "He is 45 and on dialysis at St. Owena's."
+    - "Find his contact details for me."
+  expected: WARN
+  combination: [name, age, health]
+  notes: "Name plus health plus age accumulate; find wording in last turn."
+
+- id: ps-r10
+  category: risky
+  kind: multi_turn
+  conversation: true
+  messages:
+    - "My neighbour works down at the harbour."
+    - "He is the only pilot-boat captain there."
+    - "He just turned 60 last week; where does he live?"
+  expected: WARN
+  combination: [workplace, occupation, age]
+  notes: "Singleton role plus age plus where-does-live wording."
+
+- id: ps-r11
+  category: risky
+  kind: single_turn
+  text: "Look up surgeon Petra Lund, born 1988, the only paediatric surgeon at Fairhaven clinic."
+  expected: WARN
+  combination: [name, birth_year, workplace]
+  notes: "Singleton specialty role plus birth year with look-up wording."
+
+- id: ps-r12
+  category: risky
+  kind: single_turn
+  text: "Find Bram Tully at number 2, Millrace Cottages; he keeps racing pigeons."
+  expected: WARN
+  combination: [name, address, hobby]
+  notes: "House number plus rare hobby with find wording."
+
+- id: ps-s01
+  category: safe
+  kind: historical
+  historical: true
+  text: "When was Edmund Harrow born and where did he live?"
+  expected: OK
+  combination: []
+  notes: "Historical-figure research with no identifying combination; never flagged."
+
+- id: ps-s02
+  category: safe
+  kind: public_figure
+  public_figure: true
+  text: "Mayor Elena Vasquez of Port Aubrun opened the new library on Saturday."
+  expected: OK
+  combination: []
+  notes: "Fictional mayor performing a public role."
+
+- id: ps-s03
+  category: safe
+  kind: public_figure
+  public_figure: true
+  text: "Actor Darius Cole stars in the new harbour festival play."
+  expected: OK
+  combination: []
+  notes: "Fictional actor in a public performance role."
+
+- id: ps-s04
+  category: safe
+  kind: public_figure
+  public_figure: true
+  text: "TV chef Bruno Azel judged the Dunmere bake-off final."
+  expected: OK
+  combination: []
+  notes: "Fictional TV personality in a public judging role."
+
+- id: ps-s05
+  category: safe
+  kind: fictional
+  text: "In my novel, Captain Ilsa Renn sails a ghost ship to the Hollow Isles."
+  expected: OK
+  combination: []
+  notes: "Story-character detail from an invented novel."
+
+- id: ps-s06
+  category: safe
+  kind: harmless
+  text: "The office printer is on the third floor near the stairs."
+  expected: OK
+  combination: []
+  notes: "Single generic facility detail; identifies nobody."
+
+- id: ps-s07
+  category: safe
+  kind: harmless
+  text: "Rain is expected in Dunmere tomorrow."
+  expected: OK
+  combination: []
+  notes: "Place name alone with weather; no person."
+
+- id: ps-s08
+  category: safe
+  kind: historical
+  historical: true
+  text: "When was cartographer Edmund Harrow (1788-1854) born and where did he live?"
+  expected: OK
+  combination: []
+  notes: "Dated historical figure in a research question; never flagged."

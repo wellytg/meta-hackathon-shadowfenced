@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -24,6 +24,7 @@ from . import engine
 from . import holds
 from . import hosted as hosted_module
 from . import keyguard as keyguard_module
+from . import providers as providers_registry
 from . import judge as judge_module
 from .canary import CanaryRegistry
 from .config import Settings, get_settings
@@ -155,7 +156,9 @@ def reset_provider_override() -> None:
 
 def default_provider() -> str:
     """Effective default provider: explicit override, else settings."""
-    if _PROVIDER_OVERRIDE in ("meta", "ollama"):
+    if _PROVIDER_OVERRIDE is not None and providers_registry.get_provider(
+        _PROVIDER_OVERRIDE
+    ) is not None:
         return _PROVIDER_OVERRIDE
     return get_settings().upstream or "ollama"
 
@@ -163,7 +166,7 @@ def default_provider() -> str:
 def resolve_provider(provider: str | None) -> str:
     """Per-request provider: explicit choice, else the default."""
     name = (provider or "").strip().lower()
-    if name in ("meta", "ollama"):
+    if providers_registry.get_provider(name) is not None:
         return name
     return default_provider()
 
@@ -176,15 +179,7 @@ PROVIDER_LABELS = {
 
 def provider_list() -> list[dict[str, Any]]:
     """Serialise the provider catalogue for GET /api/providers."""
-    settings = get_settings()
-    return [
-        {
-            "id": "meta",
-            "label": PROVIDER_LABELS["meta"],
-            "available": settings.meta_available,
-        },
-        {"id": "ollama", "label": PROVIDER_LABELS["ollama"], "available": True},
-    ]
+    return providers_registry.describe_all()
 
 
 def _doc_fields(text: str) -> dict[str, Any]:
@@ -720,6 +715,15 @@ class RuleRequest(BaseModel):
 
 class ProviderRequest(BaseModel):
     id: str = ""
+
+
+class ProviderKeyRequest(BaseModel):
+    key: str = ""
+
+
+class ProviderOAuthExchange(BaseModel):
+    code: str = ""
+    session_id: str = ""
 
 
 @app.get("/api/health")
@@ -1395,6 +1399,121 @@ async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
     return handle_upload(file.filename or "upload", data)
 
 
+# --- voice dictation (T34) --------------------------------------------------
+
+
+DICTATION_MAX_BYTES = 5 * 1024 * 1024
+DICTATION_MAX_SECONDS = 60.0
+DICTATION_SUFFIXES = (".webm", ".ogg", ".wav", ".m4a")
+
+
+def _dictation_error(status_code: int, code: str, message: str) -> HTTPException:
+    """Build a dictation error that never carries transcript text."""
+    return HTTPException(
+        status_code=status_code,
+        detail={
+            "code": code,
+            "type": code,
+            "message": message,
+        },
+    )
+
+
+def handle_transcribe(
+    filename: str,
+    data: bytes,
+    duration: str | float | None = None,
+    *,
+    transport: Any | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Transcribe one short voice clip and return ``{"text": ...}``.
+
+    Sync core of ``POST /api/transcribe`` so tests can call it
+    without an event loop (mirrors :func:`handle_upload`). Raises
+    ``HTTPException`` on every failure; the error never carries
+    transcript text.
+    """
+    if hosted_module.is_hosted():
+        cfg = settings or get_settings()
+        if not cfg.hosted_dictation:
+            raise _dictation_error(
+                403,
+                "shadowfenced_dictation_disabled",
+                "dictation is disabled in hosted demo mode",
+            )
+    if duration not in (None, ""):
+        try:
+            seconds = float(duration)
+        except (TypeError, ValueError):
+            raise _dictation_error(
+                400,
+                "shadowfenced_bad_duration",
+                "duration must be a number of seconds",
+            ) from None
+        if seconds > DICTATION_MAX_SECONDS:
+            raise _dictation_error(
+                413,
+                "shadowfenced_audio_too_long",
+                "audio clip exceeds 60 seconds",
+            )
+    if not data:
+        raise _dictation_error(
+            400,
+            "shadowfenced_empty_audio",
+            "audio clip is empty",
+        )
+    if len(data) > DICTATION_MAX_BYTES:
+        raise _dictation_error(
+            413,
+            "shadowfenced_audio_too_large",
+            "audio clip exceeds 5 MB",
+        )
+    lowered = (filename or "").lower()
+    if not any(lowered.endswith(suffix) for suffix in DICTATION_SUFFIXES):
+        raise _dictation_error(
+            415,
+            "shadowfenced_unsupported_audio",
+            "unsupported audio type; use webm, ogg, wav, or m4a",
+        )
+    from . import transcribe as transcribe_module
+
+    if transport is None:
+        transport = getattr(app.state, "transcribe_transport", None)
+    try:
+        text_out = transcribe_module.transcribe_audio_sync(
+            filename, data, settings=settings or get_settings(),
+            transport=transport,
+        )
+    except TranscribeError as exc:
+        raise _dictation_error(
+            502,
+            "shadowfenced_transcribe_failed",
+            f"transcription failed: {exc}",
+        ) from exc
+    return {"text": text_out}
+
+
+@app.post("/api/transcribe")
+async def transcribe_clip(
+    file: UploadFile = File(...),
+    duration: str | None = Form(default=None),
+) -> dict[str, Any]:
+    """Transcribe one short voice clip with Muse Voice Transcribe.
+
+    Accepts a single audio clip (``webm``/``ogg``/``wav``/``m4a``),
+    at most 60 seconds and 5 MB, and returns ``{"text": ...}``.
+    The transcript is never forwarded to any chat model here; the
+    caller inserts it into the composer so the normal live scan
+    runs before anything is sent. Every failure (including
+    timeouts) raises a clear error with no ``text`` field.
+
+    Disabled in hosted demo mode unless ``SF_HOSTED_DICTATION=1``.
+    """
+    data = await file.read()
+    return handle_transcribe(file.filename or "", data, duration)
+
+
 @app.get("/api/providers")
 def providers() -> dict[str, Any]:
     """List the upstream providers with availability and the default."""
@@ -1403,10 +1522,10 @@ def providers() -> dict[str, Any]:
 
 @app.post("/api/provider")
 def set_provider(body: ProviderRequest) -> dict[str, Any]:
-    """Set the default upstream provider (``meta`` or ``ollama``)."""
+    """Set the default upstream provider (any registry id)."""
     global _PROVIDER_OVERRIDE
     name = (body.id or "").strip().lower()
-    if name not in ("meta", "ollama"):
+    if providers_registry.get_provider(name) is None:
         raise HTTPException(
             status_code=404,
             detail={
@@ -1417,6 +1536,200 @@ def set_provider(body: ProviderRequest) -> dict[str, Any]:
         )
     _PROVIDER_OVERRIDE = name
     return {"default": name, "providers": provider_list()}
+
+
+def _provider_or_404(provider_id: str) -> Any:
+    """Registry entry for one provider id (404 when unknown)."""
+    provider = providers_registry.get_provider(provider_id)
+    if provider is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "shadowfenced_unknown_provider",
+                "type": "shadowfenced_unknown_provider",
+                "message": f"unknown provider {provider_id!r}",
+            },
+        )
+    return provider
+
+
+def _refuse_hosted_storage() -> None:
+    """Reject key storage in hosted demo mode (storing keys is disabled)."""
+    if hosted_module.is_hosted():
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "shadowfenced_hosted_keys_disabled",
+                "type": "shadowfenced_hosted_keys_disabled",
+                "message": "key storage is disabled in the hosted demo",
+            },
+        )
+
+
+def _probe_provider(provider: Any) -> tuple[bool, str]:
+    """One tiny request against a provider; returns (ok, message).
+
+    Only ok/error text is returned: fixed strings, status codes, and
+    exception type names -- never the key and never response bodies.
+    """
+    import httpx
+
+    from .upstream import _verify_for as _upstream_verify
+
+    transports = getattr(app.state, "provider_test_transports", None) or {}
+    transport = transports.get(provider.id) or _transport()
+    if provider.needs_key and not providers_registry.is_connected(provider.id):
+        return False, "no API key stored"
+    if provider.id == "ollama":
+        url = get_settings().ollama_url.rstrip("/") + "/api/version"
+        headers: dict[str, str] = {}
+    else:
+        url = provider.base_url.rstrip("/") + "/models"
+        key = providers_registry.get_key(provider.id)
+        headers = {"Authorization": "Bearer " + key} if key else {}
+    try:
+        with httpx.Client(
+            transport=transport, timeout=15.0, verify=_upstream_verify(url)
+        ) as client:
+            response = client.get(url, headers=headers)
+    except Exception as exc:
+        return False, f"connection failed: {type(exc).__name__}"
+    if response.status_code == 200:
+        return True, "connection ok"
+    if response.status_code in (401, 403):
+        return False, "provider rejected the key"
+    return False, f"provider returned status {response.status_code}"
+
+
+@app.post("/api/providers/{provider_id}/key")
+def store_provider_key(provider_id: str, body: ProviderKeyRequest) -> dict[str, Any]:
+    """Store one provider's API key in the OS credential store.
+
+    Falls back to the git-ignored ``.env`` file only when no keyring
+    backend exists (see the ``storage`` field). The key is never
+    returned, logged, or placed in traces.
+    """
+    _refuse_hosted_storage()
+    provider = _provider_or_404(provider_id)
+    if not provider.needs_key:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "shadowfenced_no_key_needed",
+                "type": "shadowfenced_no_key_needed",
+                "message": f"provider {provider.id!r} needs no key",
+            },
+        )
+    if not (body.key or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "shadowfenced_empty_key",
+                "type": "shadowfenced_empty_key",
+                "message": "empty key",
+            },
+        )
+    backend = providers_registry.store_key(provider.id, body.key)
+    return {"ok": True, "connected": True, "storage": backend}
+
+
+@app.delete("/api/providers/{provider_id}/key")
+def delete_provider_key(provider_id: str) -> dict[str, Any]:
+    """Forget one provider's stored key (OS store and ``.env`` fallback)."""
+    _refuse_hosted_storage()
+    provider = _provider_or_404(provider_id)
+    providers_registry.delete_key(provider.id)
+    return {
+        "ok": True,
+        "connected": providers_registry.is_connected(provider.id),
+    }
+
+
+@app.post("/api/providers/{provider_id}/test")
+def check_provider_connection(provider_id: str) -> dict[str, Any]:
+    """One tiny request against a provider; ok/error text only."""
+    provider = _provider_or_404(provider_id)
+    ok, message = _probe_provider(provider)
+    return {"ok": ok, "message": message}
+
+
+@app.post("/api/providers/openrouter/oauth/start")
+def start_openrouter_oauth() -> dict[str, Any]:
+    """Begin the OpenRouter PKCE login (callback stays on 127.0.0.1)."""
+    _refuse_hosted_storage()
+    try:
+        return providers_registry.start_oauth_session()
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "shadowfenced_hosted_keys_disabled",
+                "type": "shadowfenced_hosted_keys_disabled",
+                "message": str(exc),
+            },
+        ) from exc
+
+
+def _finish_openrouter_oauth(code: str, session_id: str) -> dict[str, Any]:
+    """Exchange one OAuth code and store the returned key (never echoed)."""
+    _refuse_hosted_storage()
+    transports = getattr(app.state, "provider_test_transports", None) or {}
+    transport = transports.get("openrouter") or _transport()
+    try:
+        backend = providers_registry.exchange_code(
+            code, session_id, transport=transport
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "shadowfenced_hosted_keys_disabled",
+                "type": "shadowfenced_hosted_keys_disabled",
+                "message": str(exc),
+            },
+        ) from exc
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "shadowfenced_unknown_oauth_session",
+                "type": "shadowfenced_unknown_oauth_session",
+                "message": "unknown or expired login session",
+            },
+        ) from exc
+    except ConnectionError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "shadowfenced_upstream",
+                "type": "shadowfenced_upstream",
+                "message": "key exchange unreachable",
+            },
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "shadowfenced_oauth_exchange_failed",
+                "type": "shadowfenced_oauth_exchange_failed",
+                "message": "key exchange failed",
+            },
+        ) from exc
+    return {"ok": True, "connected": True, "storage": backend}
+
+
+@app.get("/api/providers/openrouter/oauth/callback")
+def openrouter_oauth_callback(
+    code: str = "", session_id: str = ""
+) -> dict[str, Any]:
+    """Loopback OAuth callback (127.0.0.1): swap ``code`` for a key."""
+    return _finish_openrouter_oauth(code, session_id)
+
+
+@app.post("/api/providers/openrouter/oauth/exchange")
+def exchange_openrouter_oauth(body: ProviderOAuthExchange) -> dict[str, Any]:
+    """Headless variant: paste the code OpenRouter shows on screen."""
+    return _finish_openrouter_oauth(body.code, body.session_id)
 
 
 @app.get("/api/log/verify")
@@ -1455,9 +1768,11 @@ def _stream_response(
     )
 
 
+from .ext_api import mount_ext_api
 from .rules import router as rules_router
 
 app.include_router(rules_router)
+mount_ext_api(app)
 # include_router wraps the app lifespan even when the router has none;
 # restore the original only when it was actually wrapped, so startup
 # behaviour (and its identity) is unchanged on old and new FastAPI.

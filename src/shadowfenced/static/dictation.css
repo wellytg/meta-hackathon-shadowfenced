@@ -1,0 +1,84 @@
+/* Voice dictation (T34) styles: mic button, consent notice, status line. */
+
+.sf-mic-btn {
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sf-mic-btn:hover {
+  background: #eef2ff;
+}
+
+.sf-mic-btn:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 2px;
+}
+
+.sf-mic-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.sf-mic-btn.sf-mic-recording {
+  border-color: #dc2626;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-variant-numeric: tabular-nums;
+}
+
+.sf-dictation-notice {
+  border: 1px solid #cbd5e1;
+  background: #fffbeb;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 8px;
+  max-width: 420px;
+}
+
+.sf-dictation-notice p {
+  margin: 0 0 8px;
+}
+
+.sf-dictation-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.sf-dictation-actions button {
+  border: 1px solid #94a3b8;
+  background: #ffffff;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.sf-dictation-actions button:first-child {
+  background: #4f46e5;
+  border-color: #4f46e5;
+  color: #ffffff;
+}
+
+.sf-dictation-actions button:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 2px;
+}
+
+.sf-dictation-msg {
+  margin-top: 6px;
+  color: #475569;
+  font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sf-mic-btn,
+  .sf-dictation-notice,
+  .sf-dictation-actions button {
+    transition: none;
+    animation: none;
+  }
+}

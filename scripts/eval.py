@@ -38,9 +38,9 @@ JUDGE_MODELS = {"glimmer": "muse-glimmer:30b", "llama": "llama3.2:3b"}
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate shadowfenced.")
     parser.add_argument("--judge", choices=("glimmer", "llama", "none"),
-                        required=True)
+                        default="none")
     parser.add_argument("--limit", type=int, default=0)
-    parser.add_argument("--corpus", default="cases", help="corpus name under corpus/ (cases | holdout | reid)")
+    parser.add_argument("--corpus", default="cases", help="corpus name under corpus/ (cases | holdout | reid | person_search)")
     parser.add_argument("--seed", default=None)
     return parser.parse_args(argv)
 
@@ -344,6 +344,113 @@ def _main_reid(args, seed, policy, registry):
     return report
 
 
+
+def evaluate_person_search_cases(cases, *, policy, registry):
+    """Score every person-search case; conversations accumulate."""
+    import time as _time
+
+    from shadowfenced import engine
+
+    rows = []
+    for case in cases:
+        messages = case.get("messages") or [case.get("text", "")]
+        prior, last = messages[:-1], messages[-1]
+        gate_started = _time.perf_counter()
+        decision = engine.gate_reid(last, policy, registry, conversation=prior)
+        gate_ms = (_time.perf_counter() - gate_started) * 1000
+        final = decision.decision
+        risky = case.get("category") == "risky"
+        flagged = final in ("WARN", "HOLD")
+        expected = case.get("expected", "WARN" if risky else "OK")
+        meets = flagged if risky else not flagged
+        if expected == "WARN" and risky:
+            meets_expect = flagged
+        elif expected == "OK" and not risky:
+            meets_expect = not flagged
+        else:
+            meets_expect = final == expected
+        evidence = decision.evidence or {}
+        combo = ((evidence.get("reid") or {}).get("combination", []) or [])
+        ps_info = evidence.get("person_search") or {}
+        rows.append({
+            "id": case.get("id"),
+            "kind": case.get("kind"),
+            "risky": risky,
+            "expected": expected,
+            "gate": decision.decision,
+            "final": final,
+            "flagged": flagged,
+            "meets_expect": meets_expect,
+            "combination": list(combo),
+            "person_search": bool(ps_info),
+            "gate_ms": round(gate_ms, 2),
+        })
+    return rows
+
+
+def compute_person_search_metrics(rows):
+    """Aggregate person-search rows into catch and false-warning rates."""
+    risky = [row for row in rows if row["risky"]]
+    safe = [row for row in rows if not row["risky"]]
+
+    def _share(part, whole):
+        return round(part / whole, 4) if whole else 0.0
+
+    return {
+        "n": len(rows),
+        "n_risky": len(risky),
+        "n_safe": len(safe),
+        "catch_rate": _share(
+            sum(1 for row in risky if row["flagged"]), len(risky)),
+        "false_warning_rate": _share(
+            sum(1 for row in safe if row["flagged"]), len(safe)),
+    }
+
+
+def print_person_search_table(rows, metrics):
+    """Print one compact line per person-search case plus the summary."""
+    print(f"{'id':<12}{'kind':<12}{'expected':<9}{'final':<7}combination")
+    for row in rows:
+        combo = "+".join(row["combination"]) or ("ps" if row["person_search"] else "-")
+        print(f"{row['id']:<12}{row['kind']:<12}{row['expected']:<9}"
+              f"{row['final']:<7}{combo}")
+    print(f"n={metrics['n']} risky={metrics['n_risky']} "
+          f"safe={metrics['n_safe']} catch_rate={metrics['catch_rate']} "
+          f"false_warning_rate={metrics['false_warning_rate']}")
+
+
+def _main_person_search(args, seed, policy, registry):
+    """Run the person-search eval; return the report dict (also written)."""
+    raw = yaml.safe_load(
+        (ROOT / "corpus" / "person_search.yaml").read_text(encoding="utf-8"))
+    if args.limit:
+        raw = raw[:args.limit]
+    gate_started = time.perf_counter()
+    rows = evaluate_person_search_cases(raw, policy=policy, registry=registry)
+    wall_s = round(time.perf_counter() - gate_started, 1)
+    metrics = compute_person_search_metrics(rows)
+    report = build_report(
+        rows,
+        metrics,
+        {
+            "judge": args.judge,
+            "corpus": "person_search",
+            "judge_model": None,
+            "seed": seed,
+            "git_sha": _git_sha(),
+            "date": datetime.now().isoformat(timespec="seconds"),
+            "keep_alive": "5m",
+            "wall_s": wall_s,
+        },
+    )
+    out = ROOT / "runs" / f"eval_{date.today().isoformat()}_person_search_{args.judge}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print_person_search_table(rows, metrics)
+    print(f"wrote {out}")
+    return report
+
+
 def main(argv: list[str] | None = None) -> dict[str, Any]:
     """Run the eval; return the report dict (also written to runs/)."""
     args = _parse_args(argv)
@@ -371,6 +478,8 @@ def main(argv: list[str] | None = None) -> dict[str, Any]:
     registry = CanaryRegistry(settings.canary_seed, REGISTRY_KINDS)
     if args.corpus == "reid":
         return _main_reid(args, seed, policy, registry)
+    if args.corpus == "person_search":
+        return _main_person_search(args, seed, policy, registry)
     raw = load_cases(ROOT / "corpus" / f"{args.corpus}.yaml")
     if args.limit:
         raw = raw[:args.limit]

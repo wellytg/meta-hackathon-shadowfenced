@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shadowfenced</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main class="sf-popup">
+  <h1>Shadowfenced</h1>
+  <p id="status" class="sf-status sf-unknown">Checking app&hellip;</p>
+
+  <label class="sf-label" for="token">Pairing token</label>
+  <div class="sf-row">
+    <input id="token" type="password" autocomplete="off" placeholder="Paste pairing token">
+    <button id="save" type="button">Save</button>
+  </div>
+  <p id="saved" class="sf-hint" hidden>Saved.</p>
+
+  <h2>Guard on these sites</h2>
+  <div id="sites">
+    <label><input type="checkbox" data-site="chatgpt" checked> chatgpt.com</label>
+    <label><input type="checkbox" data-site="claude" checked> claude.ai</label>
+    <label><input type="checkbox" data-site="gemini" checked> gemini.google.com</label>
+    <label><input type="checkbox" data-site="meta" checked> meta.ai</label>
+  </div>
+
+  <p class="sf-hint">Files you attach are never scanned &mdash; you only get a warning badge.</p>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>
