@@ -25,16 +25,18 @@ from . import holds
 from . import keyguard as keyguard_module
 from . import judge as judge_module
 from .canary import CanaryRegistry
-from .config import get_settings
+from .config import Settings, get_settings
 from .extract import (
     FileTooLarge,
     Unscannable,
     UnsupportedType,
     extract_text,
+    is_audio_file,
 )
 from .policy import Policy, load_policy
 from .redact import load_mapping, rehydrate, save_mapping
 from .spans import Span, cp_to_utf16, make_span_id, span_from_cp_range
+from .transcribe import TranscribeError
 from .uploads import UPLOADS
 from .upstream import UpstreamError, chat_sync
 
@@ -1169,8 +1171,94 @@ def stats() -> dict[str, Any]:
     return stats_module.snapshot(get_settings().log_path)
 
 
-def handle_upload(filename: str, data: bytes) -> dict[str, Any]:
+def _handle_audio_upload(
+    filename: str,
+    data: bytes,
+    *,
+    transport: Any | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Transcribe one audio file, then scan the transcript like any upload.
+
+    The transcript is stored and gated exactly like a document; any
+    transcription failure stores an ``unscannable`` record so the send
+    path HOLDs instead of passing unchecked audio.
+    """
+    from . import tier1
+    from . import transcribe as transcribe_module
+    from .extract import MAX_AUDIO_BYTES
+
+    if transport is None:
+        transport = getattr(app.state, "transcribe_transport", None)
+    cfg = settings or get_settings()
+    try:
+        if len(data) > MAX_AUDIO_BYTES:
+            raise FileTooLarge(f"file exceeds {MAX_AUDIO_BYTES} bytes")
+        text = transcribe_module.transcribe_audio_sync(
+            filename, data, settings=cfg, transport=transport
+        )
+    except (FileTooLarge, TranscribeError) as exc:
+        record = UPLOADS.save(
+            filename, "audio", "", status="unscannable",
+        )
+        return {
+            "file_id": record.file_id,
+            "name": filename,
+            "kind": "audio",
+            "chars": 0,
+            "status": "unscannable",
+            "spans": [],
+            "summary": {},
+            "summary_text": "Transcribed by Muse Voice · could not read file",
+            "error": str(exc),
+        }
+    if not text.strip():
+        record = UPLOADS.save(
+            filename, "audio", "", status="unscannable",
+        )
+        return {
+            "file_id": record.file_id,
+            "name": filename,
+            "kind": "audio",
+            "chars": 0,
+            "status": "unscannable",
+            "spans": [],
+            "summary": {},
+            "summary_text": "Transcribed by Muse Voice · could not read file",
+            "error": "transcription returned no text",
+        }
+    spans = tier1.scan(text, get_policy(), get_registry())
+    status = "flagged" if spans else "clean"
+    record = UPLOADS.save(filename, "audio", text, status=status)
+    summary: dict[str, int] = {}
+    for span in spans:
+        summary[span.cls] = summary.get(span.cls, 0) + 1
+    if spans:
+        from .redact import redact as _redact
+
+        _, mapping = _redact(text, [s for s in spans if s.status == "proven"])
+        summary_text = ", ".join(engine.describe_placeholders(mapping))
+        if not summary_text:
+            summary_text = f"{len(spans)} possible issue(s) need review"
+    else:
+        summary_text = "clean"
+    return {
+        "file_id": record.file_id,
+        "name": filename,
+        "kind": "audio",
+        "chars": len(text),
+        "status": status,
+        "spans": [span_to_dict(s) for s in spans],
+        "summary": summary,
+        "summary_text": "Transcribed by Muse Voice · " + summary_text,
+    }
+
+
+def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, settings: Settings | None = None) -> dict[str, Any]:
     """Validate, extract, scan, and store one uploaded file.
+
+    Audio files are transcribed by Muse Voice Transcribe first; the
+    transcript is then scanned like any other document.
 
     Returns the ``/api/upload`` payload. Raises ``HTTPException`` 415
     for an unsupported suffix; oversized or unparseable input stores an
@@ -1179,6 +1267,10 @@ def handle_upload(filename: str, data: bytes) -> dict[str, Any]:
     from . import tier1
 
     try:
+        if is_audio_file(filename):
+            return _handle_audio_upload(
+                filename, data, transport=transport, settings=settings
+            )
         kind, text = extract_text(filename, data)
     except UnsupportedType as exc:
         raise HTTPException(
