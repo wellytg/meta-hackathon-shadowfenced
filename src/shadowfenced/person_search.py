@@ -19,7 +19,9 @@ people search, then verifies the claim in code (Tier 3):
   and each ``inferred`` item is tied to an exact substring;
 - code keeps only ``subject``/``inferred`` items that appear exactly
   in the message. ``person_search`` true + ``subject_public`` false +
-  confidence >= 0.6 with a verified subject => WARN (never block).
+  confidence >= 0.6 with a verified subject + lookup intent +
+  people-search wording => WARN (never block). Other messages fall
+  back to the re-identification outcome.
   Public figures in public roles and historical figures are not flagged.
 
 Raw values never leave this module except inside caller-held return
@@ -87,6 +89,7 @@ class PersonSearchJudgement(BaseModel):
     subject: str
     inferred: list[str]
     confidence: float
+    intent: str | None = None
 
     @field_validator("confidence")
     @classmethod
@@ -111,10 +114,25 @@ class PersonSearchJudgement(BaseModel):
             raise ValueError("inferred must be a list")
         return [item for item in value if isinstance(item, str)][:5]
 
+    @field_validator("intent")
+    @classmethod
+    def _intent_is_word(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return None
+        cleaned = value.strip().lower()
+        return cleaned or None
+
 
 PERSON_SEARCH_SYSTEM = (
     "Decide if a message seeks a private person (identity, "
-    "whereabouts, background, contacts). Historical or public-"
+    "whereabouts, background, contacts). intent is lookup for "
+    "FIND or LOOK UP requests, other for replies or descriptions; "
+    "person_search only when lookup. Historical or public-"
+
+
+
     "figure research is not a person search. subject is the "
     "exact full name from the text, or empty when there is "
     "none. inferred lists up to 5 short facts copied "
@@ -201,6 +219,19 @@ def local_glimmer_person_search(
                 return None
     except Exception:
         return None
+
+
+def _intent_is_lookup(parsed: PersonSearchJudgement) -> bool:
+    """True when the judge claims a lookup request.
+
+    Legacy judges predate ``intent`` (None): they pass here and the
+    people-search wording check in the caller still applies, so old
+    verdicts keep working on real searches.
+    """
+    intent = getattr(parsed, "intent", None)
+    if intent is None:
+        return True
+    return str(intent).strip().lower() == "lookup"
 
 
 def _parse_judgement(raw: Any) -> PersonSearchJudgement | None:
@@ -527,7 +558,8 @@ def check_person_search(
 
     Returns a :class:`PersonSearchResult`; ``warn`` is True only when the
     verified Glimmer claim meets the T33 bar (person_search true,
-    subject_public false, confidence >= 0.6 with a verified subject).
+    subject_public false, confidence >= 0.6 with a verified subject,
+    lookup intent, and people-search wording in the message).
     Every failure -- no trigger, unavailable Glimmer, unparsable or
     unverifiable claim -- returns ``warn=False`` so the caller falls back
     to the code-only re-identification result. The trace step
@@ -576,6 +608,8 @@ def check_person_search(
         and not parsed.subject_public
         and confidence >= 0.6
         and verified_subject
+        and _intent_is_lookup(parsed)
+        and has_search_wording(combined)
     ):
         labels = [_label_for_fact(fact, findings) for fact in verified_inferred]
         # The verified name itself is always inferable: name it first.
@@ -610,6 +644,7 @@ def check_person_search(
     _trace_drop(
         trace_out, parsed.person_search, parsed.subject_public,
         confidence, bool(verified_subject), len(verified_inferred),
+        getattr(parsed, "intent", None),
     )
     return PersonSearchResult(
         triggered=True,
@@ -668,15 +703,23 @@ def _trace_drop(
     trace: list[dict[str, Any]] | None,
     person_search: bool, subject_public: bool,
     confidence: float, has_subject: bool, n_inferred: int,
+    intent: Any = None,
 ) -> None:
     if trace is None:
         return
+    try:
+        intent_label = str(intent).strip().lower() if intent else "unknown"
+    except Exception:
+        intent_label = "unknown"
+    if intent_label not in ("lookup", "other"):
+        intent_label = "unknown"
     detail = (
         f"person_search={str(person_search).lower()} "
         f"subject_public={str(subject_public).lower()} "
         f"confidence={confidence:.2f} "
         f"verified_subject={str(bool(has_subject)).lower()} "
-        f"verified_inferred={n_inferred}"
+        f"verified_inferred={n_inferred} "
+        f"intent={intent_label}"
     )
     trace.append({
         "step": "intent.person_search", "tool": "glimmer",
