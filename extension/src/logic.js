@@ -1,7 +1,7 @@
 'use strict';
 
 /* Shadowfenced shared logic.
- * Pure functions only — no browser APIs — so this file loads in Node
+ * Pure functions only â€” no browser APIs â€” so this file loads in Node
  * (tests) as well as in content scripts / service workers.
  * content.js and adapters.js reuse these via globalThis.ShadowfencedLogic
  * (logic.js is listed first in content_scripts); where a direct reference
@@ -77,11 +77,220 @@ function failSafeDecision(input) {
   }
 }
 
+/* Popup three-state status from a background SF_HEALTH reply.
+ * {ok:true} means Connected; HTTP 401/403 (missing or wrong token, bad
+ * origin) means Not paired; anything else (network error, app down)
+ * means Not running. */
+function healthToStatus(res) {
+  if (res && res.ok) return { text: 'Connected \u00b7 checking locally', tone: 'ok' };
+  if (res && (res.status === 401 || res.status === 403)) {
+    return { text: 'Not paired \u2014 paste your token', tone: 'warn' };
+  }
+  return { text: 'Not running \u2014 start Shadowfenced', tone: 'bad' };
+}
+
+/* Map the /api/ext/redact payload ({decision, safe_text, notes, id})
+ * onto the internal send-decision shape ({action, reason, safe_text,
+ * count}) that failSafeDecision consumes. Unknown shapes map to {} so
+ * the fail-safe default (BLOCK) applies downstream. */
+function countPlaceholders(text) {
+  var m = String(text || '').match(/\[[A-Z][A-Z0-9_]*\]/g);
+  return m ? m.length : 0;
+}
+function normalizeRedact(data) {
+  var d = data || {};
+  var action = String(d.decision || d.action || '').toUpperCase();
+  if (action === 'BLOCK') return { action: 'BLOCK', reason: d.notes || d.reason || 'Blocked by policy.' };
+  if (action === 'REDACT') {
+    return { action: 'REDACT', safe_text: d.safe_text || '', count: countPlaceholders(d.safe_text) };
+  }
+  if (action === 'HOLD' || action === 'WARN') {
+    return { action: 'HOLD', reason: d.notes || d.reason || 'Please review before sending.' };
+  }
+  if (action === 'ALLOW' || action === 'OK' || action === 'NONE') return { action: 'ALLOW' };
+  return {};
+}
+
+/* Local secret heuristic for the capture guard's app-down path: when
+ * the app is unreachable nothing can be scanned, so text that already
+ * looks secret-bearing never gets a "Send anyway" override. */
+function looksLikeSecret(text) {
+  var s = String(text || '');
+  if (/AKIA[0-9A-Z]{16}/.test(s)) return true;
+  if (/xox[bpas]-[A-Za-z0-9-]{10,}/.test(s)) return true;
+  if (/ghp_[A-Za-z0-9]{20,}/.test(s)) return true;
+  if (/sk-[A-Za-z0-9]{20,}/.test(s)) return true;
+  if (/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(s)) return true;
+  return false;
+}
+
+var NOT_PROTECTING_TEXT = 'Shadowfenced: not protecting this page';
+var NOT_RUNNING_HELD_TEXT = 'Shadowfenced is not running \u2014 message not sent';
+
+/* Whether the document-level capture guard should step in for this
+ * event. `o` carries {kind:'enter'|'click', key, shift, composing,
+ * supported, adapterAttached, armed, sending, siteOn, activeEditable,
+ * onSendButton}. */
+function guardShouldIntercept(o) {
+  o = o || {};
+  if (!o.supported || o.adapterAttached || o.armed || o.sending || !o.siteOn) return false;
+  if (o.kind === 'enter') {
+    if (o.key !== 'Enter' || o.shift || o.composing) return false;
+    return !!o.activeEditable;
+  }
+  if (o.kind === 'click') return !!(o.onSendButton && o.activeEditable);
+  return false;
+}
+
+/* Card the capture guard shows for a held send. {send:true} lets the
+ * send proceed; otherwise {send:false, tone, title, body, buttons}
+ * with button ids drawn from 'send-anyway' | 'ok' | 'cancel'. */
+function captureGuardCard(input) {
+  var args = input || {};
+  if (args.timeout) return sendFailureCard({ timeout: true });
+  if (args.status === 401 || args.status === 403) {
+    return sendFailureCard({ status: args.status });
+  }
+  if (!args.ok) {
+    if (looksLikeSecret(args.text || '')) {
+      return {
+        send: false, tone: 'block', title: "Shadowfenced isn't running",
+        body: NOT_RUNNING_HELD_TEXT + ' This message looks like it carries a secret, so it stays held until the app is back.',
+        buttons: ['ok']
+      };
+    }
+    return {
+      send: false, tone: 'block', title: "Shadowfenced isn't running",
+      body: NOT_RUNNING_HELD_TEXT + ' Nothing was sent.',
+      buttons: ['send-anyway', 'cancel']
+    };
+  }
+  var d = args.decision || {};
+  if (d.action === 'BLOCK') {
+    return {
+      send: false, tone: 'block', title: 'Blocked \u2014 not sent',
+      body: d.reason || 'Blocked by policy.', buttons: ['ok']
+    };
+  }
+  return { send: true };
+}
+
+/* Attachment counting: real attachment chips and file inputs that
+ * actually hold files count; buttons (Upload & tools, Add attachment)
+ * and empty or non-file inputs never do. `el` needs only
+ * tagName/type/files, so this stays testable without a browser. */
+function countsAsAttachment(el) {
+  if (!el) return false;
+  var tag = String(el.tagName || '').toUpperCase();
+  if (tag === 'INPUT') {
+    if (String(el.type || '').toLowerCase() !== 'file') return false;
+    return !!(el.files && el.files.length);
+  }
+  if (tag === 'BUTTON') return false;
+  return true;
+}
+
+/* The hover card must never steal keyboard focus from the composer;
+ * notice cards still take focus so Escape and buttons work at once. */
+function shouldFocusCard(mode) {
+  return mode !== 'hover';
+}
+
+/* Any editable element the capture guard should watch, whether or not
+ * an adapter attached to it (textarea, text-like input,
+ * contenteditable, role=textbox). */
+function isEditableElement(el) {
+  if (!el) return false;
+  var tag = String(el.tagName || '').toUpperCase();
+  if (tag === 'TEXTAREA') return true;
+  if (tag === 'INPUT') {
+    var t = String(el.type || 'text').toLowerCase();
+    return (t !== 'file' && t !== 'hidden' && t !== 'checkbox' && t !== 'radio' &&
+      t !== 'button' && t !== 'submit' && t !== 'image' && t !== 'reset');
+  }
+  try {
+    if (el.isContentEditable) return true;
+  } catch (e) { /* ignore */ }
+  if (el.getAttribute) {
+    var ce = null;
+    try { ce = el.getAttribute('contenteditable'); } catch (e2) { ce = null; }
+    if (ce !== null && ce !== undefined && String(ce).toLowerCase() !== 'false') return true;
+    var role = null;
+    try { role = el.getAttribute('role'); } catch (e3) { role = null; }
+    if (role === 'textbox') return true;
+  }
+  return false;
+}
+
+/* Fail-visible state on a supported host: protecting while the
+ * composer is attached, unprotected (badge plus amber site row) when
+ * no composer is found. */
+function protectionStatus(opts) {
+  var o = opts || {};
+  if (!o.supported) return 'unsupported';
+  return o.editorFound ? 'protecting' : 'unprotected';
+}
+
+/* Popup site-row tone from the last content-script protection report
+ * {protecting, ts}; reports older than PROT_STALE_MS read as unknown. */
+var PROT_STALE_MS = 120000;
+function siteRowTone(entry, nowMs) {
+  if (!entry || entry.protecting !== false) return '';
+  var now = Number(nowMs);
+  if (!now) {
+    try { now = Date.now(); } catch (e) { return ''; }
+  }
+  if (typeof entry.ts === 'number' && (now - entry.ts) < PROT_STALE_MS) return 'amber';
+  return '';
+}
+
+/* Card for a send check that failed without a verdict. `input`
+ * carries {status, timeout}: a check that never answered (timeout)
+ * offers Retry; HTTP 401/403 means the app is running but the
+ * extension is not paired; anything else is the app not running. */
+function sendFailureCard(input) {
+  var args = input || {};
+  if (args.timeout) {
+    return {
+      send: false, tone: 'review', title: 'Still no answer',
+      body: 'Still no answer \u2014 nothing was sent.',
+      buttons: ['retry', 'cancel']
+    };
+  }
+  if (args.status === 401 || args.status === 403) {
+    return {
+      send: false, tone: 'block', title: 'Not paired',
+      body: 'Not paired \u2014 open the Shadowfenced popup and paste the pairing token. Nothing was sent.',
+      buttons: ['ok']
+    };
+  }
+  return {
+    send: false, tone: 'block', title: "Shadowfenced isn't running",
+    body: FAILSAFE_MESSAGE + ' Nothing was sent.',
+    buttons: ['ok']
+  };
+}
+
 var ShadowfencedLogic = {
   FAILSAFE_MESSAGE: FAILSAFE_MESSAGE,
+  NOT_PROTECTING_TEXT: NOT_PROTECTING_TEXT,
+  NOT_RUNNING_HELD_TEXT: NOT_RUNNING_HELD_TEXT,
+  PROT_STALE_MS: PROT_STALE_MS,
   selectAdapter: selectAdapter,
   spansToRanges: spansToRanges,
-  failSafeDecision: failSafeDecision
+  failSafeDecision: failSafeDecision,
+  healthToStatus: healthToStatus,
+  normalizeRedact: normalizeRedact,
+  countPlaceholders: countPlaceholders,
+  looksLikeSecret: looksLikeSecret,
+  guardShouldIntercept: guardShouldIntercept,
+  captureGuardCard: captureGuardCard,
+  sendFailureCard: sendFailureCard,
+  countsAsAttachment: countsAsAttachment,
+  shouldFocusCard: shouldFocusCard,
+  isEditableElement: isEditableElement,
+  protectionStatus: protectionStatus,
+  siteRowTone: siteRowTone
 };
 
 if (typeof globalThis !== 'undefined') globalThis.ShadowfencedLogic = ShadowfencedLogic;

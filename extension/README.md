@@ -89,7 +89,8 @@ Shadowfenced` (safety orange).
 - Typed and pasted text in the chat composer: debounced scan underlines
   sensitive spans (wavy amber for review, wavy safety orange for
   high-risk labels); the send path (`Enter` + send button) calls
-  `/api/ext/redact` first.
+  `/api/ext/redact` first. Composers may be `textarea`, `input`
+  (meta.ai), or `contenteditable` elements.
 - `BLOCK` stops the send and shows “Blocked — not sent” + reason.
 - `REDACT` replaces the editor text with `safe_text`, shows how many
   details were protected, and requires you to press send again.
@@ -107,6 +108,15 @@ If the app is not running — or any check fails — the send is stopped with
 a not-running card:
 
 > “Shadowfenced isn't running — start it or turn the extension off”
+
+A document-level capture guard also watches `Enter` and send-button
+clicks in any editable element on a supported site, so a `BLOCK`-level
+send is stopped even when no adapter attached (unknown markup after a
+site update). When the app is unreachable the guard holds the send
+with “Shadowfenced is not running — message not sent” and a “Send
+anyway” choice — never for secret-looking text. On a supported site
+with no composer found, a “Shadowfenced: not protecting this page”
+badge shows and the popup paints that site row amber.
 
 ## Limits
 

@@ -1,6 +1,6 @@
 'use strict';
 
-/* Site adapters — the four supported chat sites plus the local
+/* Site adapters â€” the four supported chat sites plus the local
  * demo-page adapter in this one file.
  * Each adapter carries CSS selectors for the message editor, the send
  * button, the AI reply area, and file-attachment affordances.
@@ -13,12 +13,19 @@ var ADAPTERS = [
     id: 'chatgpt',
     hosts: ['chatgpt.com'],
     editor: [
+      '#mobile-composer-prompt',
+      'textarea#mobile-composer-prompt',
+      'textarea[aria-label*="Chat with ChatGPT" i]',
+      'textarea[placeholder*="Ask ChatGPT" i]',
+      'form textarea',
+      'main textarea',
       '#prompt-textarea',
       'div[contenteditable="true"]#prompt-textarea',
       'form div[contenteditable="true"]',
       'main div[contenteditable="true"]'
     ],
     sendButton: [
+      'button[aria-label="Send message"]',
       '[data-testid="send-button"]',
       'form button[data-testid="send-button"]'
     ],
@@ -28,8 +35,8 @@ var ADAPTERS = [
     ],
     attachment: [
       'input[type="file"]',
-      '[data-testid="attachment"]',
-      '[aria-label*="Attach" i]'
+      '[data-testid*="attach" i]:not(button)',
+      '[data-testid*="file" i]:not(button)'
     ]
   },
   {
@@ -49,7 +56,8 @@ var ADAPTERS = [
     ],
     attachment: [
       'input[type="file"]',
-      '[aria-label*="Attach" i]'
+      '[data-testid*="attach" i]:not(button)',
+      '[data-testid*="file" i]:not(button)'
     ]
   },
   {
@@ -70,19 +78,25 @@ var ADAPTERS = [
     ],
     attachment: [
       'input[type="file"]',
-      '[aria-label*="Attach" i]',
-      '[aria-label*="Upload" i]'
+      '[data-testid*="attach" i]:not(button)',
+      '[data-testid*="file" i]:not(button)',
+      '.attachment-chip',
+      '[aria-label*="attached" i]'
     ]
   },
   {
     id: 'meta',
     hosts: ['meta.ai'],
     editor: [
+      'input[placeholder*="Ask Meta AI" i]',
+      'input[aria-label*="Ask Meta AI" i]',
+      'input[placeholder]',
       'div[contenteditable="true"]',
       'textarea',
       '[role="textbox"]'
     ],
     sendButton: [
+      'button[aria-label="Send"]',
       'button[aria-label*="Send" i]',
       'form button[type="submit"]'
     ],
@@ -92,7 +106,9 @@ var ADAPTERS = [
     ],
     attachment: [
       'input[type="file"]',
-      '[aria-label*="Attach" i]'
+      '[data-testid*="attach" i]:not(button)',
+      '[data-testid*="file" i]:not(button)',
+      '[aria-label*="attached" i]'
     ]
   },
   {

@@ -170,6 +170,23 @@ def _hold(
     )
 
 
+def has_proven_secret_block(spans: list[Span]) -> bool:
+    """True when Tier 1 proved a span that must BLOCK with no override.
+
+    A proven span whose suggested action is ``block`` and which the user
+    may not keep (secrets, canaries, protected keys) decides BLOCK on
+    its own: precedence BLOCK > everything makes further model checks
+    pointless, so the gate returns immediately without calling Glimmer
+    Tier 2, person search, cue review or any contract/model check.
+    """
+    return any(
+        span.status == "proven"
+        and span.suggested_action == "block"
+        and not span.can_keep
+        for span in spans
+    )
+
+
 def _confidential_contract_marker(text: str) -> str | None:
     """Stamp name when a classified contract must hold for review.
 
@@ -1273,8 +1290,34 @@ def gate(
     decision = _gate_impl(
         text, policy, registry, choices, mode, trace_out=trace_out
     )
+    # Proven-secret BLOCK short-circuit (T63c): a secret, canary or
+    # protected key is already certain from Tier 1 code detectors, and
+    # BLOCK outranks every other outcome. Return at once without any
+    # model call (Glimmer Tier 2, person search, cue review,
+    # contract/model checks). Placeholders stay empty and the log
+    # record is unchanged apart from the added skip reason.
+    skip_models = (
+        decision.decision == "BLOCK"
+        and has_proven_secret_block(decision.spans)
+    )
+    if skip_models:
+        decision.reasons.append(
+            "proven secret -> BLOCK (model checks skipped)"
+        )
     _attach_doc_classification(decision, text, trace_out)
     _doc_type, _doc_warning = decision.doc_type, decision.doc_warning
+    if skip_models:
+        try:
+            from . import rule_catalog as _catalog
+
+            decision.rule_ids = _catalog.rule_ids_for_decision(decision)
+        except Exception:
+            decision.rule_ids = []
+        _append_gate_trace(
+            trace_out, decision, choices,
+            (time.perf_counter() - started) * 1000,
+        )
+        return decision
     try:
         decision = _apply_reid(
             text, decision, conversation, residual, judge_fn, mode,
