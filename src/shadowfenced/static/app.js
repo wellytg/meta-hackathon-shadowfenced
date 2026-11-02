@@ -53,6 +53,24 @@
   var GUARD_CODE_ONLY = "Guard: on \u00b7 code checks only";
   var GUARD_HOSTED = "Guard: on \u00b7 code checks + Muse Spark review";
   var hostedMode = false;
+  var ruleCatalog = null;
+  var ruleCatalogById = {};
+  function loadRuleCatalog() {
+    fetch("/api/rules/catalog")
+      .then(function (resp) { return resp.ok ? resp.json() : null; })
+      .then(function (body) {
+        if (!body || !Array.isArray(body.entries)) return;
+        ruleCatalog = body.entries;
+        ruleCatalogById = {};
+        body.entries.forEach(function (entry) {
+          if (entry && entry.id) ruleCatalogById[String(entry.id)] = entry;
+        });
+        if (typeof selectedTurn !== "undefined" && selectedTurn) {
+          paintTurn(selectedTurn);
+        }
+      })
+      .catch(function () { /* catalogue stays empty */ });
+  }
   var guardDot = document.querySelector('[data-testid="guard-dot"]');
   var modelStatus = document.querySelector('[data-testid="model-status"]');
 
@@ -1720,7 +1738,7 @@
     if (decision === "UNKNOWN") return "Not sent — couldn't check";
     return "Sent";
   }
-  function riskCardModel(resp) {
+  function riskCardModel(resp, catalog) {
     if (!resp || typeof resp !== "object") return null;
     var decision = String(resp.decision || "UNKNOWN").toUpperCase();
     var evidence = (resp.evidence && typeof resp.evidence === "object") ? resp.evidence : {};
@@ -1800,9 +1818,21 @@
       traceLines.push(step + result);
     });
     var action = riskActionFor(decision);
+    var catalogById = catalog || ruleCatalogById;
+    var ruleIds = (resp && Array.isArray(resp.rule_ids)) ? resp.rule_ids : [];
+    var firedRules = [];
+    ruleIds.forEach(function (id) {
+      var entry = catalogById[String(id)];
+      if (entry && firedRules.indexOf(entry) < 0) firedRules.push(entry);
+    });
+    var cardTitle = decision;
+    if (decision === "WARN" && evidence.person_search) {
+      cardTitle = "Searching for a person";
+    }
     return {
       decision: decision,
-      title: decision,
+      title: cardTitle,
+      rules: firedRules,
       sending: sending,
       why: why,
       action: action,
@@ -1840,7 +1870,57 @@
       line.appendChild(value);
       rows.appendChild(line);
     });
+    (model.rules || []).forEach(function (rule) {
+      rows.appendChild(riskRuleRow(rule));
+    });
     card.appendChild(rows);
+  }
+  function riskRuleRow(rule) {
+    var line = document.createElement("div");
+    line.className = "risk-row risk-row-rule";
+    var name = document.createElement("span");
+    name.className = "risk-label";
+    name.textContent = "Rule";
+    var value = document.createElement("span");
+    value.className = "risk-value";
+    value.setAttribute("data-testid", "risk-rule");
+    value.textContent = "RULE " + String(rule.title || rule.id || "") + " \u00b7 ";
+    var whyBtn = document.createElement("button");
+    whyBtn.type = "button";
+    whyBtn.className = "risk-rule-why";
+    whyBtn.setAttribute("data-testid", "risk-rule-why");
+    whyBtn.setAttribute("aria-expanded", "false");
+    whyBtn.textContent = "Why this rule";
+    var detail = document.createElement("div");
+    detail.className = "risk-rule-detail";
+    detail.hidden = true;
+    var why = document.createElement("p");
+    why.textContent = String(rule.why || "");
+    detail.appendChild(why);
+    (rule.related || []).forEach(function (note) {
+      var noteEl = document.createElement("p");
+      noteEl.textContent = String(note);
+      detail.appendChild(noteEl);
+    });
+    var link = document.createElement("a");
+    link.href = "#";
+    link.setAttribute("data-testid", "risk-rule-link");
+    link.textContent = "Open in Rules panel";
+    link.addEventListener("click", function (event) {
+      if (event && event.preventDefault) event.preventDefault();
+      document.dispatchEvent(new CustomEvent("sf-open-rule", { detail: rule.id }));
+    });
+    detail.appendChild(link);
+    whyBtn.addEventListener("click", function () {
+      var willOpen = detail.hidden;
+      detail.hidden = !willOpen;
+      whyBtn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    });
+    value.appendChild(whyBtn);
+    value.appendChild(detail);
+    line.appendChild(name);
+    line.appendChild(value);
+    return line;
   }
   function riskCardTail(card, model) {
     var toggle = document.createElement("button");
@@ -2189,6 +2269,7 @@
     });
   }
 
+  loadRuleCatalog();
   loadProviders();
   loadExtToken();
   loadLogViewer();
@@ -2214,6 +2295,14 @@
   var turnSeq = 0;
   var selectedTurn = null;
 
+  function riskRuleTitles(entry) {
+    var ids = (entry && Array.isArray(entry.ruleIds)) ? entry.ruleIds : [];
+    if (!ids.length) return "\u2014";
+    return ids.map(function (id) {
+      var found = ruleCatalogById[String(id)];
+      return "RULE " + (found && found.title ? found.title : String(id));
+    }).join("; ");
+  }
   function describePlaceholders(body) {
     if (!body || typeof body.sent_text !== "string") return [];
     var found = body.sent_text.match(/\[[^\]]*\]/g);
@@ -2227,6 +2316,7 @@
       id: turnSeq,
       decision: key,
       label: receiptLabel(decision, body),
+      ruleIds: (body && Array.isArray(body.rule_ids)) ? body.rule_ids.slice(0, 8) : [],
       userMessage: body && typeof body.user_message === "string" ? body.user_message : "",
       reasons: body && body.evidence && Array.isArray(body.evidence.reasons)
         ? body.evidence.reasons.slice(0, 6) : [],
@@ -2260,6 +2350,7 @@
       if (el) el.textContent = value;
     };
     set("decision", entry.decision);
+    set("rules", riskRuleTitles(entry));
     set("reasons", entry.reasons.length ? entry.reasons.join("; ") : "—");
     set("redactions", entry.labels.length ? entry.labels.join(" ") : "none");
     set("model", entry.provider ? providerLabel(entry.provider) : "—");

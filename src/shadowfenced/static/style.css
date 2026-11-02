@@ -1478,6 +1478,30 @@ body {
   overflow-wrap: break-word;
 }
 .risk-trace[hidden] { display: none; }
+/* T62 risk-card rule line (Classic square style). */
+.risk-rule-why {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border: 2px solid var(--line, #16130e);
+  border-radius: 0;
+  background: var(--paper-2, #fffdf6);
+  color: var(--ink, #16130e);
+  cursor: pointer;
+  margin-left: 8px;
+  min-height: 32px;
+}
+.risk-rule-detail {
+  margin-top: 6px;
+  font-size: 13px;
+}
+.risk-rule-detail p {
+  margin: 4px 0;
+}
+.risk-rule-detail[hidden] {
+  display: none;
+}
 .risk-trace ol { margin: 0; padding-left: 18px; }
 /*T45 quiet receipt: one small steel-blue line, no card. "Why" still opens.*/
 .receipt[data-decision="ALLOW"] .receipt-label {

@@ -255,6 +255,23 @@
       "Custom rules apply immediately and stay in git-ignored policy.local.yaml.";
     drawer.appendChild(hint);
 
+    var catTitle = document.createElement("h3");
+    catTitle.textContent = "What Shadowfenced protects";
+    drawer.appendChild(catTitle);
+    var catList = document.createElement("ul");
+    catList.className = "sf-rules sf-catalog";
+    catList.setAttribute("data-testid", "sf-catalog");
+    drawer.appendChild(catList);
+    var catFooter = document.createElement("p");
+    catFooter.className = "sf-hint sf-footer";
+    catFooter.setAttribute("data-testid", "sf-catalog-footer");
+    drawer.appendChild(catFooter);
+
+    var orgHint = document.createElement("p");
+    orgHint.className = "sf-hint";
+    orgHint.textContent = "Your organisation's own words (from policy.yaml).";
+    drawer.appendChild(orgHint);
+
     var baseTitle = document.createElement("h3");
     baseTitle.textContent = "Built-in";
     drawer.appendChild(baseTitle);
@@ -318,6 +335,71 @@
     drawer.appendChild(error);
     overlay.appendChild(drawer);
     document.body.appendChild(overlay);
+
+    function catalogEntry(entry) {
+      var item = document.createElement("li");
+      item.className = "sf-rule sf-catalog-entry";
+      item.setAttribute("data-rule-id", String(entry.id || ""));
+      item.setAttribute("data-testid", "sf-catalog-entry");
+      var title = document.createElement("span");
+      title.className = "sf-rule-kind";
+      title.textContent = String(entry.title || entry.id || "");
+      var action = document.createElement("span");
+      action.className = "sf-rule-action sf-action-"
+        + String(entry.action || "").toLowerCase();
+      action.textContent = String(entry.action || "");
+      var catches = document.createElement("span");
+      catches.className = "sf-rule-note";
+      catches.textContent = String(entry.catches || "");
+      item.appendChild(title);
+      item.appendChild(action);
+      item.appendChild(catches);
+      var more = document.createElement("button");
+      more.type = "button";
+      more.className = "sf-catalog-why-btn";
+      more.setAttribute("data-testid", "sf-catalog-why");
+      more.setAttribute("aria-expanded", "false");
+      more.textContent = "Why this rule";
+      var detail = document.createElement("div");
+      detail.className = "sf-catalog-detail";
+      detail.hidden = true;
+      var why = document.createElement("p");
+      why.textContent = String(entry.why || "");
+      detail.appendChild(why);
+      (entry.related || []).forEach(function (note) {
+        var noteEl = document.createElement("p");
+        noteEl.className = "sf-catalog-note";
+        noteEl.textContent = String(note);
+        detail.appendChild(noteEl);
+      });
+      var keep = document.createElement("p");
+      keep.className = "sf-catalog-keep";
+      keep.textContent = "You can send anyway: "
+        + (entry.can_send_anyway ? "yes" : "no");
+      detail.appendChild(keep);
+      more.addEventListener("click", function () {
+        var willOpen = detail.hidden;
+        detail.hidden = !willOpen;
+        more.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      });
+      item.appendChild(more);
+      item.appendChild(detail);
+      return item;
+    }
+
+    function refreshCatalog() {
+      fetch("/api/rules/catalog").then(function (resp) {
+        if (!resp.ok) throw new Error("catalogue unavailable ("
+          + resp.status + ")");
+        return resp.json();
+      }).then(function (body) {
+        catList.innerHTML = "";
+        (body.entries || []).forEach(function (entry) {
+          catList.appendChild(catalogEntry(entry));
+        });
+        catFooter.textContent = String((body && body.footer) || "");
+      }).catch(function (err) { showError(err.message); });
+    }
 
     function showError(message) {
       error.textContent = message;
@@ -386,7 +468,16 @@
     });
 
     function open() {
+      var banner = document.querySelector('[data-testid="hosted-banner"]');
+      if (banner && !banner.hidden) {
+        overlay.classList.add("sf-hosted");
+        try { overlay.style.top = banner.offsetHeight + "px"; } catch (e) {}
+      } else {
+        overlay.classList.remove("sf-hosted");
+        try { overlay.style.top = ""; } catch (e) {}
+      }
       overlay.hidden = false;
+      refreshCatalog();
       refresh();
       close.focus();
     }
@@ -397,6 +488,22 @@
     });
     document.addEventListener("keydown", function (event) {
       if (event.key === "Escape" && !overlay.hidden) shut();
+    });
+    document.addEventListener("sf-open-rule", function (event) {
+      var id = event && event.detail;
+      open();
+      var tries = 0;
+      var timer = setInterval(function () {
+        tries += 1;
+        var el = drawer.querySelector('[data-rule-id="' + String(id) + '"]');
+        if (el) {
+          var btn = el.querySelector(".sf-catalog-why-btn");
+          var panel = el.querySelector(".sf-catalog-detail");
+          if (btn && panel && panel.hidden) btn.click();
+          if (el.scrollIntoView) el.scrollIntoView();
+          clearInterval(timer);
+        } else if (tries > 20) clearInterval(timer);
+      }, 100);
     });
     return { open: open, refresh: refresh };
   }

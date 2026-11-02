@@ -150,6 +150,7 @@ class Decision:
     status: str = "complete"  # complete | reviewing (async Glimmer review)
     doc_type: str | None = None  # doc warning type, never blocks
     doc_warning: str | None = None  # plain warning above the decision
+    rule_ids: list[str] = field(default_factory=list)  # catalogue ids that fired
 
 
 def _hold(
@@ -1293,6 +1294,11 @@ def gate(
                                          _doc_warning)
             if _doc_type:
                 decision.evidence.setdefault("doc_type", _doc_type)
+    try:
+        from . import rule_catalog as _catalog
+        decision.rule_ids = _catalog.rule_ids_for_decision(decision)
+    except Exception:
+        decision.rule_ids = []
     _append_gate_trace(
         trace_out, decision, choices,
         (time.perf_counter() - started) * 1000,

@@ -127,7 +127,7 @@ def test_send_dana_warns_with_reid_and_person_search(
     assert "reid" in evidence and "person_search" in evidence
     assert set(evidence["reid"]["combination"]) >= {"name", "dob"}
     assert evidence["person_search"]["banner"].startswith(
-        "This looks like a search for a private person."
+        "This message names a person"
     )
     assert body["warn"]["banner"]
     assert body["warn"]["generalised_text"]

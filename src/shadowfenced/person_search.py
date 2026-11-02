@@ -296,10 +296,12 @@ def banner_for_labels(labels: list[str]) -> str:
     else:
         listing = ", ".join(seen[:-1]) + f" and {seen[-1]}"
     return (
-        "This looks like a search for a private person. "
-        f"From this message alone, an AI can tell: {listing}. "
-        "Sending it shares those details with the AI provider, "
-        "which may refuse or log the request."
+        "This message names a person and gives details that identify them "
+        f"({listing}). "
+        "If this is you: it's your choice \u2014 you can send it. "
+        "If it's someone else: the AI provider receives their details, "
+        "the request may be logged, and looking up a private person can "
+        "expose them to harm. Rule: Person search."
     )
 
 

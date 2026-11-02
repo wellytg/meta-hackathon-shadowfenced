@@ -63,6 +63,18 @@ def list_rules() -> dict[str, Any]:
     }
 
 
+@router.get("/api/rules/catalog")
+def get_rule_catalog() -> dict[str, Any]:
+    """What Shadowfenced protects: generated from what the code really does."""
+    from . import rule_catalog as catalog_module
+
+    policy = _app().get_policy()
+    return {
+        "entries": catalog_module.get_catalog(policy),
+        "footer": catalog_module.FOOTER,
+    }
+
+
 @router.post("/api/rules", status_code=201)
 def create_rule(body: CreateRuleRequest) -> dict[str, Any]:
     """Validate, store, and return one custom rule (applies immediately)."""

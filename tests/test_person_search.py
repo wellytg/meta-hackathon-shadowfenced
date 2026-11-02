@@ -50,9 +50,10 @@ def test_private_search_warns_with_banner_and_generalise():
     assert decision.sent_text == PRIVATE_TEXT
     info = (decision.evidence or {}).get("person_search")
     assert info is not None
-    assert info["banner"].startswith("This looks like a search for a private person.")
-    assert "AI can tell" in info["banner"]
-    assert "refuse or log" in info["banner"]
+    assert info["banner"].startswith("This message names a person")
+    assert "identify them" in info["banner"]
+    assert "If this is you" in info["banner"]
+    assert "Rule: Person search" in info["banner"]
     assert info["generalised_text"]
     assert "Dana Whitlock" not in info["generalised_text"]
     assert user_message(decision) == info["banner"]
