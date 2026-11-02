@@ -10,7 +10,7 @@
  *   high-risk (password/secret/key/token/credential) use wavy safety
  *   orange (blocked). Lines vanish as soon as the text is fixed.
  * - Hover card: what was found + "Replace with placeholder" + "Ignore".
- * - Send-time card: "Blocked — not sent" / "N details protected" /
+ * - Send-time card: "Blocked â€” not sent" / "N details protected" /
  *   "Review: reason" with "Send anyway" + "Cancel"; a separate
  *   not-running card appears when the local app is unreachable.
  * - Every card lives in the closed shadow root, has a title bar, takes
@@ -18,6 +18,12 @@
  *   button, and auto-dismisses so it never covers the button permanently.
  * - Intercepts send (Enter key + send-button capture) and calls
  *   /api/ext/redact first. Fail-safe: any failure blocks the send.
+ *   One send takes exactly one check (the adapter owns its button,
+ *   the guard takes the rest; stale answers never send). A send
+ *   shows a Checking card at once (updated every second) and waits
+ *   up to 45 s for the answer; a check that never answers fails
+ *   closed AND visibly with a retry card. Only a network error
+ *   shows the not-running card; 401/403 shows the not-paired card.
  * - File-attachment presence shows a warning badge (warning only).
  * - Watches the AI reply area and calls /api/ext/rehydrate to restore
  *   placeholders on-screen only, with a subtle highlight. */
@@ -44,15 +50,45 @@
     }
     return out;
   }
+  /* Map the /api/ext/redact payload ({decision, safe_text, notes}) onto
+   * the internal shape ({action, reason, safe_text, count}) so a real
+   * BLOCK verdict shows "Blocked — not sent" instead of collapsing
+   * into the fail-safe not-running card. */
+  function normalizeServerDecision(data) {
+    if (LOGIC && LOGIC.normalizeRedact) return LOGIC.normalizeRedact(data);
+    /* Tiny duplicate of normalizeRedact in logic.js (see src/logic.js). */
+    var d = data || {};
+    var action = String(d.decision || d.action || '').toUpperCase();
+    if (action === 'BLOCK') return { action: 'BLOCK', reason: d.notes || d.reason || 'Blocked by policy.' };
+    if (action === 'REDACT') return { action: 'REDACT', safe_text: d.safe_text || '', count: d.count || 0 };
+    if (action === 'HOLD' || action === 'WARN') return { action: 'HOLD', reason: d.notes || d.reason || '' };
+    if (action === 'ALLOW' || action === 'OK' || action === 'NONE') return { action: 'ALLOW' };
+    return {};
+  }
   function decide(res) {
-    if (LOGIC && LOGIC.failSafeDecision) return LOGIC.failSafeDecision(res);
+    var norm = normalizeServerDecision(res && res.data);
+    if (LOGIC && LOGIC.failSafeDecision) return LOGIC.failSafeDecision({ ok: !!(res && res.ok), decision: norm });
     /* Tiny duplicate of failSafeDecision in logic.js (see src/logic.js). */
     if (!res || !res.ok) return { action: 'BLOCK', reason: FAILSAFE_MESSAGE };
-    var d = res.decision || {};
-    if (d.action === 'REDACT') return { action: 'REDACT', safe_text: d.safe_text || '', count: d.count || 0 };
-    if (d.action === 'HOLD' || d.action === 'WARN') return { action: 'HOLD', reason: d.reason || '' };
-    if (d.action === 'ALLOW') return { action: 'ALLOW' };
-    return { action: 'BLOCK', reason: d.reason || FAILSAFE_MESSAGE };
+    if (norm.action === 'REDACT') return { action: 'REDACT', safe_text: norm.safe_text || '', count: norm.count || 0 };
+    if (norm.action === 'HOLD') return { action: 'HOLD', reason: norm.reason || '' };
+    if (norm.action === 'ALLOW') return { action: 'ALLOW' };
+    return { action: 'BLOCK', reason: norm.reason || FAILSAFE_MESSAGE };
+  }
+
+  /* Real attachment chips and file inputs with files count; buttons
+   * (Upload & tools, Add attachment) never do. */
+  function countsAsAttachment(el) {
+    if (LOGIC && LOGIC.countsAsAttachment) return LOGIC.countsAsAttachment(el);
+    /* Tiny duplicate of countsAsAttachment in logic.js (see src/logic.js). */
+    if (!el) return false;
+    var tag = String(el.tagName || '').toUpperCase();
+    if (tag === 'INPUT') {
+      if (String(el.type || '').toLowerCase() !== 'file') return false;
+      return !!(el.files && el.files.length);
+    }
+    if (tag === 'BUTTON') return false;
+    return true;
   }
 
   /* Underline tone per span: high-risk labels read as blocked (safety
@@ -65,6 +101,11 @@
 
   var DEBOUNCE_MS = 400;
   var NOTICE_TIMEOUT_MS = 15000;
+  /* A send check shows a Checking card at once and waits this long for
+   * the local app (whose own Glimmer timeout is the real limit) before
+   * failing closed AND visibly with a retry card. */
+  var SEND_CHECK_TIMEOUT_MS = 45000;
+  var CHECKING_TICK_MS = 1000;
   var state = {
     adapter: null,
     editor: null,
@@ -72,7 +113,15 @@
     ignored: [],      // ignored ranges {start,end}
     redactedArmed: false, // set after REDACT replace; next send goes through
     sending: false,
-    siteOn: true
+    siteOn: true,
+    sendSeq: 0, // epoch: every send intent takes the next number
+    sendTimer: null, // timeout arming the in-flight check
+    sendTickTimer: null, // elapsed-seconds updater for the Checking card
+    sendCheckStarted: 0, // Date.now() when the in-flight check began
+    sendAnchor: null, // where the in-flight check's cards park
+    sendGuard: false, // true when the in-flight check is the capture guard's
+    sendText: '', // text the in-flight guard check is holding
+    sendCardSeq: 0 // epoch of the send-time card on screen (0 = none)
   };
 
   var adaptersNS = (typeof globalThis !== 'undefined' && globalThis.ShadowfencedAdapters) || null;
@@ -128,7 +177,7 @@
   var mirrorBox = null, mirrorInner = null;
   var card = null, cardBar = null, cardTitle = null, cardClose = null;
   var cardBody = null, cardBtns = null;
-  var badge = null;
+  var badge = null, unprot = null;
   var cardMode = null; // 'hover' | 'notice' | null
   var cardAnchor = null; // last anchor rect for repositioning notices
   var hideTimer = null, noticeTimer = null;
@@ -158,6 +207,9 @@
     '.sf-cbtns button:active{box-shadow:inset 2px 2px 0 #a39d8a;}' +
     '.sf-badge{position:absolute;display:none;pointer-events:auto;max-width:70vw;' +
     'background:#f7e6ad;color:#1a1a1a;border:2px solid #1a1a1a;padding:4px 8px;' +
+    'font:12px/1.4 "Segoe UI",system-ui,Tahoma,Verdana,sans-serif;}' +
+    '.sf-unprot{position:absolute;right:12px;bottom:12px;display:none;max-width:70vw;' +
+    'background:#f7e6ad;color:#1a1a1a;border:2px solid #1a1a1a;padding:4px 8px;' +
     'font:12px/1.4 "Segoe UI",system-ui,Tahoma,Verdana,sans-serif;}';
 
   function ensureOverlay() {
@@ -183,6 +235,11 @@
     badge.setAttribute('role', 'status');
     badge.textContent = '\u26a0 Attachment present \u2014 files are not scanned, only this warning is shown.';
     overlayShadow.appendChild(badge);
+    unprot = document.createElement('div');
+    unprot.className = 'sf-unprot';
+    unprot.setAttribute('role', 'status');
+    unprot.textContent = (LOGIC && LOGIC.NOT_PROTECTING_TEXT) || 'Shadowfenced: not protecting this page';
+    overlayShadow.appendChild(unprot);
     card = document.createElement('div');
     card.className = 'sf-card';
     card.setAttribute('tabindex', '-1');
@@ -347,8 +404,13 @@
 
   function showCard(opts) {
     ensureOverlay();
+    /* One send = one card: a stale send answer never replaces a newer
+     * send's card. Hover cards carry no epoch and never win this test. */
+    if (opts.mode !== 'hover' && state.sendCardSeq > (opts.sendSeq || 0)) return;
     hideCard(true);
     cardMode = opts.mode || 'notice';
+    if (cardMode === 'hover') state.sendCardSeq = 0;
+    else state.sendCardSeq = opts.sendSeq || 0;
     cardAnchor = opts.anchor || null;
     cardBar.setAttribute('data-tone', opts.tone || 'review');
     cardTitle.textContent = opts.title || 'Shadowfenced';
@@ -371,7 +433,15 @@
     var anchor = cardAnchor || { left: window.innerWidth / 2 - 130, top: window.innerHeight / 2, bottom: window.innerHeight / 2 };
     placeCard(anchor);
     card.style.display = 'block';
-    try { card.focus(); } catch (e) { /* ignore */ }
+    /* The hover card never takes focus: stealing it from the composer
+     * swallows keys typed after the card opens (the second half of the
+     * message never reaches the editor). Notice cards still take focus
+     * so Escape and their buttons work at once. */
+    var wantFocus = (opts.mode !== 'hover');
+    if (LOGIC && LOGIC.shouldFocusCard) {
+      try { wantFocus = LOGIC.shouldFocusCard(opts.mode); } catch (e2) { /* keep default */ }
+    }
+    if (wantFocus) { try { card.focus(); } catch (e) { /* ignore */ } }
     if (cardMode === 'notice') {
       if (noticeTimer) clearTimeout(noticeTimer);
       noticeTimer = setTimeout(hideCard, NOTICE_TIMEOUT_MS);
@@ -382,11 +452,12 @@
     if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
     if (noticeTimer && !silent) { clearTimeout(noticeTimer); noticeTimer = null; }
     else if (noticeTimer && silent) { clearTimeout(noticeTimer); noticeTimer = null; }
-    if (!card || card.style.display === 'none') { cardMode = null; return; }
+    if (!card || card.style.display === 'none') { cardMode = null; state.sendCardSeq = 0; return; }
     var stealBack = false;
     try { stealBack = card.contains(document.activeElement); } catch (e) { stealBack = false; }
     card.style.display = 'none';
     cardMode = null;
+    state.sendCardSeq = 0;
     cardAnchor = null;
     if (stealBack && state.editor && document.contains(state.editor)) {
       try { state.editor.focus(); } catch (e2) { /* ignore */ }
@@ -394,13 +465,15 @@
   }
 
   function scheduleHideCard() {
-    if (cardMode !== 'hover') return;
+    if (cardMode !== 'hover' || state.sendCardSeq !== 0) return;
     if (hideTimer) clearTimeout(hideTimer);
     hideTimer = setTimeout(function () { if (cardMode === 'hover') hideCard(); }, 300);
   }
 
   function showHoverCard(anchorEl, span) {
-    if (!span || cardMode === 'notice') return;
+    /* The send card wins over hover: never open one while a send check
+     * is in flight or a send-time card is up. */
+    if (!span || cardMode === 'notice' || state.sendCardSeq !== 0 || state.sending) return;
     if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
     var label = span.label || 'sensitive detail';
     var text = editorText(state.editor);
@@ -467,10 +540,7 @@
       try {
         var inputs = document.querySelectorAll(state.adapter.attachment[i]);
         for (var k = 0; k < inputs.length; k++) {
-          var el = inputs[k];
-          if (el.tagName === 'INPUT' && el.type === 'file') {
-            if (el.files && el.files.length) { found = el; break; }
-          } else { found = el; break; }
+          if (countsAsAttachment(inputs[k])) { found = inputs[k]; break; }
         }
       } catch (e) { /* ignore */ }
       if (found) break;
@@ -483,6 +553,22 @@
     } else {
       badge.style.display = 'none';
     }
+  }
+
+  /* Fail-visible badge: on a supported site with no composer attached
+   * (or a broken adapter after a site update), say so on the page and
+   * report it so the popup paints that site row amber. */
+  var lastProtReport = null;
+  function reportProtection(siteId, protecting) {
+    var key = siteId + ':' + (protecting ? 'on' : 'off');
+    if (key === lastProtReport) return;
+    lastProtReport = key;
+    sendToBg({ type: 'SF_PROT', site: siteId, protecting: protecting });
+  }
+  function updateUnprotBadge(show) {
+    ensureOverlay();
+    if (!unprot) return;
+    unprot.style.display = show ? 'block' : 'none';
   }
 
   /* ---------- scanning ---------- */
@@ -513,18 +599,71 @@
     return { left: window.innerWidth / 2 - 130, top: 200, bottom: 200, right: window.innerWidth / 2 + 130 };
   }
 
-  function handleRedactResult(res) {
-    var d = decide(res);
-    if (d.action === 'ALLOW') {
-      state.redactedArmed = true; // scanned clean / app allowed: let this send through
-      doSend();
-      return;
+  /* The Checking card: shown at once on every send (Classic look,
+   * amber), updated every second with the elapsed wait, replaced by
+   * the result card when the answer arrives. */
+  function checkingBodyText(elapsed) {
+    return 'Checking with Shadowfenced\u2026 ' + elapsed + 's.' +
+      ' Nothing is sent until the answer arrives.';
+  }
+  function showCheckingCard(seq, anchor) {
+    showCard({
+      mode: 'checking',
+      tone: 'review',
+      title: 'Checking\u2026',
+      body: checkingBodyText(0),
+      anchor: anchor || editorAnchor(),
+      buttons: [],
+      sendSeq: seq
+    });
+  }
+  function updateCheckingCard(seq) {
+    if (state.sendCardSeq !== seq || !state.sending) return;
+    if (cardMode !== 'checking') return;
+    var elapsed = Math.floor((Date.now() - state.sendCheckStarted) / 1000);
+    try { cardBody.textContent = checkingBodyText(elapsed); } catch (e) { /* ignore */ }
+  }
+  /* Failure cards from logic.js (or the tiny fallback below): a 45 s
+   * timeout offers Retry, 401/403 says not paired, anything else
+   * says the app is not running. */
+  function failureCardFor(input) {
+    if (LOGIC && LOGIC.sendFailureCard) {
+      try { return LOGIC.sendFailureCard(input); } catch (e) { /* fall through */ }
     }
+    if ((input || {}).timeout) {
+      return { tone: 'review', title: 'Still no answer',
+        body: 'Still no answer \u2014 nothing was sent.',
+        buttons: ['retry', 'cancel'] };
+    }
+    if (input && (input.status === 401 || input.status === 403)) {
+      return { tone: 'block', title: 'Not paired',
+        body: 'Not paired \u2014 open the Shadowfenced popup and paste the pairing token.' +
+        ' Nothing was sent.',
+        buttons: ['ok'] };
+    }
+    return { tone: 'block', title: "Shadowfenced isn't running",
+      body: FAILSAFE_MESSAGE + ' Nothing was sent.', buttons: ['ok'] };
+  }
+  function showFailureCard(card, seq, onRetry) {
+    var btns = (card.buttons || ['ok']).map(function (b) {
+      if (b === 'retry') return { label: 'Retry', onClick: function () { onRetry(); } };
+      if (b === 'cancel') return { label: 'Cancel' };
+      return { label: 'OK' };
+    });
+    showCard({
+      tone: card.tone,
+      title: card.title,
+      body: card.body,
+      anchor: state.sendAnchor || editorAnchor(),
+      buttons: btns,
+      sendSeq: seq
+    });
+  }
+
+  /* Send-verdict cards without side effects: BLOCK, HOLD and REDACT
+   * only. Stale answers refresh at most; they never send or rewrite. */
+  function showVerdictCard(d, seq) {
     if (d.action === 'REDACT') {
-      setEditorText(state.editor, d.safe_text);
-      state.spans = [];
-      renderOverlay();
-      state.redactedArmed = true; // user must press send again to send the safe text
       var n = d.count || 0;
       showCard({
         tone: 'allow',
@@ -532,7 +671,8 @@
         body: n + ' detail' + (n === 1 ? '' : 's') +
           ' protected \u2014 press send again to send the protected text.',
         anchor: editorAnchor(),
-        buttons: [{ label: 'OK' }]
+        buttons: [{ label: 'OK' }],
+        sendSeq: seq
       });
       return;
     }
@@ -545,7 +685,8 @@
         buttons: [
           { label: 'Send anyway', onClick: function () { state.redactedArmed = true; doSend(); } },
           { label: 'Cancel' }
-        ]
+        ],
+        sendSeq: seq
       });
       return;
     }
@@ -558,7 +699,8 @@
         body: 'Start the Shadowfenced app, then press send again. ' +
           'Nothing was sent. ' + reason,
         anchor: editorAnchor(),
-        buttons: [{ label: 'OK' }]
+        buttons: [{ label: 'OK' }],
+        sendSeq: seq
       });
       return;
     }
@@ -567,19 +709,99 @@
       title: 'Blocked \u2014 not sent',
       body: reason,
       anchor: editorAnchor(),
-      buttons: [{ label: 'OK' }]
+      buttons: [{ label: 'OK' }],
+      sendSeq: seq
+    });
+  }
+
+  function handleRedactResult(res, seq, allowSend) {
+    if (!res || !res.ok) {
+      var status = (res && typeof res.status === 'number') ? res.status : null;
+      if (status === 401 || status === 403) {
+        showFailureCard(failureCardFor({ status: status }), seq, function () {
+          requestSendCheck();
+        });
+        return;
+      }
+      showVerdictCard(decide(res), seq);
+      return;
+    }
+    var d = decide(res);
+    if (d.action === 'ALLOW') {
+      if (!allowSend) return; // stale answer: never send on its own
+      state.redactedArmed = true; // scanned clean / app allowed: let this send through
+      doSend();
+      return;
+    }
+    if (d.action === 'REDACT') {
+      if (!allowSend) { showVerdictCard(d, seq); return; }
+      setEditorText(state.editor, d.safe_text);
+      state.spans = [];
+      renderOverlay();
+      state.redactedArmed = true; // user must press send again to send the safe text
+      showVerdictCard(d, seq);
+      return;
+    }
+    showVerdictCard(d, seq);
+  }
+
+  function handleLateRedact(res, seq) {
+    // A timed-out or superseded check answered late: refresh the card
+    // at most, never send or rewrite the composer.
+    handleRedactResult(res, seq, false);
+  }
+
+  /* One send = one check = one card. Every send intent takes the next
+   * epoch; an answer from an older epoch only refreshes a card, never
+   * sends. */
+  function beginSendCheck() {
+    state.sending = true;
+    var seq = ++state.sendSeq;
+    if (state.sendTimer) clearTimeout(state.sendTimer);
+    if (state.sendTickTimer) clearInterval(state.sendTickTimer);
+    state.sendCheckStarted = Date.now();
+    state.sendTimer = setTimeout(function () { onSendTimeout(seq); }, SEND_CHECK_TIMEOUT_MS);
+    state.sendTickTimer = setInterval(function () { updateCheckingCard(seq); }, CHECKING_TICK_MS);
+    return seq;
+  }
+  function endSendCheck(seq) {
+    if (seq !== state.sendSeq) return false; // stale answer: inform only
+    if (state.sendTimer) { clearTimeout(state.sendTimer); state.sendTimer = null; }
+    if (state.sendTickTimer) { clearInterval(state.sendTickTimer); state.sendTickTimer = null; }
+    state.sending = false;
+    return true;
+  }
+  function onSendTimeout(seq) {
+    state.sendTimer = null;
+    if (state.sendTickTimer) { clearInterval(state.sendTickTimer); state.sendTickTimer = null; }
+    if (seq !== state.sendSeq || !state.sending) return;
+    // Fail closed AND visibly: the check never answered, so hold the
+    // send with a retry card instead of hanging silently. The gate is
+    // released so Retry (or pressing send again) retries; a late answer
+    // still replaces the card but never sends on its own.
+    state.sending = false;
+    var anchor = state.sendAnchor || editorAnchor();
+    if (state.sendGuard) {
+      showGuardCard(guardCard({ ok: false, timeout: true, text: state.sendText || '' }), anchor, seq);
+      return;
+    }
+    showFailureCard(failureCardFor({ timeout: true }), seq, function () {
+      requestSendCheck();
     });
   }
 
   function requestSendCheck() {
-    if (state.sending) return;
+    if (state.sending) return; // a check is in flight; the caller held the event
     if (state.redactedArmed) { state.redactedArmed = false; return; } // user confirmed; let it go
     if (!state.siteOn) return; // extension off for this site: do not interfere
-    state.sending = true;
+    var seq = beginSendCheck();
+    state.sendGuard = false;
+    state.sendAnchor = editorAnchor();
+    showCheckingCard(seq, state.sendAnchor);
     var text = editorText(state.editor);
     sendToBg({ type: 'SF_REDACT', text: text, host: location.hostname }).then(function (res) {
-      state.sending = false;
-      handleRedactResult(res);
+      if (!endSendCheck(seq)) { handleLateRedact(res, seq); return; }
+      handleRedactResult(res, seq, true);
     });
   }
 
@@ -600,21 +822,248 @@
         // Only intercept Enter inside the composer.
         if (ev.target !== state.editor) return;
       }
-      if (!state.siteOn || state.redactedArmed || state.sending) return;
+      if (!state.siteOn) return; // extension off for this site: do not interfere
+      if (state.redactedArmed) { state.redactedArmed = false; return; } // confirmed; let this send through once
+      // A send intent while a check runs is held, never passed through.
       ev.preventDefault();
       ev.stopPropagation();
       requestSendCheck();
     }, true);
     document.addEventListener('click', function (ev) {
-      if (!state.adapter || !state.siteOn || state.redactedArmed || state.sending) return;
+      if (!state.adapter || !state.siteOn) return; // not ours, or off: do not interfere
+      if (state.redactedArmed) { state.redactedArmed = false; return; } // confirmed; let this send through once
       var t = ev.target;
       if (!(t instanceof Element)) return;
       var btn = qs(state.adapter.sendButton, document);
       if (btn && (t === btn || btn.contains(t))) {
+        // Held while a check runs: one send = one check, nothing unchecked.
         ev.preventDefault();
         ev.stopPropagation();
         requestSendCheck();
       }
+    }, true);
+  }
+
+  /* ---------- document-level capture guard (fail visible, fail closed) ----------
+   * Runs even when no adapter attached (unknown composer markup after a
+   * site update): on Enter (no Shift) or a click on a send-style button
+   * while focus sits in any editable element on a supported host, the
+   * same /api/ext/redact check runs and a BLOCK-level send is stopped.
+   * When the app is unreachable the send is held with a not-running
+   * card offering "Send anyway" — except for secret-looking text, which
+   * is never offered an override. Non-BLOCK verdicts let the send
+   * through exactly once (re-armed so the re-dispatched event passes). */
+  function isEditable(el) {
+    if (LOGIC && LOGIC.isEditableElement) return LOGIC.isEditableElement(el);
+    /* Tiny duplicate of isEditableElement in logic.js (see src/logic.js). */
+    if (!el) return false;
+    var tag = String(el.tagName || '').toUpperCase();
+    if (tag === 'TEXTAREA') return true;
+    if (tag === 'INPUT') {
+      var t = String(el.type || 'text').toLowerCase();
+      return (t !== 'file' && t !== 'hidden' && t !== 'checkbox' && t !== 'radio' &&
+        t !== 'button' && t !== 'submit' && t !== 'image' && t !== 'reset');
+    }
+    try { if (el.isContentEditable) return true; } catch (e) { /* ignore */ }
+    if (el.getAttribute) {
+      var ce = null;
+      try { ce = el.getAttribute('contenteditable'); } catch (e2) { ce = null; }
+      if (ce !== null && ce !== undefined && String(ce).toLowerCase() !== 'false') return true;
+      try { if (el.getAttribute('role') === 'textbox') return true; } catch (e3) { /* ignore */ }
+    }
+    return false;
+  }
+  function shouldGuard(o) {
+    if (LOGIC && LOGIC.guardShouldIntercept) return LOGIC.guardShouldIntercept(o);
+    /* Tiny duplicate of guardShouldIntercept in logic.js (see src/logic.js). */
+    if (!o || !o.supported || o.adapterAttached || o.armed || o.sending || !o.siteOn) return false;
+    if (o.kind === 'enter') {
+      if (o.key !== 'Enter' || o.shift || o.composing) return false;
+      return !!o.activeEditable;
+    }
+    if (o.kind === 'click') return !!(o.onSendButton && o.activeEditable);
+    return false;
+  }
+  function guardCard(input) {
+    if (LOGIC && LOGIC.captureGuardCard) return LOGIC.captureGuardCard(input);
+    /* Tiny duplicate of captureGuardCard in logic.js (see src/logic.js). */
+    if ((input || {}).timeout) {
+      return {
+        send: false, tone: 'review', title: 'Still no answer',
+        body: 'Still no answer \u2014 nothing was sent.', buttons: ['retry', 'cancel']
+      };
+    }
+    if (input && (input.status === 401 || input.status === 403)) {
+      return {
+        send: false, tone: 'block', title: 'Not paired',
+        body: 'Not paired \u2014 open the Shadowfenced popup and paste the pairing token.' +
+        ' Nothing was sent.',
+        buttons: ['ok']
+      };
+    }
+    if (!input || !input.ok) {
+      return {
+        send: false, tone: 'block', title: "Shadowfenced isn't running",
+        body: FAILSAFE_MESSAGE + ' Nothing was sent.', buttons: ['ok']
+      };
+    }
+    var d = input.decision || {};
+    if (d.action === 'BLOCK') {
+      return {
+        send: false, tone: 'block', title: 'Blocked \u2014 not sent',
+        body: d.reason || 'Blocked by policy.', buttons: ['ok']
+      };
+    }
+    return { send: true };
+  }
+  function findSendButton(el) {
+    try {
+      if (el && el.closest) {
+        return el.closest('button[type="submit"], button[aria-label*="Send" i], [aria-label*="Send" i]');
+      }
+    } catch (e) { /* detached node */ }
+    return null;
+  }
+  function adapterOwns(el) {
+    return !!(state.editor && el && (el === state.editor || state.editor.contains(el)));
+  }
+  function adapterSendButton() {
+    try {
+      if (!state.adapter) return null;
+      var btn = qs(state.adapter.sendButton, document);
+      return (btn && document.contains(btn)) ? btn : null;
+    } catch (e) { return null; }
+  }
+  /* The adapter path owns clicks on its own send button (and anything
+   * inside it): the guard stays out so one click means one check. */
+  function adapterSendButtonOwns(el) {
+    var btn = adapterSendButton();
+    if (!btn || !el) return false;
+    if (el === btn) return true;
+    try { return !!(el instanceof Element && btn.contains(el)); } catch (e) { return false; }
+  }
+  function guardAnchor(el) {
+    try {
+      if (el && el.getBoundingClientRect) {
+        var r = el.getBoundingClientRect();
+        if (r && (r.width || r.height)) return r;
+      }
+    } catch (e) { /* ignore */ }
+    return editorAnchor();
+  }
+  var pendingGuardResend = null; // {kind, el} for the held-then-confirmed send
+  function resendGuarded() {
+    var p = pendingGuardResend;
+    pendingGuardResend = null;
+    if (!p || !p.el || !document.contains(p.el)) return;
+    // state.redactedArmed is set by the caller; the owning interceptor
+    // consumes the pass while the other stays out (single ownership).
+    if (p.kind === 'click') {
+      try { p.el.click(); } catch (e) { /* ignore */ }
+    } else {
+      try {
+        p.el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+      } catch (e) { /* ignore */ }
+    }
+  }
+  function showGuardCard(card, anchorRect, seq) {
+    var anchor = anchorRect || editorAnchor();
+    if (card.buttons.indexOf('retry') !== -1) {
+      showCard({
+        tone: card.tone, title: card.title, body: card.body, anchor: anchor,
+        buttons: [
+          { label: 'Retry', onClick: function () {
+            runCaptureGuard(state.sendText || '', state.sendAnchor || editorAnchor(), pendingGuardResend);
+          } },
+          { label: 'Cancel' }
+        ],
+        sendSeq: seq
+      });
+      return;
+    }
+    if (card.buttons.indexOf('send-anyway') !== -1) {
+      showCard({
+        tone: card.tone, title: card.title, body: card.body, anchor: anchor,
+        buttons: [
+          { label: 'Send anyway', onClick: function () { state.redactedArmed = true; resendGuarded(); } },
+          { label: 'Cancel' }
+        ],
+        sendSeq: seq
+      });
+      return;
+    }
+    showCard({
+      tone: card.tone, title: card.title, body: card.body, anchor: anchor,
+      buttons: [{ label: 'OK' }],
+      sendSeq: seq
+    });
+  }
+  function runCaptureGuard(text, anchorRect, resend) {
+    if (state.sending) return;
+    var seq = beginSendCheck();
+    state.sendGuard = true;
+    state.sendAnchor = anchorRect;
+    state.sendText = text;
+    showCheckingCard(seq, anchorRect);
+    pendingGuardResend = resend;
+    sendToBg({ type: 'SF_REDACT', text: text, host: location.hostname }).then(function (res) {
+      if (!endSendCheck(seq)) {
+        // Late answer: a BLOCK still refreshes the card, anything else
+        // stays quiet, and nothing ever sends on its own.
+        var late = guardCard({ ok: !!(res && res.ok), status: res && res.status, decision: normalizeServerDecision(res && res.data), text: text });
+        if (!late.send) showGuardCard(late, anchorRect, seq);
+        return;
+      }
+      var card = guardCard({ ok: !!(res && res.ok), status: res && res.status, decision: normalizeServerDecision(res && res.data), text: text });
+      if (card.send) {
+        // Not a BLOCK verdict: let this one send through exactly once.
+        state.redactedArmed = true;
+        resendGuarded();
+        return;
+      }
+      showGuardCard(card, anchorRect, seq);
+    });
+  }
+  function activeEditable() {
+    var active = null;
+    try { active = document.activeElement; } catch (e) { active = null; }
+    return isEditable(active) ? active : null;
+  }
+  function bindCaptureGuard() {
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Enter' || ev.shiftKey || ev.isComposing) return;
+      if (state.redactedArmed) { state.redactedArmed = false; return; } // confirmed; let it go
+      var active = null;
+      try { active = document.activeElement; } catch (e) { active = null; }
+      if (adapterOwns(ev.target) || adapterOwns(active)) return; // adapter path owns it
+      if (!shouldGuard({
+        kind: 'enter', key: ev.key, shift: !!ev.shiftKey, composing: !!ev.isComposing,
+        supported: !!pickAdapter(), adapterAttached: false, armed: false,
+        sending: state.sending, siteOn: state.siteOn,
+        activeEditable: !!activeEditable(), onSendButton: false
+      })) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      var ed = activeEditable();
+      runCaptureGuard(editorText(ed), guardAnchor(ed), { kind: 'enter', el: ed });
+    }, true);
+    document.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!(t instanceof Element)) return;
+      if (adapterOwns(t)) return;
+      if (adapterSendButtonOwns(t)) return; // the adapter path owns its send button
+      var btn = findSendButton(t);
+      if (!btn) return;
+      if (state.redactedArmed) { state.redactedArmed = false; return; } // confirmed; let it go
+      var focused = activeEditable() || (isEditable(t) ? t : null);
+      if (!shouldGuard({
+        kind: 'click', supported: !!pickAdapter(), adapterAttached: false, armed: false,
+        sending: state.sending, siteOn: state.siteOn,
+        activeEditable: !!focused, onSendButton: true
+      })) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      runCaptureGuard(editorText(focused), guardAnchor(focused || btn), { kind: 'click', el: btn });
     }, true);
   }
 
@@ -713,6 +1162,10 @@
     });
     var editor = qs(adapter.editor, document);
     if (editor && editor !== state.editor) attachToEditor(editor);
+    if (state.adapter) {
+      reportProtection(state.adapter.id, !!state.editor);
+      updateUnprotBadge(!state.editor && state.siteOn);
+    }
     if (state.editor && !document.contains(state.editor)) {
       state.editor = null;
       if (mirrorBox) mirrorBox.style.display = 'none';
@@ -720,7 +1173,7 @@
     if (state.editor) {
       syncOverlay();
       updateAttachBadge();
-      if (cardMode === 'notice' && cardAnchor) {
+      if ((cardMode === 'notice' || cardMode === 'checking') && cardAnchor) {
         // Follow the composer; hover cards hide instead of chasing.
         cardAnchor = editorAnchor();
         placeCard(cardAnchor);
@@ -729,12 +1182,13 @@
   }
 
   bindSendInterception();
+  bindCaptureGuard();
   setInterval(tick, 1500);
   tick();
   window.addEventListener('resize', function () {
     syncOverlay();
     if (cardMode === 'hover') hideCard();
-    else if (cardMode === 'notice' && cardAnchor) {
+    else if ((cardMode === 'notice' || cardMode === 'checking') && cardAnchor) {
       cardAnchor = editorAnchor();
       placeCard(cardAnchor);
     }
@@ -743,7 +1197,7 @@
   window.addEventListener('scroll', function () {
     syncOverlay();
     if (cardMode === 'hover') hideCard();
-    else if (cardMode === 'notice' && cardAnchor) {
+    else if ((cardMode === 'notice' || cardMode === 'checking') && cardAnchor) {
       cardAnchor = editorAnchor();
       placeCard(cardAnchor);
     }

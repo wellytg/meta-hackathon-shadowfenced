@@ -42,6 +42,7 @@ body { margin: 0; background: var(--sf-paper); color: var(--sf-ink);
   background: #fffdf6; border: 2px solid var(--sf-ink); padding: 5px 8px; }
 #sites input[type="checkbox"] { width: 16px; height: 16px; margin: 0;
   accent-color: var(--sf-allowed); }
+#sites label.sf-amber { background: #f7e6ad; border-color: var(--sf-review); }
 .sf-result { margin: 8px 12px 0; padding: 8px 10px;
   background: #fffdf6; border: 2px solid var(--sf-ink); }
 .sf-hint { opacity: .8; font-size: 12px; margin: 8px 12px 0; }

@@ -150,6 +150,12 @@ def _refuse_hosted_pairing() -> None:
         pass
 
 
+@router.get("/health")
+def ext_health(_guard: None = Depends(ext_guard)) -> dict[str, Any]:
+    """Liveness probe for the extension popup (origin + token guarded)."""
+    return {"ok": True, "paired": True}
+
+
 @router.get("/pairing")
 def pairing_status(_guard: None = Depends(ext_guard)) -> dict[str, Any]:
     """Return the pairing token for the local console setup card."""

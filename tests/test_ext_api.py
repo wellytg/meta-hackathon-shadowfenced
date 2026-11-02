@@ -27,6 +27,7 @@ from shadowfenced.ext_api import (
     check_origin,
     check_token,
     ext_guard,
+    ext_health,
     ext_redact,
     ext_rehydrate,
     ext_scan,
@@ -270,3 +271,33 @@ def test_logs_carry_no_values(token_env, caplog):
     assert "ada@corvanelabs.com" not in caplog.text
     assert secret not in json.dumps(scan_body)
     assert secret not in json.dumps(redact_body)
+
+
+# --- health (popup liveness probe) --------------------------------------------
+
+def test_health_ok_when_token_valid(token_env):
+    _guard(_req(method="GET", headers=_auth(), path="/api/ext/health"))
+    assert ext_health(None) == {"ok": True, "paired": True}
+
+
+def test_health_guard_requires_token(token_env):
+    with pytest.raises(HTTPException) as exc_info:
+        _guard(_req(method="GET", headers={}, path="/api/ext/health"))
+    assert exc_info.value.status_code == 401
+    with pytest.raises(HTTPException) as exc_info:
+        _guard(_req(method="GET", headers={"x-ext-token": "wrong"},
+                    path="/api/ext/health"))
+    assert exc_info.value.status_code == 401
+
+
+def test_health_guard_checks_origin_first(token_env):
+    with pytest.raises(HTTPException) as exc_info:
+        _guard(_req(method="GET", headers={**_auth(), "origin": "https://evil.example.com"},
+                    path="/api/ext/health"))
+    assert exc_info.value.status_code == 403
+
+
+def test_health_route_registered_with_token_guard():
+    paths = [(getattr(r, "path", ""), sorted(getattr(r, "methods", []) or []))
+             for r in ext_api.router.routes]
+    assert ("/api/ext/health", ["GET"]) in paths

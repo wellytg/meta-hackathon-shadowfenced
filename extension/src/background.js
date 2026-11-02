@@ -1,7 +1,7 @@
 'use strict';
 
 /* Shadowfenced background worker (service worker on Chrome, background
- * script on Firefox — same file, no modules, only chrome.* + fetch).
+ * script on Firefox â€” same file, no modules, only chrome.* + fetch).
  * - Stores the pairing token and per-site on/off toggles (chrome.storage).
  * - Forwards scan/redact/rehydrate/health calls to the local app at
  *   http://127.0.0.1:8765 with the X-Ext-Token header.
@@ -47,7 +47,13 @@ function callApp(path, token, body) {
   var opts = { method: body === undefined ? 'GET' : 'POST', headers: headers };
   if (body !== undefined) opts.body = JSON.stringify(body);
   return fetch(SF_BASE + path, opts).then(function (resp) {
-    if (!resp.ok) throw new Error('app returned HTTP ' + resp.status);
+    if (!resp.ok) {
+      // Keep the HTTP status: 401/403 means "not paired", anything
+      // else (or a network failure with no status) means "not running".
+      var err = new Error('app returned HTTP ' + resp.status);
+      err.status = resp.status;
+      throw err;
+    }
     return resp.json();
   });
 }
@@ -75,6 +81,18 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       case 'SF_GET_STATE':
         sendResponse({ ok: true, data: { disabled: siteDisabled(state.sites, msg.host), sites: state.sites } });
         return;
+      case 'SF_PROT':
+        // Fail-visible report from the content script: whether the
+        // composer is currently attached on `msg.site`. The popup reads
+        // this (with its timestamp) to paint an amber site row.
+        chrome.storage.local.get(['sfProt'], function (items) {
+          var map = (items && items.sfProt) || {};
+          map[msg.site] = { protecting: !!msg.protecting, ts: Date.now() };
+          chrome.storage.local.set({ sfProt: map }, function () {
+            sendResponse({ ok: !chrome.runtime.lastError });
+          });
+        });
+        return;
       case 'SF_SET_TOKEN':
         chrome.storage.local.set({ sfToken: msg.token || '' }, function () {
           sendResponse({ ok: !chrome.runtime.lastError });
@@ -98,6 +116,8 @@ function forward(path, token, body) {
   return callApp(path, token, body).then(function (data) {
     return { ok: true, data: data };
   }).catch(function (e) {
-    return { ok: false, error: String((e && e.message) || e) };
+    var out = { ok: false, error: String((e && e.message) || e) };
+    if (e && typeof e.status === 'number') out.status = e.status;
+    return out;
   });
 }

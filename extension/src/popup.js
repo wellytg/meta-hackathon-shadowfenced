@@ -21,16 +21,52 @@ function setStatus(el, icon, text, tone) {
   icon.className = 'sf-dot sf-' + tone;
 }
 
-function probe(statusEl, iconEl, tokenKnown) {
+/* Three-state status from the SF_HEALTH reply (canonical version in
+ * logic.js, loaded just before this file; the duplicate below keeps
+ * the popup working standalone). {ok:true} is Connected, HTTP 401/403
+ * is Not paired, and a network error is Not running. */
+function healthStatus(res) {
+  var logic = (typeof globalThis !== 'undefined' && globalThis.ShadowfencedLogic) || null;
+  if (logic && logic.healthToStatus) return logic.healthToStatus(res);
+  /* Tiny duplicate of healthToStatus in logic.js (see src/logic.js). */
+  if (res && res.ok) return { text: 'Connected \u00b7 checking locally', tone: 'ok' };
+  if (res && (res.status === 401 || res.status === 403)) {
+    return { text: 'Not paired \u2014 paste your token', tone: 'warn' };
+  }
+  return { text: 'Not running \u2014 start Shadowfenced', tone: 'bad' };
+}
+
+function siteTone(entry, nowMs) {
+  var logic = (typeof globalThis !== 'undefined' && globalThis.ShadowfencedLogic) || null;
+  if (logic && logic.siteRowTone) return logic.siteRowTone(entry, nowMs);
+  /* Tiny duplicate of siteRowTone in logic.js (see src/logic.js). */
+  if (!entry || entry.protecting !== false) return '';
+  var now = Number(nowMs) || Date.now();
+  if (typeof entry.ts === 'number' && (now - entry.ts) < 120000) return 'amber';
+  return '';
+}
+
+function probe(statusEl, iconEl) {
   return bg({ type: 'SF_HEALTH' }).then(function (res) {
-    if (res && res.ok) {
-      setStatus(statusEl, iconEl, 'Connected \u00b7 checking locally', 'ok');
-    } else if (!tokenKnown) {
-      setStatus(statusEl, iconEl, 'Not paired \u2014 paste your token', 'warn');
-    } else {
-      setStatus(statusEl, iconEl, 'Not running \u2014 start Shadowfenced', 'bad');
-    }
+    var st = healthStatus(res);
+    setStatus(statusEl, iconEl, st.text, st.tone);
     return res;
+  });
+}
+
+function paintSiteRows(prot) {
+  var now = Date.now();
+  document.querySelectorAll('#sites input[data-site]').forEach(function (box) {
+    var id = box.getAttribute('data-site');
+    var label = (box.closest && box.closest('label')) || box.parentNode;
+    if (!label) return;
+    if (siteTone(prot && prot[id], now) === 'amber') {
+      label.classList.add('sf-amber');
+      label.title = 'Shadowfenced: not protecting this page';
+    } else {
+      label.classList.remove('sf-amber');
+      label.title = '';
+    }
   });
 }
 
@@ -44,10 +80,10 @@ document.addEventListener('DOMContentLoaded', function () {
   var testEl = document.getElementById('test');
   var testResultEl = document.getElementById('testResult');
 
-  chrome.storage.local.get(['sfToken', 'sfSites'], function (items) {
+  chrome.storage.local.get(['sfToken', 'sfSites', 'sfProt'], function (items) {
     var token = items.sfToken || '';
     if (token) tokenEl.value = token;
-    probe(statusEl, iconEl, !!token);
+    probe(statusEl, iconEl);
     var sites = items.sfSites || {};
     document.querySelectorAll('#sites input[data-site]').forEach(function (box) {
       var id = box.getAttribute('data-site');
@@ -56,6 +92,7 @@ document.addEventListener('DOMContentLoaded', function () {
         bg({ type: 'SF_SET_SITE', site: id, on: box.checked });
       });
     });
+    paintSiteRows(items.sfProt);
   });
 
   pasteEl.addEventListener('click', function () {
@@ -76,7 +113,7 @@ document.addEventListener('DOMContentLoaded', function () {
       savedEl.hidden = !(res && res.ok);
       if (res && res.ok) {
         setTimeout(function () { savedEl.hidden = true; }, 2000);
-        probe(statusEl, iconEl, !!tokenEl.value.trim());
+        probe(statusEl, iconEl);
       }
     });
   });

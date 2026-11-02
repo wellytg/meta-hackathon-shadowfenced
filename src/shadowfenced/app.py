@@ -910,9 +910,23 @@ def scan(request: ScanRequest) -> dict[str, Any]:
     spans = tier1.scan(
         request.text, get_policy(), get_registry(), trace_out=trace
     )
+    # Proven-secret BLOCK short-circuit (T63c): a secret, canary or
+    # protected key is already certain from Tier 1, so skip the live
+    # model suspicions and the Glimmer-backed re-id payload.
+    scan_shortcut = engine.has_proven_secret_block(spans)
+    if scan_shortcut:
+        trace.append(
+            {
+                "step": "scan.short_circuit",
+                "tool": "gate",
+                "detail": "proven secret -> BLOCK; model checks skipped",
+                "result": "BLOCK",
+                "ms": 0.0,
+            }
+        )
     tier1_ms = (time.perf_counter() - started) * 1000
     latency_ms: dict[str, float] = {"tier1": tier1_ms}
-    if request.mode == "live" and get_settings().live_hints:
+    if request.mode == "live" and get_settings().live_hints and not scan_shortcut:
         tier2_started = time.perf_counter()
         live_before = len(spans)
         spans = _with_live_suspicions(request.text, spans)
@@ -940,7 +954,14 @@ def scan(request: ScanRequest) -> dict[str, Any]:
             }
         )
     try:
-        reid_payload = _reid_scan_payload(request.text, trace)
+        if scan_shortcut:
+            # Code-only payload: the judge stub never calls the model.
+            reid_payload = _reid_scan_payload(
+                request.text, trace,
+                public_figure_judge_fn=lambda _text: None,
+            )
+        else:
+            reid_payload = _reid_scan_payload(request.text, trace)
     except Exception:
         reid_payload = {
             "score": 0, "combination": [], "outcome": "OK",
@@ -966,6 +987,7 @@ def scan(request: ScanRequest) -> dict[str, Any]:
 
 def _reid_scan_payload(
     text: str, trace_out: list[dict[str, Any]] | None,
+    public_figure_judge_fn=None,
 ) -> dict[str, Any]:
     """Re-identification findings for the live composer (no raw values).
 
@@ -980,6 +1002,7 @@ def _reid_scan_payload(
     findings = tier1_module.scan_reid(text, trace_out=trace_out)
     result = reid_module.assess(
         text, current_findings=findings, generalise_offer=True,
+        public_figure_judge_fn=public_figure_judge_fn,
     )
     reid_module.trace_combine(
         trace_out, result.score, result.combination, result.outcome,

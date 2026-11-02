@@ -1,0 +1,76 @@
+{
+ "chatgpt": {
+  "active": "<textarea class=\"x-default-marker xh85r0y x19q1bhk x7xwk5j xjbqb8w xnvt7iq xu82sp8 x1heor9g x5f5z56 xh8yej3 xu4ur08 x871njl x1a2a7pz x1odjw0f x1717udv x1n2onr6 xtt52l0 xikzxjy xipoby6 x1vjfegm xeuugli x1ghz6dp xt7dq6l x1skl475 x1q0ua6o xk4oe7i x1i21sxh x1vuokdt x17mssa0 x2cyav5 x11ezvi4 x13xjnou\" aria-label=\"Chat with ChatGPT\" autocapitalize=\"sentences\" autocomplete=\"off\" autocorrect=\"on\" data-lt-active=\"false\" data-mobile-composer-prompt=\"\" enterkeyhint=\"enter\" id=\"mobile-composer-prompt\" input",
+  "editables": [
+   {
+    "tag": "TEXTAREA",
+    "id": "mobile-composer-prompt",
+    "vis": true,
+    "ph": "Ask ChatGPT"
+   }
+  ],
+  "buttons": [
+   "Add files and more||button",
+   "Start dictation||button",
+   "Send message||submit"
+  ],
+  "fileInputs": 3
+ },
+ "gemini": {
+  "active": "<div class=\"ql-editor textarea new-input-ui rich-query-formatting-enabled\" data-gramm=\"false\" contenteditable=\"true\" dir=\"ltr\" role=\"textbox\" aria-multiline=\"true\" aria-label=\"Enter a prompt for Gemini\" data-placeholder=\"Ask Gemini\" style=\"\"><p>hello</p></div>",
+  "editables": [
+   {
+    "tag": "DIV",
+    "id": "",
+    "vis": true,
+    "ph": "Enter a prompt for Gemini"
+   },
+   {
+    "tag": "DIV",
+    "id": "",
+    "vis": true,
+    "ph": ""
+   }
+  ],
+  "buttons": [
+   "Close sidebar||submit",
+   "Settings||button",
+   "||submit",
+   "||submit",
+   "Scroll to bottom||button",
+   "Upload & tools||submit",
+   "Open mode picker, currently Flash-Lite||button",
+   "Dictate (^\u21e7D)||submit",
+   "Send message||submit",
+   "||submit",
+   "||submit"
+  ],
+  "fileInputs": 0
+ },
+ "metaai": {
+  "active": "<button class=\"enabled:active:scale-98 inline-flex shrink-0 cursor-pointer select-none items-center justify-center gap-0.5 focus:not-focus-visible:outline-none transition-transform duration-150 ease-in-out disabled:pointer-events-none disabled:opacity-50 rounded-round text-subheadline-medium h-9 px-3.5 text-text-on-accent enabled:hover:filter-[brightness(0.95)] enabled:active:filter-[brightness(0.9)] dark:enabled:hover:filter-[brightness(1.025)] dark:enabled:active:filter-[brightness(0.95)] bg-l",
+  "editables": [
+   {
+    "tag": "INPUT",
+    "id": "",
+    "vis": true,
+    "ph": "Ask Meta AI anything..."
+   }
+  ],
+  "buttons": [
+   "Open sidebar||submit",
+   "Toggle Sidebar||submit",
+   "||button",
+   "|login-button|submit",
+   "||submit",
+   "Settings||button",
+   "||button",
+   "|login-button|submit",
+   "Add attachment|composer-add-attachment-button|submit",
+   "Send||submit",
+   "||submit",
+   "||submit"
+  ],
+  "fileInputs": 0
+ }
+}
