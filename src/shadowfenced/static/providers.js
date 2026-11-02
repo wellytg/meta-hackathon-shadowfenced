@@ -212,12 +212,31 @@
     return fallback;
   }
 
+  var hostedMode = false;
+  var HOSTED_NOTICE = "Public demo: uses the host's Muse Spark key. Run Shadowfenced on your PC to use your own keys.";
   function load() {
+    fetch("/api/hosted")
+      .then(function (resp) { return resp.json(); })
+      .then(function (flag) {
+        hostedMode = !!(flag && flag.hosted);
+        renderProviders();
+      })
+      .catch(function () { renderProviders(); });
+  }
+  function renderProviders() {
     var where = host();
     fetch("/api/providers")
       .then(function (resp) { return resp.json(); })
       .then(function (body) {
         where.root.innerHTML = "";
+        if (hostedMode) {
+          var hostedNote = document.createElement("p");
+          hostedNote.className = "providers-notice";
+          hostedNote.setAttribute("data-testid", "providers-hosted-notice");
+          hostedNote.textContent = HOSTED_NOTICE;
+          where.root.appendChild(hostedNote);
+          return;
+        }
         var note = document.createElement("p");
         note.className = "providers-notice";
         note.textContent = NOTICE;
