@@ -227,7 +227,7 @@ def test_person_search_schema_is_minimal_and_sized(monkeypatch):
     schema = body["format"]
     assert set(schema["properties"]) == {
         "person_search", "subject_public", "subject", "inferred",
-        "confidence",
+        "confidence", "intent",
     }
     assert body["options"]["num_predict"] == 120
     assert body["options"]["temperature"] == 0
