@@ -644,7 +644,7 @@ body {
 }
 
 #hosted-banner {
-  position: fixed;
+  position: static;
   top: 0;
   left: 0;
   right: 0;
@@ -1165,9 +1165,9 @@ body {
 /* Sidebar and drawer scroll inside the full-height shell. */
 .sessions { min-height: 0; }
 .chat-list { overflow-y: auto; min-height: 0; }
-.side-col { min-height: 0; max-height: 100%; overflow: hidden; }
-.details-drawer { min-height: 0; flex: 1 1 auto; }
-.drawer-body { overflow-y: auto; min-height: 0; }
+.side-col { display: flex; flex-direction: column; min-height: 0; max-height: 100%; overflow: hidden; }
+.details-drawer { min-height: 0; flex: 1 1 auto; overflow-y: auto; }
+.drawer-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
 /* Phone (<=640px): the conversation and composer fill the screen; the
    chat list and the details drawer become slide-out panels opened from
    the header buttons. Nothing stacks under the composer. */

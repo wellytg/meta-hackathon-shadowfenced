@@ -48,8 +48,11 @@
   }
 
   var HEADER_PILL = "Local check \u00b7 code + Muse Glimmer (30B, this PC)";
+  var HOSTED_PILL = "Check \u00b7 code + Muse Spark (public demo)";
   var GUARD_FULL = "Guard: on \u00b7 checking locally (code + Muse Glimmer)";
   var GUARD_CODE_ONLY = "Guard: on \u00b7 code checks only";
+  var GUARD_HOSTED = "Guard: on \u00b7 code checks + Muse Spark review";
+  var hostedMode = false;
   var guardDot = document.querySelector('[data-testid="guard-dot"]');
   var modelStatus = document.querySelector('[data-testid="model-status"]');
 
@@ -59,7 +62,7 @@
 
   function setPill() {
     if (!headerPill) return;
-    headerPill.textContent = HEADER_PILL;
+    headerPill.textContent = hostedMode ? HOSTED_PILL : HEADER_PILL;
   }
 
   function shortModelLabel(id, label) {
@@ -76,20 +79,20 @@
     modelStatus.textContent = "Model: " + shortModelLabel(providerSel.value, label);
   }
 
-  function paintGuard(glimmer) {
-    if (guardDot) guardDot.setAttribute("data-state", glimmer ? "on" : "limited");
+  function paintGuard(glimmer, hosted) {
+    if (guardDot) guardDot.setAttribute("data-state", (glimmer || hosted) ? "on" : "limited");
     if (!headerPill) return;
-    headerPill.textContent = glimmer ? GUARD_FULL : GUARD_CODE_ONLY;
+    headerPill.textContent = hosted ? HOSTED_PILL : (glimmer ? GUARD_FULL : GUARD_CODE_ONLY);
   }
 
   function loadGuard() {
     fetch("/api/guard")
       .then(function (resp) { return resp.json(); })
-      .then(function (body) { paintGuard(!!(body && body.glimmer)); })
-      .catch(function () { paintGuard(false); });
+      .then(function (body) { var glimmer = !!(body && body.glimmer); fetch("/api/hosted").then(function (r) { return r.json(); }).then(function (h) { var hosted = !!(h && h.hosted); paintGuard(glimmer, hosted); applyHostedUi(hosted); }).catch(function () { paintGuard(glimmer, false); }); })
+      .catch(function () { paintGuard(false, false); });
   }
 
-  // Hosted demo (SF_HOSTED=1): reveal the fixed public-demo banner.
+  // Hosted demo (SF_HOSTED=1): reveal the public-demo banner.
   function loadHostedBanner() {
     fetch("/api/hosted")
       .then(function (resp) { return resp.json(); })
@@ -97,11 +100,31 @@
         if (body && body.hosted) {
           var el = document.getElementById("hosted-banner");
           if (el) el.hidden = false;
+          applyHostedUi(true);
         }
       })
       .catch(function () { /* banner stays hidden */ });
   }
 
+  function hidePairPanel() {
+    var pairHead = document.getElementById("pair-heading");
+    if (pairHead && pairHead.parentNode) pairHead.parentNode.hidden = true;
+    var headings = document.querySelectorAll(".card h2");
+    for (var i = 0; i < headings.length; i++) {
+      if (headings[i].textContent === "Pair browser extension") {
+        var card = headings[i].parentNode;
+        if (card) card.hidden = true;
+      }
+    }
+    var tokenEl = document.getElementById("ext-token");
+    if (tokenEl) tokenEl.textContent = "unavailable";
+  }
+  function applyHostedUi(hosted) {
+    hostedMode = !!hosted;
+    if (!hostedMode) return;
+    hidePairPanel();
+    loadProviders();
+  }
   function loadLiveHintsFlag() {
     fetch("/api/health")
       .then(function (resp) { return resp.json(); })
@@ -119,6 +142,7 @@
         var list = body.providers || [];
         providerSel.innerHTML = "";
         list.forEach(function (p) {
+          if (hostedMode && p.needs_key && !p.connected) return;
           var opt = document.createElement("option");
           opt.value = p.id;
           opt.textContent = p.available ? p.label : p.label + " (no API key)";

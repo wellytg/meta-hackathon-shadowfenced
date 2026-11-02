@@ -387,7 +387,7 @@ body {
   .story-step .travel { animation: none; }
 }
 #hosted-banner {
-  position: fixed;
+  position: static;
   top: 0;
   left: 0;
   right: 0;

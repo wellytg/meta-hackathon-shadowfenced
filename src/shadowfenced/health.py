@@ -70,6 +70,21 @@ def _tags_match(models: list[str], wanted: str) -> bool:
     return False
 
 
+def _hosted_now(settings=None):
+    tmp = settings
+    try:
+        if tmp is not None and bool(getattr(tmp, "hosted", False)):
+            return True
+    except Exception:
+        pass
+    try:
+        from . import hosted as hosted_module
+
+        return bool(hosted_module.is_hosted())
+    except Exception:
+        return False
+
+
 def check_ollama(
     settings: Any = None,
     transport: httpx.BaseTransport | None = None,
@@ -79,6 +94,11 @@ def check_ollama(
         from .config import get_settings
 
         cfg = settings or get_settings()
+        if _hosted_now(cfg):
+            return _item(
+                "ollama", "off",
+                "Not used in the public demo \u2014 Muse Spark does the Tier 2 check",
+            )
         if cfg.tier2_mode == "off":
             return _item(
                 "ollama", "off",
@@ -161,11 +181,16 @@ def check_voice(settings: Any = None) -> dict[str, str]:
         )
 
 
-def check_keystore() -> dict[str, str]:
+def check_keystore(settings: Any = None) -> dict[str, str]:
     """OS credential backend available, or the ``.env`` fallback?"""
     try:
         from . import providers as providers_module
 
+        if _hosted_now(settings):
+            return _item(
+                "keystore", "off",
+                "Not used in the public demo \u2014 the key comes from the host's secret store",
+            )
         backend = providers_module.storage_backend()
         if backend == "keyring":
             return _item(
@@ -210,6 +235,11 @@ def check_extension(settings: Any = None) -> dict[str, str]:
         from .config import ext_token_path, get_settings
 
         cfg = settings or get_settings()
+        if _hosted_now(cfg):
+            return _item(
+                "extension", "off",
+                "Not used in the public demo \u2014 the extension pairs with the app on your own PC",
+            )
         if (cfg.ext_token or "").strip():
             return _item(
                 "extension", "ok", "pairing token set via environment"
@@ -263,7 +293,7 @@ def collect_components(
         check_ollama(cfg, transport=transport),
         check_meta_key(cfg),
         check_voice(cfg),
-        check_keystore(),
+        check_keystore(cfg),
         check_log(cfg),
         check_extension(cfg),
         check_hosted(),

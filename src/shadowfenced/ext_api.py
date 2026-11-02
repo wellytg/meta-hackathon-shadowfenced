@@ -131,9 +131,29 @@ def _live_gate(text: str) -> Any:
     return engine.gate_reid(text, get_policy(), get_registry(), mode="tier1")
 
 
+def _refuse_hosted_pairing() -> None:
+    try:
+        from . import hosted as hosted_module
+
+        if hosted_module.is_hosted():
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "shadowfenced_hosted_pairing_disabled",
+                    "type": "shadowfenced_hosted_pairing_disabled",
+                    "message": "pairing is disabled in the public demo",
+                },
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+
 @router.get("/pairing")
 def pairing_status(_guard: None = Depends(ext_guard)) -> dict[str, Any]:
     """Return the pairing token for the local console setup card."""
+    _refuse_hosted_pairing()
     return {"token": expected_token()}
 
 
@@ -141,6 +161,7 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "testclient"}
 
 
 def check_local(request: Request) -> None:
+    _refuse_hosted_pairing()
     """Allow pairing rotation only from this machine (loopback)."""
     host = request.client.host if request.client else ""
     if host in _LOOPBACK_HOSTS:

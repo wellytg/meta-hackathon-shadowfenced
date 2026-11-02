@@ -227,7 +227,7 @@ def test_hosted_mapping(monkeypatch):
 def test_endpoint_failure_mapping(
     monkeypatch, tmp_path, components_transport
 ):
-    """One integration pass: degraded Ollama + broken log + hosted on."""
+    """One integration pass: hosted Ollama off + broken log + hosted on."""
     monkeypatch.setenv("SF_TIER2_MODE", "live")
     monkeypatch.setenv("SF_HOSTED", "1")
     broken = tmp_path / "decisions.jsonl"
@@ -235,6 +235,7 @@ def test_endpoint_failure_mapping(
     monkeypatch.setenv("SF_LOG_PATH", str(broken))
     components_transport(_ollama_transport(models=["llama3.2:3b"]))
     rows = _by_name(health_components())
-    assert rows["ollama"]["status"] == "degraded"
+    assert rows["ollama"]["status"] == "off"
+    assert rows["ollama"]["detail"] == "Not used in the public demo \u2014 Muse Spark does the Tier 2 check"
     assert rows["log"]["status"] == "down"
     assert rows["hosted"]["status"] == "ok"
