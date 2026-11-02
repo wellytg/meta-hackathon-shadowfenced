@@ -53,6 +53,24 @@
   var GUARD_CODE_ONLY = "Guard: on \u00b7 code checks only";
   var GUARD_HOSTED = "Guard: on \u00b7 code checks + Muse Spark review";
   var hostedMode = false;
+  var ruleCatalog = null;
+  var ruleCatalogById = {};
+  function loadRuleCatalog() {
+    fetch("/api/rules/catalog")
+      .then(function (resp) { return resp.ok ? resp.json() : null; })
+      .then(function (body) {
+        if (!body || !Array.isArray(body.entries)) return;
+        ruleCatalog = body.entries;
+        ruleCatalogById = {};
+        body.entries.forEach(function (entry) {
+          if (entry && entry.id) ruleCatalogById[String(entry.id)] = entry;
+        });
+        if (typeof selectedTurn !== "undefined" && selectedTurn) {
+          paintTurn(selectedTurn);
+        }
+      })
+      .catch(function () { /* catalogue stays empty */ });
+  }
   var guardDot = document.querySelector('[data-testid="guard-dot"]');
   var modelStatus = document.querySelector('[data-testid="model-status"]');
 
@@ -655,7 +673,7 @@
         var decisions = stats.decisions || {};
         var box = document.getElementById("decision-counts");
         box.innerHTML = "";
-        ["ALLOW", "REDACT", "BLOCK", "HOLD"].forEach(function (name) {
+        ["ALLOW", "REDACT", "BLOCK", "HOLD", "WARN"].forEach(function (name) {
           var row = document.createElement("div");
           var label = document.createElement("span");
           label.textContent = name;
@@ -1720,7 +1738,32 @@
     if (decision === "UNKNOWN") return "Not sent — couldn't check";
     return "Sent";
   }
-  function riskCardModel(resp) {
+  function personSearchFirstSentence(banner) {
+    var text = String(banner || "");
+    var marker = "If this is you:";
+    var idx = text.indexOf(marker);
+    if (idx > 0) return text.slice(0, idx).trim();
+    var cut = text.indexOf(". ");
+    if (cut >= 0) return text.slice(0, cut + 1);
+    return text;
+  }
+  function personSearchNoteLines(banner) {
+    var text = String(banner || "");
+    var youMarker = "If this is you:";
+    var elseMarker = "If it's someone else:";
+    var ruleMarker = "Rule:";
+    var youIdx = text.indexOf(youMarker);
+    var elseIdx = text.indexOf(elseMarker);
+    if (youIdx < 0 || elseIdx < 0 || elseIdx <= youIdx) return [];
+    var endIdx = text.indexOf(ruleMarker, elseIdx);
+    var first = text.slice(youIdx, elseIdx).trim();
+    var second = (endIdx >= 0 ? text.slice(elseIdx, endIdx) : text.slice(elseIdx)).trim();
+    var out = [];
+    if (first) out.push(first);
+    if (second) out.push(second);
+    return out;
+  }
+  function riskCardModel(resp, catalog) {
     if (!resp || typeof resp !== "object") return null;
     var decision = String(resp.decision || "UNKNOWN").toUpperCase();
     var evidence = (resp.evidence && typeof resp.evidence === "object") ? resp.evidence : {};
@@ -1778,7 +1821,12 @@
     } else if (decision === "BLOCK" && !why.length) {
       why.push("A secret that must never leave this PC was found.");
     }
-    if (combination.length) {
+    var psBanner = (person && typeof person.banner === "string") ? person.banner : "";
+    var psFirst = psBanner ? personSearchFirstSentence(psBanner) : "";
+    var psNote = psBanner ? personSearchNoteLines(psBanner) : [];
+    if (psBanner && psFirst) {
+      why = [psFirst];
+    } else if (combination.length) {
       var comboLabels = combination.map(function (k) {
         return RISK_REID_LABELS[String(k)] || String(k).replace(/_/g, " ");
       });
@@ -1800,9 +1848,27 @@
       traceLines.push(step + result);
     });
     var action = riskActionFor(decision);
+    var catalogById = catalog || ruleCatalogById;
+    var ruleIds = (resp && Array.isArray(resp.rule_ids)) ? resp.rule_ids : [];
+    var firedRules = [];
+    ruleIds.forEach(function (id) {
+      var entry = catalogById[String(id)];
+      if (entry && firedRules.indexOf(entry) < 0) firedRules.push(entry);
+    });
+    var hasPersonRule = firedRules.some(function (r) { return String(r && r.id) === "person-search"; });
+    var hasReidRule = firedRules.some(function (r) { return String(r && r.id) === "reidentification"; });
+    if (hasPersonRule && hasReidRule) {
+      firedRules = firedRules.filter(function (r) { return String(r && r.id) !== "reidentification"; });
+    }
+    var cardTitle = decision;
+    if (decision === "WARN" && evidence.person_search) {
+      cardTitle = "Searching for a person";
+    }
     return {
       decision: decision,
-      title: decision,
+      title: cardTitle,
+      rules: firedRules,
+      personNote: psNote,
       sending: sending,
       why: why,
       action: action,
@@ -1840,7 +1906,69 @@
       line.appendChild(value);
       rows.appendChild(line);
     });
+    (model.rules || []).forEach(function (rule) {
+      rows.appendChild(riskRuleRow(rule));
+    });
     card.appendChild(rows);
+    if (model.personNote && model.personNote.length) {
+      var psNote = document.createElement("div");
+      psNote.className = "risk-person-note";
+      psNote.setAttribute("data-testid", "risk-person-note");
+      model.personNote.forEach(function (lineText) {
+        var lineEl = document.createElement("div");
+        lineEl.className = "risk-person-note-line";
+        lineEl.textContent = lineText;
+        psNote.appendChild(lineEl);
+      });
+      card.appendChild(psNote);
+    }
+  }
+  function riskRuleRow(rule) {
+    var line = document.createElement("div");
+    line.className = "risk-row risk-row-rule";
+    var name = document.createElement("span");
+    name.className = "risk-label";
+    name.textContent = "Rule";
+    var value = document.createElement("span");
+    value.className = "risk-value";
+    value.setAttribute("data-testid", "risk-rule");
+    value.textContent = String(rule.title || rule.id || "") + " \u00b7 ";
+    var whyBtn = document.createElement("button");
+    whyBtn.type = "button";
+    whyBtn.className = "risk-rule-why";
+    whyBtn.setAttribute("data-testid", "risk-rule-why");
+    whyBtn.setAttribute("aria-expanded", "false");
+    whyBtn.textContent = "Why this rule";
+    var detail = document.createElement("div");
+    detail.className = "risk-rule-detail";
+    detail.hidden = true;
+    var why = document.createElement("p");
+    why.textContent = String(rule.why || "");
+    detail.appendChild(why);
+    (rule.related || []).forEach(function (note) {
+      var noteEl = document.createElement("p");
+      noteEl.textContent = String(note);
+      detail.appendChild(noteEl);
+    });
+    var link = document.createElement("a");
+    link.href = "#";
+    link.setAttribute("data-testid", "risk-rule-link");
+    link.textContent = "Open in Rules panel";
+    link.addEventListener("click", function (event) {
+      if (event && event.preventDefault) event.preventDefault();
+      document.dispatchEvent(new CustomEvent("sf-open-rule", { detail: rule.id }));
+    });
+    detail.appendChild(link);
+    whyBtn.addEventListener("click", function () {
+      var willOpen = detail.hidden;
+      detail.hidden = !willOpen;
+      whyBtn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    });
+    value.appendChild(whyBtn);
+    value.appendChild(detail);
+    line.appendChild(name);
+    line.appendChild(value);
+    return line;
   }
   function riskCardTail(card, model) {
     var toggle = document.createElement("button");
@@ -2063,7 +2191,17 @@
     el.hidden = !text;
     el.setAttribute("data-error", isError ? "true" : "false");
   }
+  function loadExtTokenDeferred() {
+    fetch("/api/hosted")
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        if (body && body.hosted) { applyHostedUi(true); return; }
+        loadExtToken();
+      })
+      .catch(function () { loadExtToken(); });
+  }
   function loadExtToken() {
+    if (typeof hostedMode !== "undefined" && hostedMode) return;
     var tokenEl = document.getElementById("ext-token");
     if (!tokenEl) return;
     fetch("/api/ext/pairing")
@@ -2189,8 +2327,9 @@
     });
   }
 
+  loadRuleCatalog();
   loadProviders();
-  loadExtToken();
+  loadExtTokenDeferred();
   loadLogViewer();
   loadGuard();
   paintSend();
@@ -2214,6 +2353,14 @@
   var turnSeq = 0;
   var selectedTurn = null;
 
+  function riskRuleTitles(entry) {
+    var ids = (entry && Array.isArray(entry.ruleIds)) ? entry.ruleIds : [];
+    if (!ids.length) return "\u2014";
+    return ids.map(function (id) {
+      var found = ruleCatalogById[String(id)];
+      return (found && found.title ? found.title : String(id));
+    }).join("; ");
+  }
   function describePlaceholders(body) {
     if (!body || typeof body.sent_text !== "string") return [];
     var found = body.sent_text.match(/\[[^\]]*\]/g);
@@ -2227,6 +2374,7 @@
       id: turnSeq,
       decision: key,
       label: receiptLabel(decision, body),
+      ruleIds: (body && Array.isArray(body.rule_ids)) ? body.rule_ids.slice(0, 8) : [],
       userMessage: body && typeof body.user_message === "string" ? body.user_message : "",
       reasons: body && body.evidence && Array.isArray(body.evidence.reasons)
         ? body.evidence.reasons.slice(0, 6) : [],
@@ -2240,6 +2388,7 @@
     turns.push(entry);
     if (turns.length > 50) turns.shift();
     selectedTurn = entry;
+    refreshStats();
     paintTurn(entry);
     return entry;
   }
@@ -2260,6 +2409,7 @@
       if (el) el.textContent = value;
     };
     set("decision", entry.decision);
+    set("rules", riskRuleTitles(entry));
     set("reasons", entry.reasons.length ? entry.reasons.join("; ") : "—");
     set("redactions", entry.labels.length ? entry.labels.join(" ") : "none");
     set("model", entry.provider ? providerLabel(entry.provider) : "—");

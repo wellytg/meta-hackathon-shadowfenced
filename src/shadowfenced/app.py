@@ -345,6 +345,7 @@ def _shadowfenced_field(decision: engine.Decision) -> dict[str, Any]:
         "decision_id": decision.decision_id,
         "resolved_tier": decision.resolved_tier,
         "latency_ms": decision.latency_ms,
+        "rule_ids": _decision_rule_ids(decision),
     }
     if decision.decision == "WARN":
         field["warning"] = _warn_payload(decision)
@@ -1235,6 +1236,22 @@ def _warn_payload(decision: engine.Decision) -> dict[str, Any]:
     }
 
 
+def _decision_rule_ids(decision: engine.Decision) -> list[str]:
+    """Catalogue ids that fired (mapped server-side, never guessed by UI)."""
+    try:
+        current = list(decision.rule_ids or [])
+    except Exception:
+        current = []
+    if current:
+        return current
+    try:
+        from . import rule_catalog as _catalog
+
+        return list(_catalog.rule_ids_for_decision(decision))
+    except Exception:
+        return []
+
+
 def _send_response(
     decision: engine.Decision,
     answer: str | None,
@@ -1263,6 +1280,7 @@ def _send_response(
         "unmatched_placeholders": unmatched,
         "provider": resolve_provider(provider),
         "trace": trace if trace is not None else [],
+        "rule_ids": _decision_rule_ids(decision),
     }
     if decision.decision == "HOLD":
         response["review_url"] = f"/api/holds/{decision.decision_id}"
@@ -1378,6 +1396,7 @@ def _warn_response(decision: engine.Decision) -> JSONResponse:
             },
             "warning": _warn_payload(decision),
             "evidence": evidence,
+            "rule_ids": _decision_rule_ids(decision),
             "shadowfenced": _shadowfenced_field(decision),
         },
         headers={"X-Shadowfenced-Decision": "WARN"},
@@ -1400,6 +1419,7 @@ def _hold_response(decision: engine.Decision, message: str) -> JSONResponse:
             },
             "review_url": f"/api/holds/{decision.decision_id}",
             "evidence": evidence,
+            "rule_ids": _decision_rule_ids(decision),
             "shadowfenced": _shadowfenced_field(decision),
         },
         headers={"X-Shadowfenced-Decision": "HOLD"},

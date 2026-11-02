@@ -139,6 +139,66 @@ def meta_judge(
     return judge_module._parse_content(answer)
 
 
+def meta_person_search(
+    window: str,
+    *,
+    transport: httpx.BaseTransport | None = None,
+    settings: Any = None,
+) -> Any:
+    """Judge person-search intent with Muse Spark via the Meta client.
+
+    Uses the same strict typed schema as the local Glimmer check
+    (:class:`person_search.PersonSearchJudgement`); labels only.
+    None on any failure so the caller falls back to the code path.
+    Returns None when Meta is unavailable.
+    """
+    from . import person_search as person_search_module
+    from . import upstream as upstream_module
+
+    cfg = settings or get_settings()
+    if not cfg.meta_available:
+        return None
+    messages = [
+        {
+            "role": "system",
+            "content": person_search_module.PERSON_SEARCH_SYSTEM
+            + " Reply with JSON only.",
+        },
+        {
+            "role": "user",
+            "content": window[-person_search_module.PERSON_SEARCH_TEXT_CHARS:],
+        },
+    ]
+    try:
+        answer = upstream_module.chat_sync(
+            messages, provider="meta", settings=cfg, transport=transport
+        )
+    except Exception:
+        return None
+    if not isinstance(answer, str) or not answer.strip():
+        return None
+    import json as _json
+
+    cleaned = answer.strip()
+    try:
+        raw = _json.loads(cleaned)
+    except ValueError:
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        try:
+            raw = _json.loads(cleaned[start : end + 1])
+        except ValueError:
+            return None
+    if not isinstance(raw, dict):
+        return None
+    try:
+        validated = person_search_module.PersonSearchJudgement.model_validate(raw)
+    except Exception:
+        return None
+    return validated.model_dump()
+
+
 def judge_for_review(
     window: str,
     model: str,

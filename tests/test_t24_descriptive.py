@@ -146,6 +146,10 @@ def test_rules_js_keeps_hooks_and_ids():
         "sf-error",
         "sf-rules-btn",
         "sf-descriptive-toggle",
+        "sf-catalog",
+        "sf-catalog-entry",
+        "sf-catalog-why",
+        "sf-catalog-footer",
     }
     assert set(re.findall(r'getElementById\("([^"]+)"\)', js)) == {"thread"}
 

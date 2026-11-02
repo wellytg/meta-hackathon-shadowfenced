@@ -150,6 +150,7 @@ class Decision:
     status: str = "complete"  # complete | reviewing (async Glimmer review)
     doc_type: str | None = None  # doc warning type, never blocks
     doc_warning: str | None = None  # plain warning above the decision
+    rule_ids: list[str] = field(default_factory=list)  # catalogue ids that fired
 
 
 def _hold(
@@ -247,6 +248,17 @@ def _judgement_dump(judgement: Any) -> dict[str, Any] | None:
     return {"repr": repr(judgement)[:200]}
 
 
+def _review_noun() -> str:
+    try:
+        from . import hosted as hosted_module
+
+        if hosted_module.is_hosted():
+            return "Muse Spark"
+    except Exception:
+        pass
+    return "Glimmer"
+
+
 def _gate_send(
     text: str,
     policy: Policy,
@@ -281,10 +293,10 @@ def _gate_send(
             cue = cue_word(text)
             if cue is not None:
                 reasons.append(
-                    f"sensitivity cue word needs Glimmer review (cue='{cue}') -> HOLD"
+                    f"sensitivity cue word needs {_review_noun()} review (cue='{cue}') -> HOLD"
                 )
             else:
-                reasons.append("sensitivity cue word needs Glimmer review -> HOLD")
+                reasons.append(f"sensitivity cue word needs {_review_noun()} review -> HOLD")
         pending: list[dict[str, Any]] = [
             {"kind": "message", "text": text[:MESSAGE_PENDING_CHARS]}
         ]
@@ -1293,6 +1305,11 @@ def gate(
                                          _doc_warning)
             if _doc_type:
                 decision.evidence.setdefault("doc_type", _doc_type)
+    try:
+        from . import rule_catalog as _catalog
+        decision.rule_ids = _catalog.rule_ids_for_decision(decision)
+    except Exception:
+        decision.rule_ids = []
     _append_gate_trace(
         trace_out, decision, choices,
         (time.perf_counter() - started) * 1000,
