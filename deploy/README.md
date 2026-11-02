@@ -20,6 +20,9 @@ Prerequisites: a Modal account and the `modal` CLI (`pip install modal`;
    `modal deploy deploy/modal_app.py`
 3. Modal prints the public URL. `SF_HOSTED=1` is already set by
    `deploy/modal_app.py`, so the deployment is the public demo as-is.
+   The same file points `SF_LOG_PATH` at `/tmp/shadowfenced/decisions.jsonl`
+   (writable for the non-root image user). The hosted log is per container
+   and resets on restart/redeploy; it is a demo trail, not durable storage.
 
 ## Option B: Hugging Face Docker Space
 

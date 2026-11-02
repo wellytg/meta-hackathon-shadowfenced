@@ -8,6 +8,7 @@ same request/response code as an async API. Tests inject an httpx
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -110,14 +111,30 @@ REDACT_NOTE = (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def _log_decision(decision: engine.Decision, text: str) -> None:
     """Append one gate decision to the hash-chained log; never fail the gate."""
+    log_path: str | None = None
     try:
         from . import ecs_log
 
-        ecs_log.append_decision(get_settings().log_path, decision, text)
-    except Exception:
-        pass
+        log_path = get_settings().log_path
+        ecs_log.append_decision(log_path, decision, text)
+        ecs_log.clear_last_write_error()
+    except Exception as exc:
+        try:
+            from . import ecs_log as _ecs_log
+
+            resolved = _ecs_log.resolve_path(log_path)
+            _ecs_log.note_write_failure(exc, resolved)
+        except Exception:
+            logger.warning(
+                "decision log not writable: %s path=%s",
+                type(exc).__name__,
+                str(log_path),
+            )
 
 
 def get_policy() -> Policy:
@@ -1586,10 +1603,22 @@ def confirm_warn(decision_id: str, choice: str) -> dict[str, Any]:
     )
     try:
         from . import ecs_log
+        _warn_log_path = get_settings().log_path
         ecs_log.append_decision(
-            get_settings().log_path, confirmed, record.get("text") or "")
-    except Exception:
-        pass
+            _warn_log_path, confirmed, record.get("text") or "")
+        ecs_log.clear_last_write_error()
+    except Exception as exc:
+        try:
+            from . import ecs_log as _ecs_log_warn
+
+            _ecs_log_warn.note_write_failure(
+                exc, _ecs_log_warn.resolve_path(_warn_log_path))
+        except Exception:
+            logger.warning(
+                "decision log not writable: %s path=%s",
+                type(exc).__name__,
+                str(_warn_log_path),
+            )
     return _send_response(
         confirmed, rehydrated, highlights, unmatched, provider, [],
     )
