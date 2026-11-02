@@ -184,7 +184,7 @@ def test_rules_panel_footer_and_hosted_offset():
 def test_risk_card_names_the_rule():
     js = _app_js()
     assert "resp.rule_ids" in js or "rule_ids" in js
-    assert '"RULE " +' in js or "'RULE ' +" in js or "RULE \" +" in js or "RULE " in js
+    assert '"RULE " +' not in js and "'RULE ' +" not in js
     assert "Why this rule" in js
     assert "risk-rule-why" in js
     assert "sf-open-rule" in js
@@ -198,4 +198,4 @@ def test_details_drawer_has_rule_line():
     assert "data-turn-rules" in html
     js = _app_js()
     assert "riskRuleTitles" in js
-    assert '"RULE " +' in js or "'RULE ' +" in js
+    assert '"RULE " +' not in js and "'RULE ' +" not in js

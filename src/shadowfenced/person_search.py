@@ -322,6 +322,199 @@ class PersonSearchResult:
     reason: str = ""
 
 
+_CODE_DETAIL_KINDS = frozenset({"dob", "street", "city", "postcode", "phone", "email"})
+
+
+def _judge_with_hosted_fallback(combined: str, transport: Any = None) -> Any:
+    """Default judge: local Glimmer, or Muse Spark when hosted.
+
+    Mirrors ``hosted.judge_for_review`` for holds: in hosted mode with no
+    local Ollama reachable, Muse Spark answers through the Meta transport
+    with the same strict JSON schema; any error returns None so the
+    caller falls back to the code path. ``SF_TIER2_MODE=off`` skips the
+    model entirely (None) so the code fallback below still runs.
+    """
+    try:
+        from .judge import tier2_mode
+
+        try:
+            if tier2_mode() == "off":
+                return None
+        except Exception:
+            pass
+        from . import hosted as hosted_module
+
+        if hosted_module.is_hosted():
+            try:
+                reachable = hosted_module.ollama_reachable(transport=transport)
+            except Exception:
+                reachable = False
+            if reachable:
+                try:
+                    if transport is not None:
+                        return local_glimmer_person_search(combined, transport=transport)
+                    return local_glimmer_person_search(combined)
+                except Exception:
+                    return None
+            try:
+                return hosted_module.meta_person_search(combined, transport=transport)
+            except Exception:
+                return None
+    except Exception:
+        pass
+    try:
+        if transport is not None:
+            return local_glimmer_person_search(combined, transport=transport)
+        return local_glimmer_person_search(combined)
+    except Exception:
+        return None
+
+
+def _trace_code(
+    trace: list[dict[str, Any]] | None, detail: str, result: str,
+) -> None:
+    if trace is None:
+        return
+    trace.append({
+        "step": "intent.person_search", "tool": "code",
+        "detail": detail, "result": result, "ms": 0.0,
+    })
+
+
+def _trace_code_warn(
+    trace: list[dict[str, Any]] | None,
+    result: "PersonSearchResult",
+) -> None:
+    if trace is None:
+        return
+    fps = sorted(result.inferred_fingerprints)
+    detail = (
+        f"code fallback person_search=true subject_public=false "
+        f"confidence={result.confidence:.2f} "
+        f"subject_fp={result.subject_fingerprint} "
+        f"inferred={len(result.inferred_labels)}"
+    )
+    if fps:
+        detail += " [" + ", ".join(fps) + "]"
+    trace.append({
+        "step": "intent.person_search", "tool": "code",
+        "detail": detail, "result": "WARN", "ms": 0.0,
+    })
+
+
+def _code_fallback(
+    text: str,
+    combined: str,
+    current_findings: list[dict[str, Any]] | None,
+    trace_out: list[dict[str, Any]] | None,
+) -> "PersonSearchResult | None":
+    """Code-only person-search WARN when the model is unavailable.
+
+    Fires when search wording is present and the re-id findings hold a
+    name plus at least one identifying detail (date of birth,
+    street/city/postcode, phone, email), unless T48 code-only guards
+    exempt the text (public role / fictional story) or the only birth
+    dates carry no living-person weight (historical / death dates).
+    Labels and fingerprints only; never raw values.
+    """
+    try:
+        if not has_search_wording(combined):
+            return None
+        try:
+            combined_findings = reid_module.extract_quasi_identifiers(combined)
+        except Exception:
+            combined_findings = list(current_findings or [])
+        if not combined_findings and current_findings:
+            combined_findings = list(current_findings)
+        kinds = {item.get("kind") for item in combined_findings}
+        if "name" not in kinds:
+            return None
+        if not (kinds & _CODE_DETAIL_KINDS):
+            return None
+        try:
+            if reid_module._exemption(combined):
+                _trace_code(trace_out, "code fallback: exempted -> OK", "OK")
+                return None
+        except Exception:
+            pass
+        try:
+            groups, _historical = reid_module._without_historical_dob(
+                [list(combined_findings)], combined
+            )
+            remaining = [item for group in groups for item in group]
+        except Exception:
+            remaining = list(combined_findings)
+            _historical = False
+        try:
+            _contact = {"street", "phone", "email", "postcode"}
+            _remaining_kinds_early = {item.get("kind") for item in remaining}
+            if _historical and not (_remaining_kinds_early & _contact):
+                _trace_code(trace_out, "code fallback: historical -> OK", "OK")
+                return None
+        except Exception:
+            pass
+        remaining_kinds = {item.get("kind") for item in remaining}
+        if "name" not in remaining_kinds:
+            _trace_code(trace_out, "code fallback: no living name -> OK", "OK")
+            return None
+        if not (remaining_kinds & _CODE_DETAIL_KINDS):
+            _trace_code(trace_out, "code fallback: no living identifying detail -> OK", "OK")
+            return None
+        ordered: list[str] = []
+        for item in remaining:
+            kind = str(item.get("kind") or "")
+            if kind in _CODE_DETAIL_KINDS and kind not in ordered:
+                ordered.append(kind)
+        labels = ["their full name"]
+        for kind in ordered:
+            label = _THEIR_LABEL.get(kind, "personal details")
+            if label not in labels:
+                labels.append(label)
+        banner = banner_for_labels(labels)
+        try:
+            generalised, _ = reid_module.generalise(
+                text, reid_module.extract_quasi_identifiers(text)
+            )
+        except Exception:
+            generalised = ""
+        name_value = ""
+        for item in remaining:
+            if item.get("kind") == "name":
+                value = str(item.get("value", "") or "")
+                if value and value in combined:
+                    name_value = value
+                    break
+        if not name_value:
+            return None
+        detail_values: list[str] = []
+        seen_values: set[str] = set()
+        for item in remaining:
+            if item.get("kind") in _CODE_DETAIL_KINDS:
+                value = str(item.get("value", "") or "")
+                if value and value in combined and value not in seen_values:
+                    seen_values.add(value)
+                    detail_values.append(value)
+        result = PersonSearchResult(
+            warn=True,
+            triggered=True,
+            banner=banner,
+            inferred_labels=labels,
+            confidence=0.0,
+            subject_fingerprint=reid_module.fingerprint(name_value),
+            inferred_fingerprints=sorted(
+                {reid_module.fingerprint(value) for value in detail_values}
+            ),
+            generalised_text=generalised,
+            reason="code fallback: search wording + name + identifying detail -> WARN",
+            subject_public=False,
+            verified_subject=True,
+        )
+        _trace_code_warn(trace_out, result)
+        return result
+    except Exception:
+        return None
+
+
 def check_person_search(
     text: str,
     conversation: list[str] | None = None,
@@ -348,16 +541,18 @@ def check_person_search(
     if not should_check(text, prior):
         _trace(trace_out, "no trigger", "OK")
         return PersonSearchResult(reason="no trigger")
-    judge = judge_fn if judge_fn is not None else local_glimmer_person_search
-    try:
-        if judge_fn is not None:
-            raw = judge(combined)
-        else:
-            raw = judge(combined, transport=transport) if transport is not None else judge(combined)
-    except Exception:
-        raw = None
+    if judge_fn is not None:
+        try:
+            raw = judge_fn(combined)
+        except Exception:
+            raw = None
+    else:
+        raw = _judge_with_hosted_fallback(combined, transport=transport)
     parsed = _parse_judgement(raw)
     if parsed is None:
+        fallback = _code_fallback(text, combined, current_findings, trace_out)
+        if fallback is not None:
+            return fallback
         _trace(trace_out, "Glimmer could not check intent", "OK")
         return PersonSearchResult(triggered=True, reason="Glimmer could not check intent")
     # Tier 3 verification: keep only claims tied to exact substrings.

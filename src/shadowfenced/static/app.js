@@ -673,7 +673,7 @@
         var decisions = stats.decisions || {};
         var box = document.getElementById("decision-counts");
         box.innerHTML = "";
-        ["ALLOW", "REDACT", "BLOCK", "HOLD"].forEach(function (name) {
+        ["ALLOW", "REDACT", "BLOCK", "HOLD", "WARN"].forEach(function (name) {
           var row = document.createElement("div");
           var label = document.createElement("span");
           label.textContent = name;
@@ -1738,6 +1738,31 @@
     if (decision === "UNKNOWN") return "Not sent — couldn't check";
     return "Sent";
   }
+  function personSearchFirstSentence(banner) {
+    var text = String(banner || "");
+    var marker = "If this is you:";
+    var idx = text.indexOf(marker);
+    if (idx > 0) return text.slice(0, idx).trim();
+    var cut = text.indexOf(". ");
+    if (cut >= 0) return text.slice(0, cut + 1);
+    return text;
+  }
+  function personSearchNoteLines(banner) {
+    var text = String(banner || "");
+    var youMarker = "If this is you:";
+    var elseMarker = "If it's someone else:";
+    var ruleMarker = "Rule:";
+    var youIdx = text.indexOf(youMarker);
+    var elseIdx = text.indexOf(elseMarker);
+    if (youIdx < 0 || elseIdx < 0 || elseIdx <= youIdx) return [];
+    var endIdx = text.indexOf(ruleMarker, elseIdx);
+    var first = text.slice(youIdx, elseIdx).trim();
+    var second = (endIdx >= 0 ? text.slice(elseIdx, endIdx) : text.slice(elseIdx)).trim();
+    var out = [];
+    if (first) out.push(first);
+    if (second) out.push(second);
+    return out;
+  }
   function riskCardModel(resp, catalog) {
     if (!resp || typeof resp !== "object") return null;
     var decision = String(resp.decision || "UNKNOWN").toUpperCase();
@@ -1796,7 +1821,12 @@
     } else if (decision === "BLOCK" && !why.length) {
       why.push("A secret that must never leave this PC was found.");
     }
-    if (combination.length) {
+    var psBanner = (person && typeof person.banner === "string") ? person.banner : "";
+    var psFirst = psBanner ? personSearchFirstSentence(psBanner) : "";
+    var psNote = psBanner ? personSearchNoteLines(psBanner) : [];
+    if (psBanner && psFirst) {
+      why = [psFirst];
+    } else if (combination.length) {
       var comboLabels = combination.map(function (k) {
         return RISK_REID_LABELS[String(k)] || String(k).replace(/_/g, " ");
       });
@@ -1825,6 +1855,11 @@
       var entry = catalogById[String(id)];
       if (entry && firedRules.indexOf(entry) < 0) firedRules.push(entry);
     });
+    var hasPersonRule = firedRules.some(function (r) { return String(r && r.id) === "person-search"; });
+    var hasReidRule = firedRules.some(function (r) { return String(r && r.id) === "reidentification"; });
+    if (hasPersonRule && hasReidRule) {
+      firedRules = firedRules.filter(function (r) { return String(r && r.id) !== "reidentification"; });
+    }
     var cardTitle = decision;
     if (decision === "WARN" && evidence.person_search) {
       cardTitle = "Searching for a person";
@@ -1833,6 +1868,7 @@
       decision: decision,
       title: cardTitle,
       rules: firedRules,
+      personNote: psNote,
       sending: sending,
       why: why,
       action: action,
@@ -1874,6 +1910,18 @@
       rows.appendChild(riskRuleRow(rule));
     });
     card.appendChild(rows);
+    if (model.personNote && model.personNote.length) {
+      var psNote = document.createElement("div");
+      psNote.className = "risk-person-note";
+      psNote.setAttribute("data-testid", "risk-person-note");
+      model.personNote.forEach(function (lineText) {
+        var lineEl = document.createElement("div");
+        lineEl.className = "risk-person-note-line";
+        lineEl.textContent = lineText;
+        psNote.appendChild(lineEl);
+      });
+      card.appendChild(psNote);
+    }
   }
   function riskRuleRow(rule) {
     var line = document.createElement("div");
@@ -1884,7 +1932,7 @@
     var value = document.createElement("span");
     value.className = "risk-value";
     value.setAttribute("data-testid", "risk-rule");
-    value.textContent = "RULE " + String(rule.title || rule.id || "") + " \u00b7 ";
+    value.textContent = String(rule.title || rule.id || "") + " \u00b7 ";
     var whyBtn = document.createElement("button");
     whyBtn.type = "button";
     whyBtn.className = "risk-rule-why";
@@ -2143,7 +2191,17 @@
     el.hidden = !text;
     el.setAttribute("data-error", isError ? "true" : "false");
   }
+  function loadExtTokenDeferred() {
+    fetch("/api/hosted")
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        if (body && body.hosted) { applyHostedUi(true); return; }
+        loadExtToken();
+      })
+      .catch(function () { loadExtToken(); });
+  }
   function loadExtToken() {
+    if (typeof hostedMode !== "undefined" && hostedMode) return;
     var tokenEl = document.getElementById("ext-token");
     if (!tokenEl) return;
     fetch("/api/ext/pairing")
@@ -2271,7 +2329,7 @@
 
   loadRuleCatalog();
   loadProviders();
-  loadExtToken();
+  loadExtTokenDeferred();
   loadLogViewer();
   loadGuard();
   paintSend();
@@ -2300,7 +2358,7 @@
     if (!ids.length) return "\u2014";
     return ids.map(function (id) {
       var found = ruleCatalogById[String(id)];
-      return "RULE " + (found && found.title ? found.title : String(id));
+      return (found && found.title ? found.title : String(id));
     }).join("; ");
   }
   function describePlaceholders(body) {
@@ -2330,6 +2388,7 @@
     turns.push(entry);
     if (turns.length > 50) turns.shift();
     selectedTurn = entry;
+    refreshStats();
     paintTurn(entry);
     return entry;
   }
