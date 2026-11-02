@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,12 +28,60 @@ if TYPE_CHECKING:
 DEFAULT_LOG_PATH = "runs/decisions.jsonl"
 GENESIS_HASH = "0" * 64
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-def resolve_path(explicit: str | None = None) -> str:
-    """Return the log path: explicit arg, ``SF_LOG_PATH``, or the default."""
+_LAST_WRITE_ERROR: str | None = None
+
+
+def get_last_write_error() -> str | None:
+    """Return the last decision-log write failure type, if any."""
+    return _LAST_WRITE_ERROR
+
+
+def clear_last_write_error() -> None:
+    """Forget any recorded decision-log write failure (tests only)."""
+    global _LAST_WRITE_ERROR
+    _LAST_WRITE_ERROR = None
+
+
+def record_write_error(exc: BaseException) -> str:
+    """Remember a write failure type for the ``log`` health line."""
+    global _LAST_WRITE_ERROR
+    name = type(exc).__name__
+    _LAST_WRITE_ERROR = name
+    return name
+
+
+def note_write_failure(exc: BaseException, path: str | Path | None) -> str:
+    """Record a write failure and log one warning (never message text)."""
+    name = record_write_error(exc)
+    logging.getLogger(__name__).warning(
+        "decision log not writable: %s path=%s", name, str(path)
+    )
+    return name
+
+
+def _resolve_one(value: str | Path) -> str:
+    text = str(value)
+    if not text.strip():
+        text = DEFAULT_LOG_PATH
+    candidate = Path(text)
+    if candidate.is_absolute():
+        return str(candidate)
+    return str(_PROJECT_ROOT / candidate)
+
+
+def resolve_path(explicit: str | Path | None = None) -> str:
+    """Return the log path: explicit arg, ``SF_LOG_PATH``, or the default.
+
+    Relative paths resolve against the project root (the same root
+    ``policy.py`` uses), not the process working directory, so the
+    hosted container finds the log no matter where it starts. Absolute
+    paths (including a ``SF_LOG_PATH`` absolute override) pass through.
+    """
     if explicit:
-        return explicit
-    return os.environ.get("SF_LOG_PATH", DEFAULT_LOG_PATH)
+        return _resolve_one(explicit)
+    return _resolve_one(os.environ.get("SF_LOG_PATH", DEFAULT_LOG_PATH))
 
 
 def fingerprint(value: str) -> str:
