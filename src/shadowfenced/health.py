@@ -213,6 +213,11 @@ def check_log(settings: Any = None) -> dict[str, str]:
         from . import ecs_log
         from .config import get_settings
 
+        last_error = ecs_log.get_last_write_error()
+        if last_error:
+            return _item(
+                "log", "degraded", f"log not writable: {last_error}"
+            )
         cfg = settings or get_settings()
         ok, count = ecs_log.verify(cfg.log_path)
         noun = "event" if count == 1 else "events"

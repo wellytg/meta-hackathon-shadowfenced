@@ -30,6 +30,7 @@ image = modal.Image.from_dockerfile("Dockerfile")
 def asgi():
     """Return the Shadowfenced ASGI app in hosted demo mode."""
     os.environ.setdefault("SF_HOSTED", "1")
+    os.environ.setdefault("SF_LOG_PATH", "/tmp/shadowfenced/decisions.jsonl")
     from shadowfenced.app import app as web_app
 
     return web_app
