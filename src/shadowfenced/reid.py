@@ -146,7 +146,30 @@ KIND_LABELS: dict[str, str] = {
     "dated_event": "dates",
 }
 
-OUTCOMES = ("OK", "WARN", "HOLD")
+OUTCOMES = ("OK", "WARN", "HOLD", "BLOCK")
+
+# A full identity bundle is a hard stop: name + date of birth +
+# (street address or postcode) + (phone or email) in one message or
+# across the conversation. Smaller combinations keep WARN/HOLD.
+FULL_BUNDLE_WHY = (
+    "Together, a name, date of birth, home address, phone number and email "
+    "identify one real person and where to find them. Each is personal data; "
+    "combined they enable identity theft, stalking and fraud."
+)
+
+
+def is_full_identity_bundle(kinds: Any) -> bool:
+    """True when kinds hold a full identity bundle (hard BLOCK)."""
+    try:
+        present = set(kinds)
+    except TypeError:
+        return False
+    return (
+        "name" in present
+        and "dob" in present
+        and ("street" in present or "postcode" in present)
+        and ("phone" in present or "email" in present)
+    )
 
 # --- Reference data ----------------------------------------------------------
 CITIES = frozenset({
@@ -163,6 +186,8 @@ _PLACE_WORDS = frozenset({
     "Harbor", "Bakery", "Kiosk", "Point", "Corner", "Isles",
 })
 
+# Street suffixes also mark a capitalised pair as a place, never a name.
+_PLACE_WORDS |= {"Crescent", "Cres", "Close", "Grove", "Gardens", "Garden", "Square", "Hill", "Walk", "Park"}
 _TITLE_WORDS = frozenset({
     "mayor", "actor", "actress", "councillor", "councilor", "captain",
     "detective", "doctor", "professor", "chef", "nurse", "officer",
@@ -176,6 +201,7 @@ _STARTERS = frozenset({
 
 # Message verbs that pair with a lone first name ("Tell Jake I said
 # hi"): the pair is an address to that person, never a surname (T30c).
+_STARTERS |= {"name", "dob", "address", "phone", "email", "form"}
 _NON_NAME_LEADERS = frozenset({
     "tell", "ask", "call", "email", "message", "text", "phone",
     "thank", "invite", "remind",
@@ -207,6 +233,26 @@ _DOB_FULL_RE = re.compile(
     r"\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|"
     r"\d{1,2}\s+(?:" + _MONTHS + r")\s+\d{4})\b"
 )
+def _is_valid_dob(value: str) -> bool:
+    """True when a DOB-shaped string holds a plausible calendar date.
+
+    Sort codes ("20-00-00") and other numeric runs match the DOB shape
+    but are never birthdays: the month must be 1-12 and the day 1-31
+    (either DD/MM or MM/DD order for ambiguous runs).
+    """
+    if re.search(r"(?i)[a-z]", value):
+        day = re.search(r"\b(\d{1,2})\b", value)
+        return day is not None and 1 <= int(day.group(1)) <= 31
+    nums = re.findall(r"\d+", value)
+    if len(nums) == 3 and len(nums[0]) == 4:
+        return 1 <= int(nums[1]) <= 12 and 1 <= int(nums[2]) <= 31
+    if len(nums) >= 2:
+        first, second = int(nums[0]), int(nums[1])
+        return ((1 <= first <= 12 and 1 <= second <= 31)
+                or (1 <= first <= 31 and 1 <= second <= 12))
+    return False
+
+
 _BORN_YEAR_RE = re.compile(r"(?i)\bborn\s+(?:in\s+|on\s+)?(\d{4})\b")
 _DAY_MONTH_RE = re.compile(r"\b\d{1,2}\s+(?:" + _MONTHS + r")\b")
 _YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
@@ -224,7 +270,7 @@ _DECADE_RE = re.compile(r"(?<!\d)(\d{2})s\b")
 
 _STREET_SUFFIX = (
     r"St|Street|Ave|Avenue|Rd|Road|Way|Lane|Ln|Dr|Drive|Blvd|Ct|Court|"
-    r"Terrace|Ter|Place|Pl|Circle|Cir|Row|Cottages|Pike"
+    r"Terrace|Ter|Place|Pl|Circle|Cir|Row|Cottages|Pike|Crescent|Cres|Close|Grove|Gardens?|Square|Hill|Walk|Park"
 )
 _STREET_RE = re.compile(
     r"\b\d{1,5}\s+[A-Z][A-Za-z0-9']*(?:\s+[A-Za-z0-9']+){0,3}\s+"
@@ -251,6 +297,7 @@ _PHONE_RE = re.compile(
     r"(?<!\d)(?:\+?1[\s().-]?)?(?:\(\d{3}\)|\d{3})[\s().-]?"
     r"\d{3}[\s().-]?\d{4}(?!\d)|\b\d{3}[-. ]\d{4}\b"
 )
+_UK_PHONE_RE = re.compile(r"\b0\d{4}[\s.\-]*\d{6}\b|\b0\d{3}[\s.\-]*\d{3}[\s.\-]*\d{4}\b|\b07\d{3}[\s.\-]*\d{6}\b")
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 
 _EMPLOYER_RE = re.compile(
@@ -592,6 +639,26 @@ def extract_quasi_identifiers(text: str) -> list[dict[str, Any]]:
             findings.append(_hit("name", match.start(), match.end(),
                                  match.group(0)))
             break
+    _cap_words = list(re.finditer(r"\b[A-Z][a-z]+\b", text))
+    _seen_name_spans = {(item["span"][0], item["span"][1]) for item in findings if item["kind"] == "name"}
+    for _i in range(len(_cap_words) - 1):
+        _first_m, _second_m = _cap_words[_i], _cap_words[_i + 1]
+        _between = text[_first_m.end():_second_m.start()]
+        if not re.fullmatch(r"\s+", _between):
+            continue
+        _first, _second = _first_m.group(0), _second_m.group(0)
+        if (_first.lower() in _TITLE_WORDS or _first.lower() in _STARTERS
+                or _first.lower() in _NON_NAME_LEADERS):
+            continue
+        if f"{_first} {_second}" in CITIES:
+            continue
+        if _second in _PLACE_WORDS:
+            continue
+        _span = (_first_m.start(), _second_m.end())
+        if _span in _seen_name_spans:
+            continue
+        findings.append(_hit("name", _span[0], _span[1], text[_span[0]:_span[1]]))
+        _seen_name_spans.add(_span)
     for match in _TITLE_NAME_RE.finditer(text):
         findings.append(_hit("name", match.start(), match.end(),
                              match.group(0)))
@@ -600,6 +667,8 @@ def extract_quasi_identifiers(text: str) -> list[dict[str, Any]]:
                              match.group(0)))
 
     for match in _DOB_FULL_RE.finditer(text):
+        if not _is_valid_dob(match.group(0)):
+            continue  # numeric run, not a calendar date (T66)
         findings.append(_hit("dob", match.start(), match.end(),
                              match.group(0)))
     for match in _BORN_YEAR_RE.finditer(text):
@@ -715,6 +784,9 @@ def extract_quasi_identifiers(text: str) -> list[dict[str, Any]]:
         findings.append(_hit("vehicle", match.start(1), match.end(1),
                              match.group(1)))
 
+    for match in _UK_PHONE_RE.finditer(text):
+        findings.append(_hit("phone", match.start(), match.end(),
+                             match.group(0)))
     for match in _PHONE_RE.finditer(text):
         findings.append(_hit("phone", match.start(), match.end(),
                              match.group(0)))
@@ -768,8 +840,14 @@ def extract_quasi_identifiers(text: str) -> list[dict[str, Any]]:
         if kind in ("age", "gender", "dob", "dated_event"):
             if _nearby(text, start, end, _AVERAGE_RE):
                 continue  # an average over many people, not one person (T30c)
+        if kind == "postcode" and item["value"].isdigit() and re.search(r"[A-Za-z]-$", text[max(0, start - 2):start]):
+            continue  # fragment of a member/code ID ("QTX-77102"), not a postcode
+        if kind == "postcode" and item["value"].isdigit() and re.match(r"\s*\d", text[end:end + 8]):
+            continue  # part of a longer phone number, not a postcode
         if kind == "postcode" and _nearby(text, start, end, _AREA_CODE_RE):
             continue  # an area code for a whole area, not one person (T30c)
+        if kind == "jobtitle" and text[end:end + 13].lower().startswith(" appointment"):
+            continue  # an appointment type ("dentist appointment"), not the person's job
         if kind in ("jobtitle", "city"):
             if _has_role_box or _nearby(text, start, end, _JOB_AD_RE):
                 continue  # a job advert describes a role, not a person (T30c)
@@ -778,6 +856,9 @@ def extract_quasi_identifiers(text: str) -> list[dict[str, Any]]:
             if _ORG_SUFFIX_RE.search(tight):
                 continue  # a company name (Acme Ltd), not a person
         guarded.append(item)
+    _name_values = {item["value"] for item in guarded if item["kind"] == "name"}
+    guarded = [item for item in guarded
+               if not (item["kind"] == "employer" and item["value"] in _name_values)]
     findings = guarded
     findings.sort(key=lambda item: (item["span"][0], item["span"][1]))
     return findings
@@ -856,6 +937,8 @@ def score_groups(
         # identify anyone on its own (T30b); a singleton role ("only ...")
         # plus a town still warns: it names a team of one (T30c).
         return score, kinds, "OK"
+    if is_full_identity_bundle(present):
+        return score, kinds, "BLOCK"
     combo_hit = any(combo <= present for combo in HIGH_RISK_COMBOS)
     if score >= HOLD_THRESHOLD or (combo_hit and score >= WARN_THRESHOLD):
         outcome = "HOLD"
@@ -890,6 +973,8 @@ def banner_for(combination: list[str], outcome: str) -> str:
         listing = f"{labels[0]} and {labels[1]}"
     else:
         listing = ", ".join(labels[:-1]) + f" and {labels[-1]}"
+    if outcome == "BLOCK":
+        return FULL_BUNDLE_WHY
     if outcome == "HOLD":
         return (f"Together, your {listing} can identify and locate you.")
     return (f"Together, your {listing} could help identify and locate you.")
@@ -899,7 +984,7 @@ def banner_for(combination: list[str], outcome: str) -> str:
 class ReIDResult:
     """Assessment of one message in conversation context."""
 
-    outcome: str  # OK | WARN | HOLD
+    outcome: str  # OK | WARN | HOLD | BLOCK
     score: int = 0
     combination: list[str] = field(default_factory=list)
     banner: str = ""
@@ -1006,7 +1091,7 @@ def assess(
     generalised_text = ""
     mapping: dict[str, str] = {}
     if outcome != "OK" and generalise_offer:
-        generalised_text, mapping = generalise(text, current)
+        generalised_text, mapping = generalise(text, current, block_bundle=(outcome == "BLOCK"))
     return ReIDResult(
         outcome=outcome, score=score, combination=combination,
         banner=banner, findings=list(current),
@@ -1110,7 +1195,7 @@ def _generalised_value(kind: str, value: str, city: str | None) -> str:
             return "child"
         return f"{age // 10 * 10}s"
     if kind == "street":
-        return city if city else "the area"
+        return f"a street in {city}" if city else "a street in the area"
     if kind == "postcode":
         return value[:3] + "*" * max(0, len(value) - 3)
     if kind == "city":
@@ -1144,7 +1229,9 @@ def _generalised_value(kind: str, value: str, city: str | None) -> str:
     if kind == "vehicle":
         return "a vehicle"
     if kind in ("phone", "email"):
-        return "[contact removed]"
+        if kind == "phone":
+            return "[phone removed]"
+        return "[email removed]"
     if kind == "dated_event":
         year = re.search(r"\d{4}", value)
         if year:
@@ -1185,7 +1272,7 @@ def _absorb_affixes(
 
 
 def generalise(
-    text: str, findings: list[dict[str, Any]]
+    text: str, findings: list[dict[str, Any]], block_bundle: bool = False
 ) -> tuple[str, dict[str, str]]:
     """Rewrite risky details to coarser values.
 
@@ -1197,6 +1284,10 @@ def generalise(
     findings = _dedupe(findings)
     cities = [item["value"] for item in findings if item["kind"] == "city"]
     city = cities[0] if cities else None
+    if city is None:
+        _city_before_postcode = re.search(r",\s*([A-Z][a-z]+)\s+[A-Z]{1,2}\d", text)
+        if _city_before_postcode:
+            city = _city_before_postcode.group(1)
     counters: dict[str, int] = {}
     mapping: dict[str, str] = {}
     edits: list[tuple[int, int, str]] = []
@@ -1217,7 +1308,15 @@ def generalise(
         mapping[label] = text[start:end]
         replacement = _generalised_value(kind, text[start:end],
                                                      city)
+        if block_bundle and kind == "name":
+            replacement = "[name removed]"
         start, end = _absorb_affixes(text, start, end, kind, replacement)
+        if kind == "street":
+            _tail = re.search(r"in\s+([A-Z][A-Za-z'’.\-]*)$", replacement.strip())
+            if _tail:
+                _follow = re.match(r",\s*" + re.escape(_tail.group(1)) + r"\b", text[end:])
+                if _follow:
+                    end += _follow.end()
         edits.append((start, end, replacement))
     out = text
     for start, end, replacement in reversed(edits):

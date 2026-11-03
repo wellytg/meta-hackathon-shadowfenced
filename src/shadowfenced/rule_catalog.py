@@ -174,6 +174,25 @@ def build_catalog(policy: Any) -> list[dict[str, Any]]:
             "detectors": ["reid"],
         },
         {
+            "id": "full-identity-bundle",
+            "title": "Full identity bundle",
+            "catches": (
+                "A name plus date of birth plus a home address or postcode "
+                "plus a phone number or email address together"
+            ),
+            "action": "BLOCK",
+            "can_send_anyway": False,
+            "why": (
+                "A full bundle names one real person and says where to find them. "
+                "GDPR and UK GDPR treat each piece as personal data, "
+                "US state privacy laws protect the same details, and together "
+                "they enable identity theft, stalking and fraud. "
+                "Shadowfenced blocks the original so only a generalised version can go."
+            ),
+            "related": [NOTE_GDPR, NOTE_CCPA, NOTE_REID],
+            "detectors": ["reid"],
+        },
+        {
             "id": "person-search",
             "title": "Person search",
             "catches": "Messages that name a person and give details that identify them",
@@ -316,7 +335,7 @@ _SUBCLASS_TO_RULE = {
 
 _CATALOGUE_ORDER = (
     "canary-tokens", "api-keys", "personal-data", "card-numbers",
-    "bank-details", "sensitive-documents", "reidentification",
+    "bank-details", "sensitive-documents", "reidentification", "full-identity-bundle",
     "person-search", "business-details", "contract-clauses",
     "suspicious-text", "image-content", "audio-transcript",
 )
@@ -348,8 +367,10 @@ def rule_ids_for_decision(decision: Any) -> list[str]:
     evidence = getattr(decision, "evidence", None) or {}
     if isinstance(evidence, dict):
         reid = evidence.get("reid")
-        if isinstance(reid, dict) and reid.get("outcome") in ("WARN", "HOLD"):
+        if isinstance(reid, dict) and reid.get("outcome") in ("WARN", "HOLD", "BLOCK"):
             found.add("reidentification")
+            if isinstance(reid, dict) and reid.get("outcome") == "BLOCK":
+                found.add("full-identity-bundle")
         if isinstance(evidence.get("person_search"), dict):
             found.add("person-search")
         if evidence.get("doc_type") or evidence.get("doc_warning"):

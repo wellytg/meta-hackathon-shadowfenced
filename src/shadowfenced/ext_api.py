@@ -235,7 +235,12 @@ def ext_redact(body: RedactBody, _guard: None = Depends(ext_guard)) -> dict[str,
         len(decision.placeholders),
     )
     if decision.decision == "BLOCK":
-        return {"decision": "BLOCK", "safe_text": "", "notes": notes}
+        _reid = (decision.evidence or {}).get("reid", {}) or {}
+        _payload: dict[str, Any] = {"decision": "BLOCK", "safe_text": "", "notes": notes}
+        if isinstance(_reid, dict) and _reid.get("outcome") == "BLOCK":
+            _payload["combination"] = list(_reid.get("combination") or [])
+            _payload["generalised_text"] = str(_reid.get("generalised_text") or "")
+        return _payload
     if decision.decision == "ALLOW":
         safe = decision.sent_text if decision.sent_text is not None else text
         return {"decision": "ALLOW", "safe_text": safe, "notes": notes}

@@ -66,7 +66,12 @@ function failSafeDecision(input) {
   if (!args.ok) return { action: 'BLOCK', reason: FAILSAFE_MESSAGE };
   var d = args.decision || {};
   switch (d.action) {
-    case 'BLOCK': return { action: 'BLOCK', reason: d.reason || 'Blocked by policy.' };
+    case 'BLOCK': {
+      var blk = { action: 'BLOCK', reason: d.reason || 'Blocked by policy.' };
+      if (d && Array.isArray(d.combination)) blk.combination = d.combination.slice(0, 12);
+      if (d && typeof d.generalised_text === 'string' && d.generalised_text) blk.generalised_text = d.generalised_text;
+      return blk;
+    }
     case 'REDACT': return { action: 'REDACT', safe_text: d.safe_text || '', count: d.count || 0 };
     case 'HOLD':
     case 'WARN': return { action: 'HOLD', reason: d.reason || 'Please review before sending.' };
@@ -100,7 +105,12 @@ function countPlaceholders(text) {
 function normalizeRedact(data) {
   var d = data || {};
   var action = String(d.decision || d.action || '').toUpperCase();
-  if (action === 'BLOCK') return { action: 'BLOCK', reason: d.notes || d.reason || 'Blocked by policy.' };
+  if (action === 'BLOCK') {
+    var blocked = { action: 'BLOCK', reason: d.notes || d.reason || 'Blocked by policy.' };
+    if (Array.isArray(d.combination)) blocked.combination = d.combination.slice(0, 12);
+    if (typeof d.generalised_text === 'string' && d.generalised_text) blocked.generalised_text = d.generalised_text;
+    return blocked;
+  }
   if (action === 'REDACT') {
     return { action: 'REDACT', safe_text: d.safe_text || '', count: countPlaceholders(d.safe_text) };
   }

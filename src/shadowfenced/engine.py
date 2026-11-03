@@ -128,6 +128,11 @@ def user_message(decision: Decision) -> str:
             base = reid_banner or "Held for review: possible pointer to sensitive data."
         else:
             base = "Sent clean"
+    if decision.decision == "BLOCK":
+        _reid_block = (decision.evidence or {}).get("reid", {})
+        if (isinstance(_reid_block, dict) and _reid_block.get("outcome") == "BLOCK"
+                and _reid_block.get("banner")):
+            base = str(_reid_block["banner"])
     warning = getattr(decision, "doc_warning", None)
     if isinstance(warning, str) and warning:
         return f"{warning} {base}"
@@ -168,6 +173,36 @@ def _hold(
         latency_ms=latency_ms,
         reasons=reasons,
     )
+
+
+def tier1_proves_identity_bundle(
+    text: str,
+    conversation: list[str] | None = None,
+) -> bool:
+    """True when Tier 1 code alone proves a full identity bundle.
+
+    Code-only check over :func:`tier1.scan_reid` kinds with the same
+    rule as T66 (:func:`reid.is_full_identity_bundle`): name + date
+    of birth + (street or postcode) + (phone or email), in one
+    message or across the conversation. Never calls a model.
+    """
+    try:
+        kinds: set[str] = set()
+        for item in tier1.scan_reid(text):
+            kind = item.get("kind")
+            if isinstance(kind, str) and kind:
+                kinds.add(kind)
+        for earlier in conversation or []:
+            try:
+                for item in tier1.scan_reid(earlier):
+                    kind = item.get("kind")
+                    if isinstance(kind, str) and kind:
+                        kinds.add(kind)
+            except Exception:
+                continue
+        return reid_module.is_full_identity_bundle(kinds)
+    except Exception:
+        return False
 
 
 def has_proven_secret_block(spans: list[Span]) -> bool:
@@ -907,6 +942,25 @@ def _apply_reid(
         "banner": result.banner,
         "generalised_text": result.generalised_text,
     }
+    if result.outcome == "BLOCK":
+        _block_line = "reid: score={} kinds={} -> BLOCK".format(
+            result.score, "+".join(result.combination))
+        _block_decision = Decision(
+            decision="BLOCK",
+            decision_id=uuid.uuid4().hex,
+            spans=decision.spans,
+            sent_text=None,
+            placeholders={},
+            resolved_tier=1,
+            latency_ms=dict(decision.latency_ms),
+            reasons=[*decision.reasons, _block_line,
+                     "full identity bundle -> BLOCK"],
+            evidence=evidence,
+        )
+        return _apply_person_search(
+            text, _block_decision, conversation, current,
+            person_search_judge_fn, trace_out, mode,
+        )
     score_line = "reid: score={} kinds={} -> {}".format(
         result.score, "+".join(result.combination), result.outcome
     )
@@ -1300,6 +1354,65 @@ def gate(
         decision.decision == "BLOCK"
         and has_proven_secret_block(decision.spans)
     )
+    # Full-bundle BLOCK short-circuit (T66c): Tier 1 code alone
+    # proves name + dob + (street or postcode) + (phone or email),
+    # so confirm with the code-only assessor (stub judge: no
+    # Glimmer) and return BLOCK at once without any model call
+    # (live suspicions, person search, residual or cue review).
+    if not skip_models and tier1_proves_identity_bundle(
+        text, conversation
+    ):
+        try:
+            _probe = tier1.scan_reid(text)
+            _candidate = reid_module.assess(
+                text, conversation=conversation,
+                current_findings=_probe,
+                public_figure_judge_fn=lambda _t: None,
+            )
+            if _candidate.outcome == "BLOCK":
+                tier1.scan_reid(text, trace_out=trace_out)
+                reid_module.trace_combine(
+                    trace_out, _candidate.score,
+                    _candidate.combination, _candidate.outcome,
+                )
+                _evidence = dict(decision.evidence or {})
+                _evidence["reid"] = {
+                    "score": _candidate.score,
+                    "combination": list(_candidate.combination),
+                    "outcome": _candidate.outcome,
+                    "banner": _candidate.banner,
+                    "generalised_text": _candidate.generalised_text,
+                }
+                _block_line = "reid: score={} kinds={} -> BLOCK".format(
+                    _candidate.score, "+".join(_candidate.combination))
+                decision = Decision(
+                    decision="BLOCK",
+                    decision_id=uuid.uuid4().hex,
+                    spans=decision.spans,
+                    sent_text=None,
+                    placeholders={},
+                    resolved_tier=1,
+                    latency_ms=dict(decision.latency_ms),
+                    reasons=[*decision.reasons, _block_line,
+                             "full identity bundle -> BLOCK"
+                             " (model checks skipped)"],
+                    evidence=_evidence,
+                )
+                _attach_doc_classification(decision, text, trace_out)
+                try:
+                    from . import rule_catalog as _catalog
+
+                    decision.rule_ids = _catalog.rule_ids_for_decision(
+                        decision)
+                except Exception:
+                    decision.rule_ids = []
+                _append_gate_trace(
+                    trace_out, decision, choices,
+                    (time.perf_counter() - started) * 1000,
+                )
+                return decision
+        except Exception:
+            pass
     if skip_models:
         decision.reasons.append(
             "proven secret -> BLOCK (model checks skipped)"

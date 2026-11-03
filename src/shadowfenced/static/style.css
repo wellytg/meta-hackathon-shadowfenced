@@ -1433,6 +1433,32 @@ body {
   text-overflow: ellipsis;
   overflow-wrap: break-word;
 }
+/*T66c identity-bundle BLOCK card: the why line always shows in full
+  (wrap, no truncation) and the found pieces render as separate
+  bordered chips (Classic square style) under a short label.*/
+.risk-card[data-decision="BLOCK"] .risk-row-why .risk-value {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.risk-chips-box { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.risk-chips-label {
+  font-weight: 800;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.risk-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.risk-chip {
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: var(--paper);
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: break-word;
+}
 .risk-card[data-expanded="true"] .risk-value {
   white-space: normal;
   overflow: visible;
