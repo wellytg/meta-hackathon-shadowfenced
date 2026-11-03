@@ -889,6 +889,7 @@
         if (riskModel && decision !== "HOLD") {
           var riskCard = renderRiskCard(riskModel, body, "risk-card");
           if (decision === "WARN") appendWarnChoices(riskCard, body, banner);
+          else if (decision === "BLOCK") appendBlockChoices(riskCard, body, banner);
           thread.appendChild(riskCard);
         }
         toggle.className = "ai-toggle";
@@ -1824,7 +1825,11 @@
     var psBanner = (person && typeof person.banner === "string") ? person.banner : "";
     var psFirst = psBanner ? personSearchFirstSentence(psBanner) : "";
     var psNote = psBanner ? personSearchNoteLines(psBanner) : [];
-    if (psBanner && psFirst) {
+    var reidBanner = (reid && typeof reid.banner === "string") ? reid.banner : "";
+    var reidOutcome = (reid && typeof reid.outcome === "string") ? reid.outcome : "";
+    if (decision === "BLOCK" && reidOutcome === "BLOCK" && reidBanner) {
+      why = [reidBanner];
+    } else if (psBanner && psFirst) {
       why = [psFirst];
     } else if (combination.length) {
       var comboLabels = combination.map(function (k) {
@@ -1861,6 +1866,9 @@
       firedRules = firedRules.filter(function (r) { return String(r && r.id) !== "reidentification"; });
     }
     var cardTitle = decision;
+    if (decision === "BLOCK") {
+      cardTitle = "Blocked \u2014 not sent";
+    }
     if (decision === "WARN" && evidence.person_search) {
       cardTitle = "Searching for a person";
     }
@@ -1869,6 +1877,9 @@
       title: cardTitle,
       rules: firedRules,
       personNote: psNote,
+      chips: combination.map(function (k) {
+        return RISK_REID_LABELS[String(k)] || String(k).replace(/_/g, " ");
+      }),
       sending: sending,
       why: why,
       action: action,
@@ -1898,6 +1909,7 @@
       value.setAttribute("data-testid", "risk-" + row.id);
       if (row.id === "sending") {
         if (row.text) value.innerHTML = highlightPlaceholders(row.text);
+        else if (model.decision === "BLOCK") value.textContent = "Nothing. Your message stayed on this PC.";
         else value.textContent = "(nothing left to send)";
       } else {
         value.textContent = row.text;
@@ -1910,6 +1922,27 @@
       rows.appendChild(riskRuleRow(rule));
     });
     card.appendChild(rows);
+    if (model.chips && model.chips.length) {
+      var chipsBox = document.createElement("div");
+      chipsBox.className = "risk-chips-box";
+      var chipsLabel = document.createElement("div");
+      chipsLabel.className = "risk-chips-label";
+      chipsLabel.setAttribute("data-testid", "risk-chips-label");
+      chipsLabel.textContent = "Found together:";
+      chipsBox.appendChild(chipsLabel);
+      var chips = document.createElement("div");
+      chips.className = "risk-chips";
+      chips.setAttribute("data-testid", "risk-chips");
+      model.chips.forEach(function (label) {
+        var chip = document.createElement("span");
+        chip.className = "risk-chip";
+        chip.setAttribute("data-testid", "risk-chip");
+        chip.textContent = label;
+        chips.appendChild(chip);
+      });
+      chipsBox.appendChild(chips);
+      card.appendChild(chipsBox);
+    }
     if (model.personNote && model.personNote.length) {
       var psNote = document.createElement("div");
       psNote.className = "risk-person-note";
@@ -2081,6 +2114,40 @@
         var actionVal = card.querySelector(".risk-row-action .risk-value");
         if (actionVal) actionVal.textContent = "Something went wrong; try again.";
       });
+  }
+  function appendBlockChoices(card, body, banner) {
+    var holder = document.createElement("div");
+    holder.className = "risk-choices";
+    var generalised = riskGeneralisedText(body);
+    if (generalised) {
+      var gen = document.createElement("button");
+      gen.type = "button";
+      gen.className = "reid-generalise";
+      gen.setAttribute("data-testid", "reid-generalise");
+      gen.textContent = "Send the generalised version";
+      gen.addEventListener("click", function () {
+        riskLockChoices(holder);
+        composer.value = generalised;
+        composer.dispatchEvent(new Event("input", { bubbles: true }));
+        composer.focus();
+        var actionVal = card.querySelector(".risk-row-action .risk-value");
+        if (actionVal) actionVal.textContent = "Generalised version ready \u2014 review and send.";
+      });
+      holder.appendChild(gen);
+    }
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.setAttribute("data-testid", "risk-cancel");
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", function () {
+      riskLockChoices(holder);
+      var actionVal = card.querySelector(".risk-row-action .risk-value");
+      if (actionVal) actionVal.textContent = "Cancelled \u2014 nothing was sent.";
+    });
+    holder.appendChild(cancel);
+    var toggle = card.querySelector(".risk-toggle");
+    if (toggle) card.insertBefore(holder, toggle);
+    else card.appendChild(holder);
   }
   function appendWarnChoices(card, body, banner) {
     var holder = document.createElement("div");

@@ -40,6 +40,21 @@ _US_PHONE_RE = re.compile(
     r"(?<!\d)(?:\+?1[\s().-]?)?(?:\(\d{3}\)|\d{3})[\s().-]?\d{3}[\s().-]?\d{4}(?!\d)"
 )
 _INTL_PHONE_RE = re.compile(r"\+\d[\d\s().-]{5,}\d")
+# UK landlines and mobiles, spaced/dotted/dashed or contiguous:
+# "0161 496 0732", "020 7946 0958", "01632 960961",
+# "07700 900461", "07700900461". Same shapes as the re-identification
+# layer so Tier 1 redaction and reid scoring agree. E.164 numbers with
+# a leading "+" (including "+44 ..." and "+44 (0)...") are already
+# covered by _INTL_PHONE_RE above.
+_UK_PHONE_RE = re.compile(
+    r"\b0\d{4}[\s.\-]*\d{6}\b"
+    r"|\b0\d{3}[\s.\-]*\d{3}[\s.\-]*\d{4}\b"
+    r"|\b0\d{2}[\s.\-]*\d{4}[\s.\-]*\d{4}\b"
+    r"|\b07\d{3}[\s.\-]*\d{6}\b"
+)
+# "Order 1234567": an explicitly labelled order/invoice number is not
+# a phone number, even when it starts with 0.
+_ORDER_LABEL_RE = re.compile(r"(?i)\border\s*(?:no\.?|number|#|:)?\s*$")
 
 _CAP_TOKEN = r"[A-Z][a-z]+(?:[-'][A-Za-z]+)?"
 _FIRST_TOKEN = r"(?:[A-Z][a-z]+|[a-z]+(?:[-'][a-z]+)?)"
@@ -1032,6 +1047,24 @@ def _scan_holder_names(text: str, policy: Policy) -> list[Span]:
     return spans
 
 
+def _phone_run_continues(text: str, start: int, end: int) -> bool:
+    """True when digits continue past a match through phone separators.
+
+    A UK-shaped slice of a longer spaced run ("07700 900461 1111") is a
+    card or account fragment, not a phone number. ``\\b`` alone cannot
+    see this: the space after the slice is a word boundary.
+    """
+    if start > 0 and text[start - 1].isdigit():
+        return True
+    if end < len(text) and text[end].isdigit():
+        return True
+    if end < len(text) - 1 and text[end] in " \t.-" and text[end + 1].isdigit():
+        return True
+    if start > 1 and text[start - 1] in " \t.-" and text[start - 2].isdigit():
+        return True
+    return False
+
+
 def _scan_pii(text: str, policy: Policy) -> list[Span]:
     spans: list[Span] = []
     for match in _EMAIL_RE.finditer(text):
@@ -1083,6 +1116,24 @@ def _scan_pii(text: str, policy: Policy) -> list[Span]:
                     "leading + with 7-15 digits", policy, 0.85,
                 )
             )
+    for match in _UK_PHONE_RE.finditer(text):
+        digits = re.sub(r"\D", "", match.group())
+        if not 7 <= len(digits) <= 15:
+            continue
+        if _phone_run_continues(text, match.start(), match.end()):
+            # Slice of a longer digit run ("07700 900461 1111"): a card
+            # or account fragment, owned by those detectors, not a phone.
+            continue
+        if _ORDER_LABEL_RE.search(text[max(0, match.start() - 20):match.start()]):
+            # Explicitly labelled order number ("Order 07700 900461").
+            continue
+        spans.append(
+            _emit(
+                text, match.start(), match.end(), "pii", "phone", "proven",
+                "Looks like a phone number.",
+                "UK phone digit grouping", policy, 0.85,
+            )
+        )
     for match in _EMP_RE.finditer(text):
         window_start = max(0, match.start() - 50)
         window_end = min(len(text), match.end() + 50)

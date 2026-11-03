@@ -59,7 +59,12 @@
     /* Tiny duplicate of normalizeRedact in logic.js (see src/logic.js). */
     var d = data || {};
     var action = String(d.decision || d.action || '').toUpperCase();
-    if (action === 'BLOCK') return { action: 'BLOCK', reason: d.notes || d.reason || 'Blocked by policy.' };
+    if (action === 'BLOCK') {
+      var b = { action: 'BLOCK', reason: d.notes || d.reason || 'Blocked by policy.' };
+      if (Array.isArray(d.combination)) b.combination = d.combination.slice(0, 12);
+      if (typeof d.generalised_text === 'string' && d.generalised_text) b.generalised_text = d.generalised_text;
+      return b;
+    }
     if (action === 'REDACT') return { action: 'REDACT', safe_text: d.safe_text || '', count: d.count || 0 };
     if (action === 'HOLD' || action === 'WARN') return { action: 'HOLD', reason: d.notes || d.reason || '' };
     if (action === 'ALLOW' || action === 'OK' || action === 'NONE') return { action: 'ALLOW' };
@@ -73,7 +78,10 @@
     if (norm.action === 'REDACT') return { action: 'REDACT', safe_text: norm.safe_text || '', count: norm.count || 0 };
     if (norm.action === 'HOLD') return { action: 'HOLD', reason: norm.reason || '' };
     if (norm.action === 'ALLOW') return { action: 'ALLOW' };
-    return { action: 'BLOCK', reason: norm.reason || FAILSAFE_MESSAGE };
+    var fb = { action: 'BLOCK', reason: norm.reason || FAILSAFE_MESSAGE };
+    if (norm && Array.isArray(norm.combination)) fb.combination = norm.combination.slice(0, 12);
+    if (norm && typeof norm.generalised_text === 'string' && norm.generalised_text) fb.generalised_text = norm.generalised_text;
+    return fb;
   }
 
   /* Real attachment chips and file inputs with files count; buttons
@@ -418,6 +426,15 @@
     cardBody.innerHTML = '';
     if (opts.bodyEl) cardBody.appendChild(opts.bodyEl);
     else cardBody.textContent = opts.body || '';
+    if (Array.isArray(opts.chips) && opts.chips.length) {
+      var chipsBox = document.createElement('div');
+      opts.chips.forEach(function (label) {
+        var chip = document.createElement('span');
+        chip.textContent = label;
+        chipsBox.appendChild(chip);
+      });
+      cardBody.appendChild(chipsBox);
+    }
     cardBtns.innerHTML = '';
     (opts.buttons || []).forEach(function (def) {
       var b = document.createElement('button');
@@ -660,6 +677,8 @@
     });
   }
 
+  var BLOCK_KIND_LABELS = { name: 'name', dob: 'date of birth', age: 'age', street: 'street address', postcode: 'postcode', city: 'city', employer: 'employer', jobtitle: 'job title', school: 'school', gender: 'gender', medical: 'medical details', plate: 'vehicle plate', vehicle: 'vehicle', phone: 'phone number', email: 'email address', dated_event: 'dates' };
+  /* Chips for the BLOCK card are label-only spans rendered by showCard. */
   /* Send-verdict cards without side effects: BLOCK, HOLD and REDACT
    * only. Stale answers refresh at most; they never send or rewrite. */
   function showVerdictCard(d, seq) {
@@ -708,6 +727,9 @@
       tone: 'block',
       title: 'Blocked \u2014 not sent',
       body: reason,
+      chips: (Array.isArray(d.combination) ? d.combination : []).map(function (k) {
+        return BLOCK_KIND_LABELS[String(k)] || String(k).replace(/_/g, ' ');
+      }),
       anchor: editorAnchor(),
       buttons: [{ label: 'OK' }],
       sendSeq: seq

@@ -914,12 +914,20 @@ def scan(request: ScanRequest) -> dict[str, Any]:
     # protected key is already certain from Tier 1, so skip the live
     # model suspicions and the Glimmer-backed re-id payload.
     scan_shortcut = engine.has_proven_secret_block(spans)
+    bundle_shortcut = engine.tier1_proves_identity_bundle(
+        request.text)
+    if bundle_shortcut:
+        scan_shortcut = True
     if scan_shortcut:
         trace.append(
             {
                 "step": "scan.short_circuit",
                 "tool": "gate",
-                "detail": "proven secret -> BLOCK; model checks skipped",
+                "detail": (
+                    "full identity bundle -> BLOCK; model checks skipped"
+                    if bundle_shortcut else
+                    "proven secret -> BLOCK; model checks skipped"
+                ),
                 "result": "BLOCK",
                 "ms": 0.0,
             }
