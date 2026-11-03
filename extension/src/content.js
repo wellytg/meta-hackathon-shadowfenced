@@ -13,6 +13,8 @@
  * - Send-time card: "Blocked â€” not sent" / "N details protected" /
  *   "Review: reason" with "Send anyway" + "Cancel"; a separate
  *   not-running card appears when the local app is unreachable.
+ * - Review-card choices (Send anyway / Cancel) are reported fields-only
+ *   to POST /api/ext/choice for the "What it caught" panel.
  * - Every card lives in the closed shadow root, has a title bar, takes
  *   keyboard focus, closes on Escape, is parked clear of the site's send
  *   button, and auto-dismisses so it never covers the button permanently.
@@ -442,7 +444,7 @@
       b.textContent = def.label;
       b.addEventListener('click', function () {
         if (def.keepOpen !== true) hideCard();
-        if (def.onClick) def.onClick();
+        if (def.onClick) { def.onClick(); } else if (def.label === 'Cancel' && opts.title === 'Review before sending') { reportExtChoice('cancel'); }
       });
       cardBtns.appendChild(b);
     });
@@ -702,7 +704,7 @@
         body: d.reason || 'Please review before sending.',
         anchor: editorAnchor(),
         buttons: [
-          { label: 'Send anyway', onClick: function () { state.redactedArmed = true; doSend(); } },
+          { label: 'Send anyway', onClick: function () { reportExtChoice('send_anyway'); state.redactedArmed = true; doSend(); } },
           { label: 'Cancel' }
         ],
         sendSeq: seq
@@ -736,6 +738,30 @@
     });
   }
 
+  /* Report one HOLD card choice fields-only to /api/ext/choice
+   * (T69). Uses the last verdict's decision id, kinds and rule ids;
+   * without a verdict there is nothing to attribute, so nothing sends. */
+  function reportExtChoice(choice) {
+    var ctx = state.lastChoice || null;
+    if (!ctx || !ctx.decision_id) return;
+    var payload = null;
+    if (LOGIC && LOGIC.buildChoicePayload) {
+      try {
+        payload = LOGIC.buildChoicePayload({
+          decision_id: ctx.decision_id, choice: choice,
+          kinds: ctx.kinds || [], rule_ids: ctx.rule_ids || [],
+          site: (location.hostname || ''), source: 'text'
+        });
+      } catch (e) { payload = null; }
+    }
+    if (!payload) return;
+    sendToBg({
+      type: 'SF_CHOICE',
+      decision_id: payload.decision_id, choice: payload.choice,
+      kinds: payload.kinds, rule_ids: payload.rule_ids,
+      site: payload.site, source: payload.source
+    });
+  }
   function handleRedactResult(res, seq, allowSend) {
     if (!res || !res.ok) {
       var status = (res && typeof res.status === 'number') ? res.status : null;
@@ -748,6 +774,12 @@
       showVerdictCard(decide(res), seq);
       return;
     }
+    var raw = (res && res.data) || {};
+    state.lastChoice = {
+      decision_id: String(raw.decision_id || raw.id || ''),
+      kinds: Array.isArray(raw.kinds) ? raw.kinds : [],
+      rule_ids: Array.isArray(raw.rule_ids) ? raw.rule_ids : []
+    };
     var d = decide(res);
     if (d.action === 'ALLOW') {
       if (!allowSend) return; // stale answer: never send on its own
@@ -777,6 +809,7 @@
    * epoch; an answer from an older epoch only refreshes a card, never
    * sends. */
   function beginSendCheck() {
+    state.lastChoice = null; // a new send needs a fresh verdict before choices count
     state.sending = true;
     var seq = ++state.sendSeq;
     if (state.sendTimer) clearTimeout(state.sendTimer);

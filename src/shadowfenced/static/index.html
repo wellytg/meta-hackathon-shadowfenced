@@ -10,6 +10,7 @@
 <!-- T32: Classic is the single theme; no theme stylesheet. -->
 <link rel="stylesheet" href="dictation.css">
 <link rel="stylesheet" href="providers.css">
+<link rel="stylesheet" href="habits.css">
 </head>
 <body>
 <a class="skip-link" href="#thread">Skip to conversation</a>
@@ -140,6 +141,27 @@
           <button id="ext-token-copy" type="button">Copy</button></p>
           <p class="stat-line"><button id="ext-token-regenerate" data-testid="ext-token-regenerate" type="button">Regenerate</button>
           <span id="ext-token-msg" class="token-msg" role="status" hidden></span></p>
+        </div>
+        <div class="card">
+          <h2>What it caught</h2>
+          <p class="stat-line" data-testid="history-notice">Only the type of item is recorded — never what you typed.</p>
+          <p class="stat-line" data-testid="history-hosted" hidden>Public demo. Use made-up data only.</p>
+          <div data-testid="history-body">
+            <p class="stat-line">
+              <label>Site <select id="history-site" data-testid="history-site"><option value="">All sites</option></select></label>
+              <label>Kind <select id="history-kind" data-testid="history-kind"><option value="">All kinds</option></select></label>
+            </p>
+            <p class="stat-line">Last 7 days: <span id="history-counts-7" data-testid="history-counts-7">—</span></p>
+            <p class="stat-line">Last 30 days: <span id="history-counts-30" data-testid="history-counts-30">—</span></p>
+            <ol id="history-events" data-testid="history-events" class="log-list"></ol>
+            <p><button id="history-delete" data-testid="history-delete" type="button">Delete history</button>
+            <span id="history-msg" class="token-msg" role="status" hidden></span></p>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Rule suggestions</h2>
+          <p class="stat-line" data-testid="suggest-hosted" hidden>Public demo. Use made-up data only.</p>
+          <div id="suggest-list" data-testid="suggest-list"></div>
         </div>
         <div class="card">
           <h2>Decision log</h2>

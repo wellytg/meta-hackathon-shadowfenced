@@ -300,8 +300,75 @@ var ShadowfencedLogic = {
   shouldFocusCard: shouldFocusCard,
   isEditableElement: isEditableElement,
   protectionStatus: protectionStatus,
-  siteRowTone: siteRowTone
+  siteRowTone: siteRowTone,
+  buildChoicePayload: buildChoicePayload,
+  CHOICE_NAMES: CHOICE_NAMES
 };
+
+/* Fields-only choice payload for POST /api/ext/choice (T69).
+ * Input: {decision_id, choice, kinds, rule_ids, site, source}.
+ * Returns the cleaned payload, or null when the decision id or the
+ * choice is unusable. Kinds keep the strict cls:subclass shape (other
+ * entries are dropped); the site is reduced to its host only. Never
+ * carries values, message text, or file names. */
+var CHOICE_NAMES = [
+  'send_anyway', 'send_generalised', 'generalise', 'cancel',
+  'redacted_copy', 'upload_anyway', 'approve', 'deny',
+  'apply_suggestion', 'dismiss_suggestion'
+];
+var CHOICE_KIND_CLASSES = { secret: 1, pii: 1, business: 1, beacon: 1 };
+ShadowfencedLogic.CHOICE_NAMES = CHOICE_NAMES;
+function choiceSiteOnly(value) {
+  var text = String(value || '').trim().toLowerCase();
+  if (text.indexOf('://') !== -1) text = text.split('://')[1];
+  text = text.split('/')[0].split('?')[0].split('#')[0];
+  if (text.charAt(0) === '[' && text.indexOf(']') !== -1) {
+    text = text.slice(1).split(']')[0];
+  } else {
+    text = text.split(':')[0];
+  }
+  text = text.trim().replace(/\.+$/, '');
+  if (!text) return 'app';
+  if (text === 'app' || text === 'localhost') return text;
+  if (!/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(text)) return 'app';
+  return text;
+}
+function buildChoicePayload(input) {
+  var args = input || {};
+  var decisionId = String(
+    args.decisionId !== undefined ? args.decisionId : args.decision_id || ''
+  ).trim();
+  if (!/^[A-Za-z0-9_.-]{1,128}$/.test(decisionId)) return null;
+  var choice = String(args.choice || '').trim().toLowerCase();
+  if (CHOICE_NAMES.indexOf(choice) === -1) return null;
+  var kinds = [];
+  var rawKinds = Array.isArray(args.kinds) ? args.kinds : [];
+  for (var i = 0; i < rawKinds.length && kinds.length < 32; i++) {
+    var label = String(rawKinds[i] || '').trim().toLowerCase();
+    var parts = label.split(':');
+    if (parts.length !== 2) continue;
+    if (!/^[a-z0-9_]{1,32}$/.test(parts[0])) continue;
+    if (!/^[a-z0-9_]{1,48}$/.test(parts[1])) continue;
+    if (!CHOICE_KIND_CLASSES[parts[0]]) continue;
+    if (kinds.indexOf(label) === -1) kinds.push(label);
+  }
+  var ruleIds = [];
+  var rawRules = Array.isArray(args.rule_ids) ? args.rule_ids : [];
+  for (var j = 0; j < rawRules.length && ruleIds.length < 32; j++) {
+    var rule = String(rawRules[j] || '').trim();
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(rule)) continue;
+    if (ruleIds.indexOf(rule) === -1) ruleIds.push(rule);
+  }
+  var source = String(args.source || 'text').trim().toLowerCase();
+  return {
+    decision_id: decisionId,
+    choice: choice,
+    kinds: kinds,
+    rule_ids: ruleIds,
+    site: choiceSiteOnly(args.site),
+    source: source === 'file' ? 'file' : 'text'
+  };
+}
 
 if (typeof globalThis !== 'undefined') globalThis.ShadowfencedLogic = ShadowfencedLogic;
 if (typeof module !== 'undefined' && module.exports) {

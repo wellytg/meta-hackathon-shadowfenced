@@ -602,6 +602,59 @@
       chip.appendChild(icon);
       chip.appendChild(name);
       chip.appendChild(remove);
+      if (f.status === "flagged" && f.file_id) {
+        var keepBtn = document.createElement("button");
+        keepBtn.type = "button";
+        keepBtn.className = "chip-keep";
+        keepBtn.setAttribute("data-testid", "file-upload-anyway");
+        keepBtn.textContent = "Upload anyway";
+        keepBtn.addEventListener("click", function () {
+          var uploadSpans = f.spans || [];
+          var uploadKinds = [];
+          for (var k = 0; k < uploadSpans.length; k++) {
+            var uCls = String(uploadSpans[k].cls || "");
+            var uSub = String(uploadSpans[k].subclass || "");
+            if (/^[a-z0-9_]+$/.test(uCls) && /^[a-z0-9_]+$/.test(uSub)) {
+              var uLabel = uCls + ":" + uSub;
+              if (uploadKinds.indexOf(uLabel) < 0) uploadKinds.push(uLabel);
+            }
+          }
+          reportChoice({ decision_id: f.file_id, choice: "upload_anyway", kinds: uploadKinds, site: "app", source: "file" });
+          keepBtn.disabled = true;
+          keepBtn.textContent = "Kept anyway";
+        });
+        chip.appendChild(keepBtn);
+        if (f.kind !== "image" && f.kind !== "audio" && f.kind !== "unknown") {
+          var copyBtn = document.createElement("button");
+          copyBtn.type = "button";
+          copyBtn.className = "chip-copy";
+          copyBtn.setAttribute("data-testid", "file-redacted-copy");
+          copyBtn.textContent = "Make a redacted copy";
+          copyBtn.addEventListener("click", function () {
+            copyBtn.disabled = true;
+            fetch("/api/uploads/" + encodeURIComponent(f.file_id) + "/redacted-copy", { method: "POST" })
+              .then(function (resp) {
+                return resp.json().then(function (b) { return { ok: resp.ok, body: b }; });
+              })
+              .then(function (res) {
+                copyBtn.disabled = false;
+                if (res.ok && res.body && typeof res.body.redacted_text === "string") {
+                  var blob = new Blob([res.body.redacted_text], { type: "text/plain" });
+                  var url = URL.createObjectURL(blob);
+                  var link = document.createElement("a");
+                  link.href = url;
+                  link.download = (f.name || "file") + ".redacted.txt";
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                  setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+                }
+              })
+              .catch(function () { copyBtn.disabled = false; });
+          });
+          chip.appendChild(copyBtn);
+        }
+      }
       chip.appendChild(details);
       fileChips.appendChild(chip);
     });
@@ -667,6 +720,8 @@
   }
 
   function refreshStats() {
+    loadHistory();
+    loadSuggestions();
     fetch("/api/stats")
       .then(function (resp) { return resp.json(); })
       .then(function (stats) {
@@ -1287,6 +1342,7 @@
         holdGen.setAttribute("data-testid", "reid-generalise");
         holdGen.textContent = "Generalise";
         holdGen.addEventListener("click", function () {
+          reportChoice({ decision_id: holdId, choice: "generalise", kinds: kindsOf(holdBody), rule_ids: holdBody.rule_ids || [], site: "app", source: "text" });
           composer.value = holdGeneralised;
           composer.dispatchEvent(new Event("input", { bubbles: true }));
           composer.focus();
@@ -2046,6 +2102,29 @@
     riskCardTail(card, model);
     return card;
   }
+  /* T69: fire-and-forget card-choice reporting (fields only). */
+  function reportChoice(payload) {
+    try {
+      fetch("/api/choice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }).catch(function () { /* choices are advisory */ });
+    } catch (e) { /* ignore */ }
+  }
+  function kindsOf(body) {
+    var spans = (body && body.evidence && body.evidence.spans) || [];
+    var out = [];
+    for (var i = 0; i < spans.length; i++) {
+      var cls = String(spans[i].cls || "");
+      var sub = String(spans[i].subclass || "");
+      if (/^[a-z0-9_]+$/.test(cls) && /^[a-z0-9_]+$/.test(sub)) {
+        var label = cls + ":" + sub;
+        if (out.indexOf(label) < 0) out.push(label);
+      }
+    }
+    return out;
+  }
   function riskGeneralisedText(body) {
     if (!body || !body.evidence) return "";
     var person = body.evidence.person_search || {};
@@ -2127,6 +2206,7 @@
       gen.textContent = "Send the generalised version";
       gen.addEventListener("click", function () {
         riskLockChoices(holder);
+        reportChoice({ decision_id: body.decision_id, choice: "generalise", kinds: kindsOf(body), rule_ids: body.rule_ids || [], site: "app", source: "text" });
         composer.value = generalised;
         composer.dispatchEvent(new Event("input", { bubbles: true }));
         composer.focus();
@@ -2142,6 +2222,7 @@
     cancel.addEventListener("click", function () {
       riskLockChoices(holder);
       var actionVal = card.querySelector(".risk-row-action .risk-value");
+      reportChoice({ decision_id: body.decision_id, choice: "cancel", kinds: kindsOf(body), rule_ids: body.rule_ids || [], site: "app", source: "text" });
       if (actionVal) actionVal.textContent = "Cancelled \u2014 nothing was sent.";
     });
     holder.appendChild(cancel);
@@ -2182,6 +2263,7 @@
     cancel.addEventListener("click", function () {
       riskLockChoices(holder);
       var actionVal = card.querySelector(".risk-row-action .risk-value");
+      reportChoice({ decision_id: body.decision_id, choice: "cancel", kinds: kindsOf(body), rule_ids: body.rule_ids || [], site: "app", source: "text" });
       if (actionVal) actionVal.textContent = "Cancelled — nothing was sent.";
     });
     holder.appendChild(sendBtn2);
@@ -2394,10 +2476,297 @@
     });
   }
 
+  /* T69 "What it caught" panel + rule suggestions (fields only). */
+  function historyChoiceLabel(choice) {
+    var labels = {
+      send_anyway: "Sent anyway",
+      send_generalised: "Sent generalised",
+      generalise: "Generalised",
+      cancel: "Cancelled",
+      redacted_copy: "Redacted copy",
+      upload_anyway: "Uploaded anyway",
+      approve: "Approved",
+      deny: "Denied",
+      apply_suggestion: "Rule applied",
+      dismiss_suggestion: "Suggestion dismissed"
+    };
+    return labels[String(choice || "")] || "";
+  }
+  function paintHistoryOptions(select, values, allLabel) {
+    if (!select) return;
+    var current = select.value;
+    select.innerHTML = "";
+    var all = document.createElement("option");
+    all.value = "";
+    all.textContent = allLabel;
+    select.appendChild(all);
+    (values || []).forEach(function (value) {
+      var opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = value;
+      select.appendChild(opt);
+    });
+    select.value = current;
+  }
+  function paintCounts(el, counts) {
+    if (!el) return;
+    var keys = Object.keys(counts || {}).sort();
+    el.textContent = keys.length
+      ? keys.map(function (k) { return k + " ×" + counts[k]; }).join(", ")
+      : "—";
+  }
+  function loadHistory() {
+    var list = document.getElementById("history-events");
+    if (!list || list.dataset.loading) return;
+    list.dataset.loading = "1";
+    var siteSel = document.getElementById("history-site");
+    var kindSel = document.getElementById("history-kind");
+    var url = "/api/history?limit=200";
+    if (siteSel && siteSel.value) url += "&site=" + encodeURIComponent(siteSel.value);
+    if (kindSel && kindSel.value) url += "&kind=" + encodeURIComponent(kindSel.value);
+    fetch(url)
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        delete list.dataset.loading;
+        var hosted = !!(body && body.hosted);
+        var hostedNote = document.querySelector('[data-testid="history-hosted"]');
+        var historyBody = document.querySelector('[data-testid="history-body"]');
+        if (hostedNote) hostedNote.hidden = !hosted;
+        if (historyBody) historyBody.hidden = hosted;
+        if (hosted) return;
+        paintHistoryOptions(siteSel, (body && body.sites) || [], "All sites");
+        paintHistoryOptions(kindSel, (body && body.kinds) || [], "All kinds");
+        paintCounts(document.getElementById("history-counts-7"), body && body.counts_7d);
+        paintCounts(document.getElementById("history-counts-30"), body && body.counts_30d);
+        list.innerHTML = "";
+        var events = (body && body.events) || [];
+        if (!events.length) {
+          var empty = document.createElement("li");
+          empty.textContent = "Nothing caught yet.";
+          list.appendChild(empty);
+          return;
+        }
+        events.forEach(function (entry) {
+          var item = document.createElement("li");
+          var head = document.createElement("div");
+          var when = "—";
+          try { when = entry.ts ? new Date(entry.ts).toLocaleString() : "—"; }
+          catch (e) { when = String(entry.ts || "—"); }
+          head.textContent = when + " · " + (entry.site || "app") + " · " + (entry.decision || "—");
+          item.appendChild(head);
+          var chips = document.createElement("div");
+          chips.className = "history-chips";
+          var kindList = (entry.kinds && entry.kinds.length) ? entry.kinds : ["clean"];
+          kindList.forEach(function (kind) {
+            var chip = document.createElement("span");
+            chip.className = "kind-chip";
+            chip.textContent = kind;
+            chips.appendChild(chip);
+          });
+          item.appendChild(chips);
+          var tail = document.createElement("div");
+          var ruleNames = ((entry.rule_ids) || []).map(function (id) {
+            var found = ruleCatalogById[String(id)];
+            return (found && found.title) ? found.title : String(id);
+          }).join("; ");
+          var choiceLabel = historyChoiceLabel(entry.choice);
+          tail.textContent = (ruleNames ? ("Rule: " + ruleNames) : "Rule: —") +
+            (choiceLabel ? (" · You chose: " + choiceLabel) : "");
+          item.appendChild(tail);
+          list.appendChild(item);
+        });
+      })
+      .catch(function () { delete list.dataset.loading; });
+  }
+  function wireHistoryFilters() {
+    var siteSel = document.getElementById("history-site");
+    var kindSel = document.getElementById("history-kind");
+    [siteSel, kindSel].forEach(function (sel) {
+      if (sel && !sel.dataset.wired) {
+        sel.dataset.wired = "1";
+        sel.addEventListener("change", loadHistory);
+      }
+    });
+    var del = document.getElementById("history-delete");
+    if (del && !del.dataset.wired) {
+      del.dataset.wired = "1";
+      del.addEventListener("click", function () {
+        var msg = document.getElementById("history-msg");
+        del.disabled = true;
+        fetch("/api/history", { method: "DELETE" })
+          .then(function (resp) {
+            return resp.json().then(function (b) { return { ok: resp.ok, body: b }; });
+          })
+          .then(function (res) {
+            del.disabled = false;
+            if (msg) {
+              msg.hidden = false;
+              msg.textContent = res.ok ? "History deleted." : "Could not delete history.";
+            }
+            loadHistory();
+            refreshStats();
+          })
+          .catch(function () {
+            del.disabled = false;
+            if (msg) {
+              msg.hidden = false;
+              msg.textContent = "Could not delete history.";
+            }
+          });
+      });
+    }
+  }
+  function suggestCard(sg) {
+    var card = document.createElement("div");
+    card.className = "suggest-card";
+    card.setAttribute("data-testid", "suggest-card");
+    card.setAttribute("data-suggest", sg.id);
+    var title = document.createElement("h3");
+    title.textContent = sg.title || "Suggestion";
+    card.appendChild(title);
+    if (sg.evidence) {
+      var ev = document.createElement("p");
+      ev.className = "stat-line";
+      ev.textContent = sg.evidence;
+      card.appendChild(ev);
+    }
+    if (sg.detail) {
+      var detail = document.createElement("p");
+      detail.className = "stat-line";
+      detail.textContent = sg.detail;
+      card.appendChild(detail);
+    }
+    if (sg.diff) {
+      var diff = document.createElement("pre");
+      diff.className = "suggest-diff";
+      diff.textContent = sg.diff;
+      card.appendChild(diff);
+    }
+    var row = document.createElement("div");
+    row.className = "suggest-row";
+    var input = null;
+    if (sg.needs_input) {
+      input = document.createElement("input");
+      input.type = "text";
+      input.placeholder = "e.g. your-organisation.com";
+      input.setAttribute("aria-label", "Organisation domain");
+      input.setAttribute("data-testid", "suggest-domain");
+      row.appendChild(input);
+    }
+    var applyBtn = document.createElement("button");
+    applyBtn.type = "button";
+    applyBtn.setAttribute("data-testid", "suggest-apply");
+    applyBtn.textContent = "Apply";
+    var dismissBtn = document.createElement("button");
+    dismissBtn.type = "button";
+    dismissBtn.setAttribute("data-testid", "suggest-dismiss");
+    dismissBtn.textContent = "Dismiss";
+    applyBtn.addEventListener("click", function () {
+      applyBtn.disabled = true;
+      dismissBtn.disabled = true;
+      var payload = {};
+      if (input) payload.domain = input.value || "";
+      fetch("/api/suggestions/" + encodeURIComponent(sg.id) + "/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      })
+        .then(function (resp) {
+          return resp.json().then(function (b) { return { ok: resp.ok, body: b }; });
+        })
+        .then(function (res) {
+          if (res.ok) {
+            paintSuggestDone(card, "Applied.", sg);
+          } else {
+            applyBtn.disabled = false;
+            dismissBtn.disabled = false;
+            var message = "Could not apply.";
+            if (res.body && res.body.detail && res.body.detail.message) {
+              message = res.body.detail.message;
+            }
+            paintSuggestError(card, message);
+          }
+          refreshStats();
+        })
+        .catch(function () {
+          applyBtn.disabled = false;
+          dismissBtn.disabled = false;
+        });
+    });
+    dismissBtn.addEventListener("click", function () {
+      applyBtn.disabled = true;
+      dismissBtn.disabled = true;
+      fetch("/api/suggestions/" + encodeURIComponent(sg.id) + "/dismiss", { method: "POST" })
+        .then(function () {
+          if (card.parentNode) card.parentNode.removeChild(card);
+          refreshStats();
+        })
+        .catch(function () {
+          applyBtn.disabled = false;
+          dismissBtn.disabled = false;
+        });
+    });
+    row.appendChild(applyBtn);
+    row.appendChild(dismissBtn);
+    card.appendChild(row);
+    return card;
+  }
+  function paintSuggestDone(card, label, sg) {
+    card.innerHTML = "";
+    var done = document.createElement("p");
+    done.className = "stat-line";
+    done.textContent = label;
+    card.appendChild(done);
+    var undoBtn = document.createElement("button");
+    undoBtn.type = "button";
+    undoBtn.setAttribute("data-testid", "suggest-undo");
+    undoBtn.textContent = "Undo";
+    undoBtn.addEventListener("click", function () {
+      undoBtn.disabled = true;
+      fetch("/api/suggestions/" + encodeURIComponent(sg.id) + "/undo", { method: "POST" })
+        .then(function () { loadSuggestions(); refreshStats(); })
+        .catch(function () { undoBtn.disabled = false; });
+    });
+    card.appendChild(undoBtn);
+  }
+  function paintSuggestError(card, message) {
+    var old = card.querySelector(".suggest-error");
+    if (old) old.parentNode.removeChild(old);
+    var err = document.createElement("p");
+    err.className = "suggest-error";
+    err.setAttribute("role", "status");
+    err.textContent = message;
+    card.appendChild(err);
+  }
+  function loadSuggestions() {
+    var box = document.getElementById("suggest-list");
+    if (!box || box.dataset.loading) return;
+    box.dataset.loading = "1";
+    fetch("/api/suggestions")
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        delete box.dataset.loading;
+        var hostedNote = document.querySelector('[data-testid="suggest-hosted"]');
+        if (hostedNote) hostedNote.hidden = !(body && body.disabled);
+        box.innerHTML = "";
+        if (body && body.disabled) return;
+        var items = (body && body.suggestions) || [];
+        if (!items.length) {
+          var empty = document.createElement("p");
+          empty.className = "stat-line";
+          empty.textContent = "No suggestions right now. They appear as Shadowfenced learns your habits.";
+          box.appendChild(empty);
+          return;
+        }
+        items.forEach(function (sg) { box.appendChild(suggestCard(sg)); });
+      })
+      .catch(function () { delete box.dataset.loading; });
+  }
   loadRuleCatalog();
   loadProviders();
   loadExtTokenDeferred();
   loadLogViewer();
+  wireHistoryFilters();
   loadGuard();
   paintSend();
   refreshStats();
@@ -2407,7 +2776,7 @@
     var drawer = document.getElementById("details-drawer");
     if (drawer) {
       drawer.addEventListener("toggle", function () {
-        if (drawer.open) refreshSystemStatus();
+        if (drawer.open) { refreshSystemStatus(); loadHistory(); loadSuggestions(); }
       });
     }
   })();
