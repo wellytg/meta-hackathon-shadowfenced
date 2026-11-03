@@ -404,22 +404,96 @@
       /(\[[A-Z0-9 _-]*\d[^\]]*\])/g, '<span class="ph">$1</span>');
   }
 
-  // Highlights use code-point offsets; Array.from splits by code point.
-  function highlightRanges(text, ranges) {
-    var chars = Array.from(text);
-    var marks = [];
-    (ranges || []).forEach(function (r) {
-      if (r.start < r.end) marks.push(r);
+  // Safe basic-Markdown answer renderer (T68): bold, italics, inline
+  // code, lists and paragraphs. Every slice is HTML-escaped first and
+  // only this renderer's own tags are ever emitted, so there is no raw
+  // HTML and no link that could execute script. Highlight ranges use
+  // code-point offsets; Array.from splits by code point.
+  function renderInlineMarkdown(escaped) {
+    var text = String(escaped == null ? "" : escaped);
+    // Inline code first, stashed so ** and * inside code stay literal.
+    // \x60 is a backtick.
+    var codes = [];
+    text = text.replace(/\x60([^\x60\n]+?)\x60/g, function (match, inner) {
+      codes.push(inner);
+      return "\u0000" + (codes.length - 1) + "\u0000";
     });
-    marks.sort(function (a, b) { return a.start - b.start; });
+    text = text.replace(/\*\*([^*]+?)\*\*/g, "<strong>$1</strong>");
+    text = text.replace(/(^|[\s(>])\*([^*\n]+?)\*/g, "$1<em>$2</em>");
+    text = text.replace(/(^|[\s(>])_([^_\n]+?)_/g, "$1<em>$2</em>");
+    text = text.replace(/\u0000(\d+)\u0000/g, function (match, index) {
+      return "<code>" + codes[Number(index)] + "</code>";
+    });
+    return text;
+  }
+
+  function renderAnswer(text, ranges) {
+    var raw = String(text == null ? "" : text);
+    var chars = Array.from(raw);
+    var lines = [];
+    var flagged = [];
+    var i;
+    for (i = 0; i < chars.length; i++) flagged.push(false);
+    (ranges || []).forEach(function (range) {
+      if (!range) return;
+      var start = Number(range.start);
+      var end = Number(range.end);
+      if (!isFinite(start) || !isFinite(end)) return;
+      for (i = Math.max(0, start); i < Math.min(chars.length, end); i++) {
+        flagged[i] = true;
+      }
+    });
+    var lineStart = 0;
+    for (i = 0; i <= chars.length; i++) {
+      if (i === chars.length || chars[i] === "\n") {
+        lines.push({
+          text: chars.slice(lineStart, i).join(""),
+          start: lineStart,
+          end: i
+        });
+        lineStart = i + 1;
+      }
+    }
+    function formatRange(cpStart, cpEnd) {
+      var html = "";
+      var j = cpStart;
+      while (j < cpEnd) {
+        var isHit = flagged[j];
+        var k = j + 1;
+        while (k < cpEnd && flagged[k] === isHit) k++;
+        var segment = renderInlineMarkdown(
+          escapeHtml(chars.slice(j, k).join("")));
+        html += isHit ? '<span class="hl">' + segment + "</span>" : segment;
+        j = k;
+      }
+      return html;
+    }
+    function isListLine(line) { return /^\s*[-*]\s+/.test(line); }
+    function isBlank(line) { return /^\s*$/.test(line); }
     var html = "";
-    var cursor = 0;
-    marks.forEach(function (r) {
-      html += escapeHtml(chars.slice(cursor, r.start).join(""));
-      html += '<span class="hl">' + escapeHtml(chars.slice(r.start, r.end).join("")) + "</span>";
-      cursor = r.end;
-    });
-    html += escapeHtml(chars.slice(cursor).join(""));
+    var index = 0;
+    while (index < lines.length) {
+      if (isBlank(lines[index].text)) { index++; continue; }
+      if (isListLine(lines[index].text)) {
+        var items = "";
+        while (index < lines.length && isListLine(lines[index].text)) {
+          var marker = lines[index].text.match(/^\s*[-*]\s+/)[0];
+          var skip = Array.from(marker).length;
+          items += "<li>" +
+            formatRange(lines[index].start + skip, lines[index].end) + "</li>";
+          index++;
+        }
+        html += "<ul>" + items + "</ul>";
+      } else {
+        var parts = [];
+        while (index < lines.length && !isBlank(lines[index].text) &&
+               !isListLine(lines[index].text)) {
+          parts.push(formatRange(lines[index].start, lines[index].end));
+          index++;
+        }
+        html += "<p>" + parts.join("<br>") + "</p>";
+      }
+    }
     return html;
   }
 
@@ -914,7 +988,7 @@
           var answer = document.createElement("div");
           answer.className = "bubble answer";
           answer.setAttribute("data-testid", "answer");
-          answer.innerHTML = highlightRanges(body.answer, body.answer_highlights);
+          answer.innerHTML = renderAnswer(body.answer, body.answer_highlights);
           thread.appendChild(answer);
           var src = document.createElement("div");
           src.className = "answer-src";
@@ -1227,7 +1301,7 @@
       var bubble = document.createElement("div");
       bubble.className = "bubble answer";
       bubble.setAttribute("data-testid", "answer");
-      bubble.innerHTML = highlightRanges(answerText, []);
+      bubble.innerHTML = renderAnswer(answerText, []);
       thread.appendChild(bubble);
       // Footer names the provider actually used (server-echoed), never
       // just the selector value, so a mid-flight switch cannot mislabel.
@@ -2094,7 +2168,7 @@
             var bubble = document.createElement("div");
             bubble.className = "bubble answer";
             bubble.setAttribute("data-testid", "answer");
-            bubble.innerHTML = highlightRanges(res.body.answer, res.body.answer_highlights);
+            bubble.innerHTML = renderAnswer(res.body.answer, res.body.answer_highlights);
             thread.appendChild(bubble);
             var src = document.createElement("div");
             src.className = "answer-src";
