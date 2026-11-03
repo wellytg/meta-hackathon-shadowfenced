@@ -128,7 +128,7 @@ def meta_judge(
             "role": "system",
             "content": judge_module.SYSTEM_PROMPT + " Reply with JSON only.",
         },
-        {"role": "user", "content": window},
+        {"role": "user", "content": judge_module.quote_as_data(window)},
     ]
     try:
         answer = upstream_module.chat_sync(

@@ -12,6 +12,11 @@ gate: no cloud calls, no network. Endpoints:
   chained decision log.
 - ``GET /api/ext/pairing``: show the pairing token in the local console
   ("Pair browser extension" card). Same localhost page only.
+- ``POST /api/ext/scan-file``: guard one attached file (multipart, 25 MB
+  max); answers CLEAN | BLOCK | UNSCANNABLE plus label/count kinds.
+- ``POST /api/ext/redact-file``: a redacted copy of a blocked scan.
+- ``POST /api/ext/deep-check`` + ``GET /api/ext/deep-check/<id>``:
+  optional Glimmer deep check over a scan's text (adds findings only).
 
 Pairing: callers send the server pairing token in ``X-Ext-Token`` (alias
 ``X-Pairing-Token``). Only ``chrome-extension://`` / ``moz-extension://``
@@ -25,10 +30,11 @@ import logging
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from . import engine
+from . import fileguard
 from . import tier1
 from .redact import base_label, load_mapping, redact, rehydrate, save_mapping
 
@@ -61,6 +67,12 @@ class RedactBody(BaseModel):
 
     site: str = Field(default="")
     text: str = Field(default="")
+
+
+class ScanIdBody(BaseModel):
+    """A file-guard scan id from ``scan-file``."""
+
+    scan_id: str = Field(default="")
 
 
 class RehydrateBody(BaseModel):
@@ -442,6 +454,130 @@ def ext_rehydrate(
     restored, _highlights, _unmatched = rehydrate(body.text or "", mapping)
     log.info("ext_api rehydrate: placeholders=%d", len(mapping))
     return {"text": restored}
+
+
+@router.post("/scan-file")
+async def ext_scan_file(
+    file: UploadFile = File(...),
+    _guard: None = Depends(ext_guard),
+) -> dict[str, Any]:
+    """Guard one attached file: CLEAN | BLOCK | UNSCANNABLE (25 MB max).
+
+    Origin + token guarded like the other ext routes, and off in hosted
+    mode. Oversized, unsupported, encrypted or unparseable input answers
+    UNSCANNABLE (the file stays blocked), never an HTTP error. Labels
+    and counts only — raw values never leave this machine.
+    """
+    _refuse_hosted_pairing()
+    from .app import get_policy, get_registry
+
+    # Sync read of the spooled upload: no await, so tests drive this
+    # route without an event loop (socket creation is forbidden there).
+    data = file.file.read()
+    payload = fileguard.scan_upload(
+        file.filename or "upload",
+        bytes(data or b""),
+        get_policy(),
+        get_registry(),
+    )
+    log.info(
+        "ext_api scan-file: decision=%s kinds=%d chars=%d code_ms=%.1f",
+        payload.get("decision"),
+        len(payload.get("kinds") or []),
+        payload.get("chars", 0),
+        payload.get("code_ms", 0.0),
+    )
+    return payload
+
+
+@router.post("/redact-file")
+def ext_redact_file(
+    body: ScanIdBody, _guard: None = Depends(ext_guard)
+) -> dict[str, Any]:
+    """Return a redacted copy of one BLOCK scan (base64 JSON).
+
+    DOCX/PDF become ``<stem>.redacted.txt`` (``note`` says the layout
+    is not kept); text-likes keep their format; images return the
+    stored box-filled PNG. The copy always scans CLEAN. 404 for an
+    unknown scan id, 409 when there is nothing to redact.
+    """
+    _refuse_hosted_pairing()
+    try:
+        result = fileguard.build_redacted_copy((body.scan_id or "").strip())
+    except fileguard.UnknownScan as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "shadowfenced_ext_unknown_scan",
+                "type": "shadowfenced_ext_unknown_scan",
+                "message": str(exc),
+            },
+        ) from exc
+    except fileguard.RedactRefused as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "shadowfenced_ext_no_redaction",
+                "type": "shadowfenced_ext_no_redaction",
+                "message": str(exc),
+                "decision": exc.decision,
+            },
+        ) from exc
+    log.info("ext_api redact-file: chars=%d", result.get("chars", 0))
+    return result
+
+
+@router.post("/deep-check")
+def ext_deep_check_start(
+    body: ScanIdBody, _guard: None = Depends(ext_guard)
+) -> dict[str, Any]:
+    """Start an optional Glimmer deep check over one scan's text.
+
+    Runs in the background (poll the status route); adds findings
+    only and can never clear a code finding. 404 for an unknown scan
+    id, 409 when the scan holds no readable text.
+    """
+    _refuse_hosted_pairing()
+    try:
+        return fileguard.start_deep_check((body.scan_id or "").strip())
+    except fileguard.UnknownScan as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "shadowfenced_ext_unknown_scan",
+                "type": "shadowfenced_ext_unknown_scan",
+                "message": str(exc),
+            },
+        ) from exc
+    except fileguard.FileguardError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "shadowfenced_ext_no_deep_check",
+                "type": "shadowfenced_ext_no_deep_check",
+                "message": str(exc),
+                "decision": exc.decision,
+            },
+        ) from exc
+
+
+@router.get("/deep-check/{check_id}")
+def ext_deep_check_status(
+    check_id: str, _guard: None = Depends(ext_guard)
+) -> dict[str, Any]:
+    """Poll one deep-check job (status, progress, extra findings)."""
+    _refuse_hosted_pairing()
+    payload = fileguard.get_deep_check((check_id or "").strip())
+    if payload is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "shadowfenced_ext_unknown_check",
+                "type": "shadowfenced_ext_unknown_check",
+                "message": "unknown or expired check id",
+            },
+        )
+    return payload
 
 
 def mount_ext_api(app: Any) -> None:

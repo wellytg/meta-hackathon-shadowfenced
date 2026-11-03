@@ -32,6 +32,7 @@ PLACEHOLDER_DESCRIPTIONS = {
     "SECRET": "secret",
     "PII_EMAIL": "email address",
     "PII_PHONE": "phone number",
+    "PII_CARD": "card number",
     "PII_ACCOUNT": "account number",
     "PII_ROUTING": "routing number",
     "PII_IBAN": "IBAN",
@@ -1248,6 +1249,11 @@ def _apply_person_search(
             text, decision, conversation, current, result, trace_out,
         )
         if downgraded is not None:
+            from .judge import contains_classifier_injection
+
+            if contains_classifier_injection(text):
+                decision.reasons.append("text aimed at the safety check")
+                return decision
             return downgraded
         return decision
     evidence: dict[str, Any] = dict(decision.evidence or {})

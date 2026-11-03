@@ -11,7 +11,9 @@ verified in code (Tier 3):
   (``redacted_sent``); unconfirmed -> ``needs_human`` with evidence
   showing Glimmer's class, confidence and span;
 - a Glimmer benign whole-message judgement with confidence >= 0.8
-  and sensitivity < 0.3 releases (send with Tier 1 redactions only);
+  and sensitivity < 0.3 releases (send with Tier 1 redactions only),
+  unless the message holds instruction-like text aimed at the
+  classifier, which stays for a human instead;
 - judge None -> ``needs_human``;
 - ambiguous Tier 1 spans keep the per-span flow: confirmed spans
   redact and auto-send, benign-confident spans clear, anything else
@@ -398,14 +400,23 @@ def _review_message_item(
         )
         return
     hold.judgements.append(_judgement_dump(judgement))
-    if _benign_clear(judgement):
-        return
     cls, confidence, span_text = _judgement_summary(judgement)
     start, end = _locate(text, span_text)
     # The evidence entry carries the flagged span (or "" when there is
     # nothing to locate), never the whole message: the UI highlights
     # the flagged part in the redacted preview.
     flagged = span_text if start is not None else ""
+    if _benign_clear(judgement):
+        if judge_module.contains_classifier_injection(text):
+            suspicions.append(
+                _suspicion(
+                    flagged, judgement,
+                    "text aimed at the safety check",
+                    cp_start=start, cp_end=end,
+                )
+            )
+            return
+        return
     if cls != "benign" and span_text:
         try:
             verdict = verifier_module.verify(
@@ -556,6 +567,16 @@ def run_review(
             confirmed.append(verdict.span)
             continue
         if _benign_clear(judgement):
+            if judge_module.contains_classifier_injection(text):
+                suspicions.append(
+                    _suspicion(
+                        span_text, judgement,
+                        "text aimed at the safety check",
+                        cp_start=item["cp_start"], cp_end=item["cp_end"],
+                        cls=item.get("cls"),
+                    )
+                )
+                continue
             cleared += 1
             continue
         suspicions.append(

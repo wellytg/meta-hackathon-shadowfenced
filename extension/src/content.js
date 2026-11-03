@@ -26,7 +26,10 @@
  *   up to 45 s for the answer; a check that never answers fails
  *   closed AND visibly with a retry card. Only a network error
  *   shows the not-running card; 401/403 shows the not-paired card.
- * - File-attachment presence shows a warning badge (warning only).
+ * - File guard: change/drop/paste carrying files are intercepted in the
+ *   capture phase at window, scanned via the local app, and only
+ *   re-attached (allow-once by hash) once cleared; risky files stay
+ *   blocked with a "Blocked — not uploaded" card.
  * - Watches the AI reply area and calls /api/ext/rehydrate to restore
  *   placeholders on-screen only, with a subtle highlight. */
 
@@ -215,9 +218,19 @@
     '.sf-cbtns button{flex:1;cursor:pointer;color:#1a1a1a;background:#e8e2d2;border:2px solid #1a1a1a;' +
     'box-shadow:inset -2px -2px 0 #a39d8a,inset 2px 2px 0 #fffdf6;padding:6px 8px;font:inherit;}' +
     '.sf-cbtns button:active{box-shadow:inset 2px 2px 0 #a39d8a;}' +
+    '.sf-card[data-file="1"]{width:440px;max-width:92vw;}' +
+    '.sf-card[data-file="1"] .sf-cbtns{flex-wrap:wrap;}' +
+    '.sf-card[data-file="1"] .sf-cbtns button{flex:1 1 auto;white-space:nowrap;}' +
+    '.sf-fname{font-weight:700;margin-bottom:4px;overflow-wrap:break-word;}' +
+    '.sf-why{overflow-wrap:break-word;}' +
+    '.sf-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;}' +
+    '.sf-chip{border:2px solid #1a1a1a;background:#fffdf6;padding:2px 8px;' +
+    'font-size:12px;font-weight:700;}' +
     '.sf-badge{position:absolute;display:none;pointer-events:auto;max-width:70vw;' +
     'background:#f7e6ad;color:#1a1a1a;border:2px solid #1a1a1a;padding:4px 8px;' +
     'font:12px/1.4 "Segoe UI",system-ui,Tahoma,Verdana,sans-serif;}' +
+    '.sf-track{height:12px;margin-top:6px;background:#fffdf6;border:2px solid #1a1a1a;}' +
+    '.sf-fill{height:100%;width:0%;background:#2f6f9f;}' +
     '.sf-unprot{position:absolute;right:12px;bottom:12px;display:none;max-width:70vw;' +
     'background:#f7e6ad;color:#1a1a1a;border:2px solid #1a1a1a;padding:4px 8px;' +
     'font:12px/1.4 "Segoe UI",system-ui,Tahoma,Verdana,sans-serif;}';
@@ -243,7 +256,7 @@
     badge = document.createElement('div');
     badge.className = 'sf-badge';
     badge.setAttribute('role', 'status');
-    badge.textContent = '\u26a0 Attachment present \u2014 files are not scanned, only this warning is shown.';
+    badge.textContent = '\u26a0 Attachment present \u2014 files are checked before upload.';
     overlayShadow.appendChild(badge);
     unprot = document.createElement('div');
     unprot.className = 'sf-unprot';
@@ -425,13 +438,26 @@
     cardBar.setAttribute('data-tone', opts.tone || 'review');
     cardTitle.textContent = opts.title || 'Shadowfenced';
     card.setAttribute('aria-label', opts.title || 'Shadowfenced');
+    card.setAttribute('data-file', opts.mode === 'filecheck' ? '1' : '0');
     cardBody.innerHTML = '';
     if (opts.bodyEl) cardBody.appendChild(opts.bodyEl);
+    else if (opts.fileName) {
+      var fnameEl = document.createElement('div');
+      fnameEl.className = 'sf-fname';
+      fnameEl.textContent = opts.fileName;
+      cardBody.appendChild(fnameEl);
+      var whyEl = document.createElement('div');
+      whyEl.className = 'sf-why';
+      whyEl.textContent = opts.body || '';
+      cardBody.appendChild(whyEl);
+    }
     else cardBody.textContent = opts.body || '';
     if (Array.isArray(opts.chips) && opts.chips.length) {
       var chipsBox = document.createElement('div');
+      chipsBox.className = 'sf-chips';
       opts.chips.forEach(function (label) {
         var chip = document.createElement('span');
+        chip.className = 'sf-chip';
         chip.textContent = label;
         chipsBox.appendChild(chip);
       });
@@ -492,7 +518,7 @@
   function showHoverCard(anchorEl, span) {
     /* The send card wins over hover: never open one while a send check
      * is in flight or a send-time card is up. */
-    if (!span || cardMode === 'notice' || state.sendCardSeq !== 0 || state.sending) return;
+    if (!span || cardMode === 'notice' || cardMode === 'filecheck' || state.sendCardSeq !== 0 || state.sending) return;
     if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
     var label = span.label || 'sensitive detail';
     var text = editorText(state.editor);
@@ -1191,6 +1217,620 @@
     });
   }
 
+  /* ---------- file guard (T67): better slow than leaked ----------
+   * Intercepts every attach path — change on input[type=file], drop
+   * anywhere, paste carrying files — in the capture phase at window,
+   * before the site sees the file. A cleared file passes via
+   * allow-once (SHA-256, one use, 2 minutes; see logic.js); change
+   * events also re-dispatch automatically through the original input
+   * when DataTransfer allows it, with allow-once as fallback. */
+  var fgAllowOnce = {}; // hash -> {expires, used}
+  var fgSyncPass = {}; // name|size|mtime key -> expires ms (hash-verified repeats)
+  var FG_SYNC_PASS_MS = 10000;
+  var fgRedispatchArmed = false; // our own re-dispatch passes once
+  var fgDeepTimer = null;
+
+  function fgNow() { try { return Date.now(); } catch (e) { return 0; } }
+  function fgRemember(hash) {
+    if (!hash) return;
+    if (LOGIC && LOGIC.allowOnceRemember) {
+      try { LOGIC.allowOnceRemember(fgAllowOnce, hash, fgNow()); return; } catch (e) { /* fall through */ }
+    }
+    fgAllowOnce[String(hash).toLowerCase()] = { expires: fgNow() + 120000, used: false };
+  }
+  function fgConsume(hash) {
+    if (!hash) return false;
+    if (LOGIC && LOGIC.allowOnceConsume) {
+      try { return LOGIC.allowOnceConsume(fgAllowOnce, hash, fgNow()); } catch (e) { /* fall through */ }
+    }
+    var key = String(hash).toLowerCase();
+    var entry = fgAllowOnce[key];
+    if (!entry || entry.used || !(entry.expires > fgNow())) {
+      delete fgAllowOnce[key];
+      return false;
+    }
+    delete fgAllowOnce[key];
+    return true;
+  }
+  function fgShouldIntercept(kind, hasFiles, allowed) {
+    if (LOGIC && LOGIC.shouldInterceptFile) {
+      try { return LOGIC.shouldInterceptFile({ kind: kind, hasFiles: hasFiles, allowed: allowed }); } catch (e) { /* fall through */ }
+    }
+    if (kind === 'dragover') return false;
+    if (kind !== 'change' && kind !== 'drop' && kind !== 'paste') return false;
+    return !!(hasFiles && !allowed);
+  }
+  function fgScanCardModel(input) {
+    if (LOGIC && LOGIC.fileScanCard) {
+      try { return LOGIC.fileScanCard(input); } catch (e) { /* fall through */ }
+    }
+    if (!input || !input.ok) {
+      return { tone: 'block', title: "Not checked \u2014 Shadowfenced app isn't running",
+        body: 'Nothing was uploaded.', chips: [], buttons: ['ok'] };
+    }
+    if (input.decision === 'CLEAN') {
+      return { tone: 'allow', title: '\u2713 Checked \u00b7 nothing sensitive in ' + (input.fileName || 'file'),
+        body: '', chips: [], buttons: ['attach-now'] };
+    }
+    if (input.decision === 'UNSCANNABLE') {
+      return { tone: 'block', title: "Blocked \u2014 couldn't check this file",
+        body: input.why || '', chips: [], buttons: ['upload-unchecked', 'cancel'] };
+    }
+    return { tone: 'block', title: 'Blocked \u2014 not uploaded',
+      body: input.why || '', chips: [], buttons: ['redacted-copy', 'cancel'] };
+  }
+  function fgConfirmModel(kind) {
+    if (LOGIC && LOGIC.fileConfirmCard) {
+      try { return LOGIC.fileConfirmCard(kind); } catch (e) { /* fall through */ }
+    }
+    return { tone: 'block', title: 'Upload anyway?',
+      body: 'Upload it anyway?', buttons: ['confirm-upload', 'cancel'] };
+  }
+  function fgDeepMinutes(est) {
+    if (LOGIC && LOGIC.deepCheckMinutes) {
+      try { return LOGIC.deepCheckMinutes(est); } catch (e) { /* fall through */ }
+    }
+    return Math.max(1, Math.round((Number(est) || 0) / 60));
+  }
+  function fgDeepEstimate(est) {
+    if (LOGIC && LOGIC.deepCheckEstimateLabel) {
+      try { return LOGIC.deepCheckEstimateLabel(est); } catch (e) { /* fall through */ }
+    }
+    var s = Math.max(1, Math.round(Number(est) || 0));
+    if (s < 60) return 'about ' + s + ' s';
+    return 'about ' + Math.max(1, Math.round(s / 60)) + ' min';
+  }
+
+  function fgSyncKey(files) {
+    var parts = [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      parts.push((f.name || '') + '|' + (f.size || 0) + '|' + (f.lastModified || 0));
+    }
+    return parts.join(';');
+  }
+  function fgGrantSyncPass(key) { fgSyncPass[key] = fgNow() + FG_SYNC_PASS_MS; }
+  function fgTakeSyncPass(key) {
+    var exp = fgSyncPass[key];
+    if (!exp) return false;
+    delete fgSyncPass[key];
+    return exp > fgNow();
+  }
+  function fgFmtSize(bytes) {
+    var n = Number(bytes) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+  function fgBytesToB64(bytes) {
+    var bin = '', i, CH = 0x8000;
+    for (i = 0; i < bytes.length; i += CH) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+    }
+    return btoa(bin);
+  }
+  function fgB64ToBytes(b64) {
+    var bin = atob(String(b64 || '')), bytes = new Uint8Array(bin.length), i;
+    for (i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+  function fgReadFile(file) {
+    return new Promise(function (resolve, reject) {
+      try {
+        if (file.arrayBuffer) {
+          file.arrayBuffer().then(function (buf) { resolve(new Uint8Array(buf)); }, reject);
+          return;
+        }
+        var reader = new FileReader();
+        reader.onload = function () { resolve(new Uint8Array(reader.result)); };
+        reader.onerror = function () { reject(new Error('could not read file')); };
+        reader.readAsArrayBuffer(file);
+      } catch (e) { reject(e); }
+    });
+  }
+  function fgHashBytes(bytes) {
+    try {
+      if (typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.digest) {
+        return crypto.subtle.digest('SHA-256', bytes).then(function (digest) {
+          var arr = new Uint8Array(digest), hex = '', i;
+          for (i = 0; i < arr.length; i++) hex += ('0' + arr[i].toString(16)).slice(-2);
+          return hex;
+        });
+      }
+    } catch (e) { /* fall through to null */ }
+    return Promise.resolve(null); // no secure hash: sync passes only
+  }
+
+  function fgFilesFromDrop(ev) {
+    try {
+      var dt = ev.dataTransfer;
+      /* Snapshot the live FileList at once (T67b): anything that drains
+       * the drag store between interception and read must not lose the
+       * files. DataTransfer.items is never read, so .files is the only
+       * live list to copy here. */
+      if (dt && dt.files && dt.files.length) return Array.prototype.slice.call(dt.files);
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+  function fgFilesFromPaste(ev) {
+    try {
+      var cd = ev.clipboardData;
+      /* Same snapshot as drops (T67b): clipboardData.files is live. */
+      if (cd && cd.files && cd.files.length) return Array.prototype.slice.call(cd.files);
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+  function fgIsFileInput(el) {
+    return !!(el && el.tagName === 'INPUT' && String(el.type || '').toLowerCase() === 'file');
+  }
+
+  function fgShowChecking(file, extra) {
+    showCard({
+      mode: 'filecheck',
+      tone: 'review',
+      title: 'Checking file\u2026',
+      body: (file.name || 'file') + ' (' + fgFmtSize(file.size) + ')' +
+        (extra > 0 ? ' +' + extra + ' more' : ''),
+      anchor: editorAnchor(),
+      buttons: []
+    });
+  }
+  function fgAppendNote(text) {
+    try {
+      var div = document.createElement('div');
+      div.textContent = text;
+      cardBody.appendChild(div);
+    } catch (e) { /* ignore */ }
+  }
+
+  /* One file: hash it, honour a pending allow-once pass, else scan. */
+  function fgScanOne(file) {
+    return fgReadFile(file).then(function (bytes) {
+      return fgHashBytes(bytes).then(function (hash) {
+        if (hash && fgConsume(hash)) return { file: file, hash: hash, allowed: true };
+        return sendToBg({
+          type: 'SF_SCAN_FILE',
+          name: file.name || 'upload',
+          mime: file.type || 'application/octet-stream',
+          dataBase64: fgBytesToB64(bytes)
+        }).then(function (res) {
+          return { file: file, hash: hash, verdict: res || { ok: false } };
+        });
+      });
+    }).catch(function () {
+      return { file: file, hash: null, verdict: { ok: false } };
+    });
+  }
+
+  /* Re-inject cleared files into the original input (works on the
+   * test page); the re-dispatched change passes via the armed flag. */
+  function fgRedispatch(input, files) {
+    try {
+      var dt = new DataTransfer();
+      for (var i = 0; i < files.length; i++) dt.items.add(files[i]);
+      fgRedispatchArmed = true;
+      input.files = dt.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    } catch (e) {
+      fgRedispatchArmed = false;
+      return false;
+    }
+  }
+
+  function fgCheckFiles(files, ctx) {
+    var list = [];
+    if (files) {
+      for (var i = 0; i < files.length; i++) list.push(files[i]);
+    }
+    if (!list.length) {
+      /* Fail visible (T67b): the event was already intercepted, so a
+       * silent return would swallow the user's action with no card and
+       * no upload. files is only empty when the live list drained
+       * between interception and read. */
+      var model = fgScanCardModel({ ok: false });
+      showCard({
+        mode: 'filecheck',
+        tone: model.tone,
+        title: model.title,
+        body: model.body,
+        chips: model.chips,
+        anchor: editorAnchor(),
+        buttons: fgButtonDefs(model, { ctx: ctx })
+      });
+      return;
+    }
+    fgShowChecking(list[0], list.length - 1);
+    var clean = [], bad = null, held = 0;
+    var chain = Promise.resolve();
+    list.forEach(function (file) {
+      chain = chain.then(function () {
+        if (bad) { held++; return; } // first bad file wins the card; rest stay blocked
+        return fgScanOne(file).then(function (res) {
+          if (bad) { held++; return; }
+          if (res.allowed) {
+            fgGrantSyncPass(fgSyncKey([res.file]));
+            clean.push(res);
+            return;
+          }
+          var verdict = res.verdict || { ok: false };
+          var data = verdict.data || {};
+          if (!verdict.ok || data.decision === 'BLOCK' || data.decision === 'UNSCANNABLE') {
+            bad = res;
+            return;
+          }
+          if (data.decision === 'CLEAN') {
+            if (res.hash) fgRemember(res.hash);
+            fgGrantSyncPass(fgSyncKey([res.file]));
+            clean.push(res);
+            return;
+          }
+          bad = res; // unknown decision: fail closed
+        });
+      });
+    });
+    chain.then(function () {
+      if (bad) {
+        fgShowResult(bad, { ctx: ctx, clean: clean, held: held });
+        return;
+      }
+      var names = clean.map(function (r) { return r.file.name || 'file'; }).join(', ');
+      var redispatched = false;
+      if (ctx && ctx.input && document.contains(ctx.input)) {
+        redispatched = fgRedispatch(ctx.input, clean.map(function (r) { return r.file; }));
+      }
+      fgShowClean(names || 'file', clean, ctx, redispatched);
+    });
+  }
+
+  function fgButtonDefs(model, actions) {
+    var deep = (actions && actions.data && actions.data.deep_check) || {};
+    return (model.buttons || []).map(function (id) {
+      if (id === 'attach-now') {
+        return { label: 'Attach it now', onClick: function () { fgAttachNow(actions); } };
+      }
+      if (id === 'redacted-copy') {
+        return { label: 'Make a redacted copy', keepOpen: true, onClick: function () { fgFetchRedacted(actions); } };
+      }
+      if (id === 'upload-anyway') {
+        return { label: 'Upload anyway', keepOpen: true, onClick: function () { fgShowConfirm(actions, 'upload-anyway'); } };
+      }
+      if (id === 'upload-unchecked') {
+        return { label: 'Upload anyway (not checked)', keepOpen: true, onClick: function () { fgShowConfirm(actions, 'upload-unchecked'); } };
+      }
+      if (id === 'confirm-upload') {
+        return { label: 'Upload', onClick: function () { fgOverrideUpload(actions); } };
+      }
+      if (id === 'deep-check') {
+        return { label: 'Deep check with Muse Glimmer \u2014 ' + fgDeepEstimate(deep.estimate_seconds),
+          keepOpen: true, onClick: function () { fgDeepCheck(actions); } };
+      }
+      if (id === 'cancel') return { label: 'Cancel' };
+      return { label: 'OK' };
+    });
+  }
+
+  function fgShowResult(res, extra) {
+    var verdict = res.verdict || { ok: false };
+    var data = verdict.data || {};
+    var deep = data.deep_check || {};
+    var fileName = res.file.name || 'file';
+    var model = fgScanCardModel({
+      ok: !!verdict.ok,
+      status: verdict.status,
+      decision: data.decision,
+      fileName: fileName,
+      kinds: data.kinds,
+      why: data.why,
+      has_secret: data.has_secret,
+      identity_bundle: data.identity_bundle,
+      has_financial: data.has_financial,
+      overridable: data.overridable,
+      deep_available: !!deep.available,
+      deep_estimate_s: deep.estimate_seconds
+    });
+    var whyText = data.why || model.body || '';
+    if (extra && extra.held > 0) whyText += ' (' + extra.held + ' more file(s) held.)';
+    var actions = {
+      ctx: extra.ctx, file: res.file, hash: res.hash,
+      data: data, clean: (extra && extra.clean) || []
+    };
+    showCard({
+      mode: 'filecheck',
+      tone: model.tone,
+      title: model.title,
+      fileName: (verdict.ok && (data.decision === 'BLOCK' || data.decision === 'UNSCANNABLE')) ? fileName : null,
+      body: (verdict.ok && (data.decision === 'BLOCK' || data.decision === 'UNSCANNABLE')) ? whyText : model.body,
+      chips: model.chips,
+      anchor: editorAnchor(),
+      buttons: fgButtonDefs(model, actions)
+    });
+  }
+
+  function fgShowClean(names, clean, ctx, redispatched) {
+    var deep = null; // clean cards share no scan payload; deep check needs one file's scan
+    var withScan = null;
+    for (var i = 0; i < clean.length; i++) {
+      var data = clean[i].verdict && clean[i].verdict.data;
+      if (data && data.scan_id) { withScan = { data: data, file: clean[i].file, hash: clean[i].hash }; break; }
+    }
+    if (withScan) deep = withScan.data.deep_check || {};
+    var model = fgScanCardModel({
+      ok: true, decision: 'CLEAN', fileName: names,
+      deep_available: !!(deep && deep.available),
+      deep_estimate_s: deep && deep.estimate_seconds
+    });
+    if (!withScan) model.buttons = ['attach-now']; // allow-once repeat: nothing to deep-check
+    var actions = {
+      ctx: ctx, file: withScan && withScan.file, hash: withScan && withScan.hash,
+      data: withScan && withScan.data, clean: clean, redispatched: redispatched
+    };
+    showCard({
+      mode: 'filecheck',
+      tone: model.tone,
+      title: model.title,
+      body: redispatched ? 'Attached.' : 'Attach it again \u2014 it passes straight through.',
+      anchor: editorAnchor(),
+      buttons: fgButtonDefs(model, actions)
+    });
+  }
+
+  function fgAttachNow(actions) {
+    actions = actions || {};
+    var files = (actions.clean || []).map(function (r) { return r.file; });
+    if (actions.file && files.indexOf(actions.file) === -1) files.push(actions.file);
+    if (actions.ctx && actions.ctx.input && document.contains(actions.ctx.input) && files.length) {
+      if (fgRedispatch(actions.ctx.input, files)) {
+        hideCard();
+        return;
+      }
+    }
+    files.forEach(function (f) { fgGrantSyncPass(fgSyncKey([f])); });
+    fgAppendNote('Attach the file again \u2014 it passes straight through.');
+  }
+
+  function fgShowConfirm(actions, kind) {
+    var model = fgConfirmModel(kind);
+    showCard({
+      mode: 'filecheck',
+      tone: model.tone,
+      title: model.title,
+      body: model.body,
+      anchor: editorAnchor(),
+      buttons: fgButtonDefs(model, actions)
+    });
+  }
+
+  function fgOverrideUpload(actions) {
+    actions = actions || {};
+    if (actions.hash) fgRemember(actions.hash);
+    var files = (actions.clean || []).map(function (r) { return r.file; });
+    if (actions.file) files.push(actions.file);
+    files.forEach(function (f) { fgGrantSyncPass(fgSyncKey([f])); });
+    if (actions.ctx && actions.ctx.input && document.contains(actions.ctx.input) && files.length) {
+      fgRedispatch(actions.ctx.input, files);
+    }
+    hideCard();
+  }
+
+  function fgFetchRedacted(actions) {
+    var scanId = actions && actions.data && actions.data.scan_id;
+    if (!scanId) { fgAppendNote('No redacted copy is available for this file.'); return; }
+    fgAppendNote('Preparing a redacted copy\u2026');
+    sendToBg({ type: 'SF_REDACT_FILE', scan_id: scanId }).then(function (res) {
+      if (!res || !res.ok || !res.data || !res.data.content_base64) {
+        fgAppendNote('Redacted copy unavailable.');
+        return;
+      }
+      try {
+        var bytes = fgB64ToBytes(res.data.content_base64);
+        var blob = new Blob([bytes], { type: res.data.media_type || 'application/octet-stream' });
+        var url = URL.createObjectURL(blob);
+        var anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = res.data.filename || 'redacted.txt';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+        fgAppendNote('Saved ' + anchor.download + ' \u2014 attach it instead.' +
+          (res.data.note ? ' ' + res.data.note + '.' : ''));
+      } catch (e) {
+        fgAppendNote('Redacted copy unavailable.');
+      }
+    });
+  }
+
+  function fgDeepCheck(actions) {
+    var scanId = actions && actions.data && actions.data.scan_id;
+    var base = (actions && actions.data) || {};
+    if (!scanId) { fgAppendNote('Deep check unavailable for this file.'); return; }
+    sendToBg({ type: 'SF_DEEP_START', scan_id: scanId }).then(function (res) {
+      if (!res || !res.ok || !res.data || !res.data.check_id) {
+        fgAppendNote('Deep check unavailable.');
+        return;
+      }
+      if (res.data.status === 'unavailable' || res.data.status === 'failed') {
+        fgAppendNote(res.data.error || 'Deep check unavailable.');
+        return;
+      }
+      var bodyEl = document.createElement('div');
+      var status = document.createElement('div');
+      status.textContent = 'Deep check running \u2014 the file stays blocked. 0%';
+      var track = document.createElement('div');
+      track.className = 'sf-track';
+      var bar = document.createElement('div');
+      bar.className = 'sf-fill';
+      track.appendChild(bar);
+      bodyEl.appendChild(status);
+      bodyEl.appendChild(track);
+      showCard({
+        mode: 'filecheck',
+        tone: 'review',
+        title: 'Deep check with Muse Glimmer\u2026',
+        bodyEl: bodyEl,
+        anchor: editorAnchor(),
+        buttons: [{ label: 'Cancel' }]
+      });
+      if (fgDeepTimer) clearInterval(fgDeepTimer);
+      fgDeepTimer = setInterval(function () {
+        if (!card || card.style.display === 'none') {
+          clearInterval(fgDeepTimer); // card closed: stop polling quietly
+          return;
+        }
+        sendToBg({ type: 'SF_DEEP_STATUS', check_id: res.data.check_id }).then(function (st) {
+          if (!st || !st.ok || !st.data) {
+            clearInterval(fgDeepTimer);
+            fgAppendNote('Deep check unavailable.');
+            return;
+          }
+          var job = st.data;
+          try {
+            bar.style.width = Math.round((job.progress || 0) * 100) + '%';
+            status.textContent = 'Deep check running \u2014 the file stays blocked. ' +
+              Math.round((job.progress || 0) * 100) + '%';
+          } catch (e) { /* ignore */ }
+          if (job.status === 'running') return;
+          clearInterval(fgDeepTimer);
+          fgDeepDone(actions, base, job);
+        });
+      }, 2000);
+    });
+  }
+
+  function fgDeepDone(actions, base, job) {
+    var findings = (job && job.findings) || [];
+    var known = {};
+    ((base && base.kinds) || []).forEach(function (k) { known[String(k.label).toLowerCase()] = true; });
+    var extra = findings.filter(function (f) { return !known[String(f.label).toLowerCase()]; });
+    if (job.status !== 'done') {
+      fgAppendNote((job && job.error) || 'Deep check unavailable.');
+      return;
+    }
+    if (!extra.length) {
+      fgAppendNote('Deep check found nothing more.');
+      return;
+    }
+    var chips = ((base && base.kinds) || []).map(function (k) {
+      return String(k.label) + ' \u00d7' + k.count;
+    }).concat(extra.map(function (f) {
+      return String(f.label) + ' \u00d7' + f.count;
+    }));
+    var deepFileName = (actions.file && actions.file.name) || 'file';
+    if (base.decision === 'CLEAN') {
+      // The deep check only adds: a code-clean file with model
+      // findings becomes blocked (override behind a confirm, unless
+      // the findings hold secrets or financial identifiers).
+      var deepBlocked = false;
+      try {
+        if (LOGIC && LOGIC.kindsHoldFinancial && LOGIC.kindsHoldSecret) {
+          deepBlocked = LOGIC.kindsHoldFinancial(extra) || LOGIC.kindsHoldSecret(extra);
+        } else {
+          deepBlocked = extra.some(function (f) {
+            var label = String(f.label || '').toLowerCase();
+            return label === 'account number' || label === 'secret' ||
+              label === 'password' || label === 'api key' ||
+              label === 'canary token';
+          });
+        }
+      } catch (e) { deepBlocked = true; }
+      var model = {
+        tone: 'block', title: 'Blocked \u2014 not uploaded',
+        body: 'Deep check found ' + extra.length + ' more detail(s) \u2014 still blocked.',
+        chips: chips, buttons: deepBlocked ? ['cancel'] : ['upload-anyway', 'cancel']
+      };
+      showCard({
+        mode: 'filecheck', tone: model.tone, title: model.title,
+        fileName: deepFileName,
+        body: model.body, chips: model.chips, anchor: editorAnchor(),
+        buttons: fgButtonDefs(model, actions)
+      });
+      return;
+    }
+    showCard({
+      mode: 'filecheck', tone: 'block', title: 'Blocked \u2014 not uploaded',
+      fileName: deepFileName,
+      body: (base.why || '') +
+        ' Deep check found ' + extra.length + ' more detail(s) \u2014 still blocked.',
+      chips: chips, anchor: editorAnchor(),
+      buttons: fgButtonDefs(fgScanCardModel({
+        ok: true, decision: 'BLOCK', fileName: deepFileName,
+        kinds: (base.kinds || []).concat(extra), why: base.why || '',
+        has_secret: base.has_secret,
+        identity_bundle: base.identity_bundle,
+        has_financial: base.has_financial,
+        overridable: base.overridable
+      }), actions)
+    });
+  }
+
+  function bindFileGuard() {
+    window.addEventListener('change', function (ev) {
+      if (fgRedispatchArmed) { fgRedispatchArmed = false; return; } // our own re-dispatch passes
+      var t = ev.target;
+      if (!fgIsFileInput(t)) return;
+      /* Snapshot the live FileList BEFORE clearing the input (T67b):
+       * input.value = '' empties t.files in a real browser, so an
+       * alias here would scan zero files and return silently. */
+      var files = (t.files && t.files.length) ? Array.prototype.slice.call(t.files) : null;
+      if (!state.siteOn || !files) return;
+      if (fgTakeSyncPass(fgSyncKey(files))) return; // hash-verified repeat passes untouched
+      if (!fgShouldIntercept('change', true, false)) return;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      var input = t;
+      try { input.value = ''; } catch (e) { /* the site never gets the file */ }
+      fgCheckFiles(files, { kind: 'change', input: input });
+    }, true);
+    window.addEventListener('drop', function (ev) {
+      var files = fgFilesFromDrop(ev);
+      if (!state.siteOn || !files) return;
+      if (fgTakeSyncPass(fgSyncKey(files))) return;
+      if (!fgShouldIntercept('drop', true, false)) return;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      fgCheckFiles(files, { kind: 'drop' });
+    }, true);
+    window.addEventListener('paste', function (ev) {
+      var files = fgFilesFromPaste(ev);
+      if (!state.siteOn || !files) return;
+      if (fgTakeSyncPass(fgSyncKey(files))) return;
+      if (!fgShouldIntercept('paste', true, false)) return;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      fgCheckFiles(files, { kind: 'paste' });
+    }, true);
+    window.addEventListener('dragover', function (ev) {
+      if (!state.siteOn) return;
+      try {
+        var types = (ev.dataTransfer && ev.dataTransfer.types) || [];
+        for (var i = 0; i < types.length; i++) {
+          if (types[i] === 'Files') { ev.preventDefault(); return; } // allow the drop; the drop itself is guarded
+        }
+      } catch (e) { /* ignore */ }
+    }, true);
+  }
+
   /* ---------- boot ---------- */
   function attachToEditor(editor) {
     if (editor === state.editor) return;
@@ -1238,6 +1878,7 @@
 
   bindSendInterception();
   bindCaptureGuard();
+  bindFileGuard();
   setInterval(tick, 1500);
   tick();
   window.addEventListener('resize', function () {

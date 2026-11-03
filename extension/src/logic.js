@@ -281,6 +281,178 @@ function sendFailureCard(input) {
   };
 }
 
+/* File guard (T67): better slow than leaked — a file the guard has
+ * not cleared must never reach the site.
+ *
+ * Allow-once store: a plain object mapping SHA-256 hex digests to
+ * {expires, used}. The cleared file's hash is remembered for 2
+ * minutes; the next attach/drop/paste of that exact file passes
+ * untouched exactly once, then the pass is consumed. `nowMs` is
+ * injected so Node tests control the clock. */
+var ALLOW_ONCE_TTL_MS = 120000;
+function allowOnceRemember(store, sha256, nowMs) {
+  var s = store || {};
+  var now = Number(nowMs);
+  if (!now) {
+    try { now = Date.now(); } catch (e) { now = 0; }
+  }
+  var hash = String(sha256 || '').toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(hash)) return s;
+  s[hash] = { expires: now + ALLOW_ONCE_TTL_MS, used: false };
+  return s;
+}
+function allowOnceConsume(store, sha256, nowMs) {
+  var s = store || {};
+  var now = Number(nowMs);
+  if (!now) {
+    try { now = Date.now(); } catch (e) { now = 0; }
+  }
+  var hash = String(sha256 || '').toLowerCase();
+  var entry = s[hash];
+  if (!entry || entry.used || !(entry.expires > now)) {
+    if (entry) delete s[hash];
+    return false;
+  }
+  delete s[hash]; // one use: consumed by this pass
+  return true;
+}
+
+/* Interception decision table. `o` carries {kind, hasFiles, allowed}:
+ * kind is 'change' (input[type=file]), 'drop', 'paste' or 'dragover'.
+ * change/drop/paste carrying files are intercepted unless an
+ * allow-once pass says otherwise; dragover is never scanned (the
+ * caller only preventDefaults it so the drop can fire). */
+function shouldInterceptFile(o) {
+  o = o || {};
+  if (o.kind === 'dragover') return false;
+  if (o.kind !== 'change' && o.kind !== 'drop' && o.kind !== 'paste') return false;
+  if (!o.hasFiles) return false;
+  if (o.allowed) return false;
+  return true;
+}
+
+/* Whole minutes for the deep-check button ("about N min"). */
+function deepCheckMinutes(estimateSeconds) {
+  return Math.max(1, Math.round((Number(estimateSeconds) || 0) / 60));
+}
+
+/* Server estimate label for the deep-check button ("about 15 s",
+ * "about 2 min"). Seconds below a minute, rounded minutes above. */
+function deepCheckEstimateLabel(estimateSeconds) {
+  var s = Math.max(1, Math.round(Number(estimateSeconds) || 0));
+  if (s < 60) return 'about ' + s + ' s';
+  return 'about ' + Math.max(1, Math.round(s / 60)) + ' min';
+}
+
+/* Financial kind labels that can never be overridden (lowercase). */
+var FINANCIAL_KIND_LABELS = {
+  'account number': true, 'sort code': true, 'card number': true,
+  'pii card': true, 'iban': true, 'routing number': true,
+  'swift code': true
+};
+function kindsHoldFinancial(kinds) {
+  if (!Array.isArray(kinds)) return false;
+  for (var i = 0; i < kinds.length; i++) {
+    var label = String((kinds[i] && kinds[i].label) || '').toLowerCase();
+    if (FINANCIAL_KIND_LABELS[label]) return true;
+  }
+  return false;
+}
+
+/* Secret kind labels that can never be overridden (lowercase). */
+function kindsHoldSecret(kinds) {
+  if (!Array.isArray(kinds)) return false;
+  for (var i = 0; i < kinds.length; i++) {
+    var label = String((kinds[i] && kinds[i].label) || '').toLowerCase();
+    if (label === 'secret' || label === 'canary token' ||
+        label === 'private key' || label === 'full identity bundle') {
+      return true;
+    }
+    if (label.indexOf('api key') !== -1) return true;
+  }
+  return false;
+}
+
+/* Card model for a file scan result. `input` carries {ok, status,
+ * timeout, decision, fileName, kinds, why, has_secret,
+ * identity_bundle, has_financial, overridable, deep_available,
+ * deep_estimate_s}.
+ * Buttons are drawn from 'attach-now' | 'redacted-copy' | 'cancel' |
+ * 'upload-anyway' | 'upload-unchecked' | 'deep-check' | 'ok'.
+ * Fail closed: any transport failure blocks with no override.
+ * Secrets, canaries, identity bundles and financial identifiers can
+ * never be overridden, even if the server ever claimed otherwise. */
+function fileScanCard(input) {
+  var args = input || {};
+  if (args.status === 401 || args.status === 403) {
+    return {
+      tone: 'block', title: 'Not paired',
+      body: 'Not paired \u2014 open the Shadowfenced popup and paste the pairing token. Nothing was uploaded.',
+      chips: [], buttons: ['ok']
+    };
+  }
+  if (!args.ok) {
+    return {
+      tone: 'block', title: "Not checked \u2014 Shadowfenced app isn't running",
+      body: "Shadowfenced app isn't running \u2014 the file stays blocked. Nothing was uploaded.",
+      chips: [], buttons: ['ok']
+    };
+  }
+  var name = args.fileName || 'file';
+  var kinds = Array.isArray(args.kinds) ? args.kinds : [];
+  var chips = kinds.map(function (k) {
+    return String(k.label || 'detail') + ' \u00d7' + (k.count || 1);
+  });
+  var deepBtn = args.deep_available ? ['deep-check'] : [];
+  if (args.decision === 'CLEAN') {
+    return {
+      tone: 'allow', title: '\u2713 Checked \u00b7 nothing sensitive in ' + name,
+      body: '', chips: [], buttons: ['attach-now'].concat(deepBtn)
+    };
+  }
+  if (args.decision === 'UNSCANNABLE') {
+    return {
+      tone: 'block', title: "Blocked \u2014 couldn't check this file",
+      body: (name + ': ' + (args.why || 'this file could not be checked.')) ||
+        "Blocked \u2014 couldn't check this file",
+      chips: chips, buttons: ['upload-unchecked', 'cancel']
+    };
+  }
+  // BLOCK (risky): secrets, canaries, identity bundles and
+  // financial identifiers can never be overridden; lighter personal
+  // data only may offer "Upload anyway" behind a second confirm.
+  var buttons = ['redacted-copy', 'cancel'];
+  var financial = !!args.has_financial || kindsHoldFinancial(kinds);
+  var secretKinds = kindsHoldSecret(kinds);
+  if (args.overridable && !args.has_secret && !args.identity_bundle &&
+      !financial && !secretKinds) {
+    buttons.push('upload-anyway');
+  }
+  return {
+    tone: 'block', title: 'Blocked \u2014 not uploaded',
+    body: name + (args.why ? ': ' + args.why : ''),
+    chips: chips, buttons: buttons.concat(deepBtn)
+  };
+}
+
+/* Second-confirm card before an override upload. `kind` is
+ * 'upload-anyway' (personal data the user accepts) or
+ * 'upload-unchecked' (the file could not be checked at all). */
+function fileConfirmCard(kind) {
+  if (kind === 'upload-unchecked') {
+    return {
+      tone: 'block', title: 'Upload without checking?',
+      body: 'Shadowfenced could not check this file. Upload it anyway without a check?',
+      buttons: ['confirm-upload', 'cancel']
+    };
+  }
+  return {
+    tone: 'block', title: 'Upload anyway?',
+    body: 'This file holds personal details. Upload it anyway?',
+    buttons: ['confirm-upload', 'cancel']
+  };
+}
+
 var ShadowfencedLogic = {
   FAILSAFE_MESSAGE: FAILSAFE_MESSAGE,
   NOT_PROTECTING_TEXT: NOT_PROTECTING_TEXT,
@@ -302,7 +474,17 @@ var ShadowfencedLogic = {
   protectionStatus: protectionStatus,
   siteRowTone: siteRowTone,
   buildChoicePayload: buildChoicePayload,
-  CHOICE_NAMES: CHOICE_NAMES
+  CHOICE_NAMES: CHOICE_NAMES,
+  ALLOW_ONCE_TTL_MS: ALLOW_ONCE_TTL_MS,
+  allowOnceRemember: allowOnceRemember,
+  allowOnceConsume: allowOnceConsume,
+  shouldInterceptFile: shouldInterceptFile,
+  deepCheckMinutes: deepCheckMinutes,
+  deepCheckEstimateLabel: deepCheckEstimateLabel,
+  kindsHoldFinancial: kindsHoldFinancial,
+  kindsHoldSecret: kindsHoldSecret,
+  fileScanCard: fileScanCard,
+  fileConfirmCard: fileConfirmCard
 };
 
 /* Fields-only choice payload for POST /api/ext/choice (T69).
