@@ -327,7 +327,10 @@ def test_message_review_judges_first_1000_chars(monkeypatch):
     assert suspicions == []
     body = json.loads(calls[0].content.decode("utf-8"))
     judged = body["messages"][1]["content"]
-    assert judged == long_text[: holds.MESSAGE_JUDGE_CHARS] == long_text[:1000]
+    assert judged == judge_module.quote_as_data(
+        long_text[: holds.MESSAGE_JUDGE_CHARS]
+    )
+    assert long_text[:1000] in judged
 
 
 # --- skip logic: fixed order, earlier verdicts decide ---------------------------
