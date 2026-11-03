@@ -91,6 +91,7 @@ def build_catalog(policy: Any) -> list[dict[str, Any]]:
             "related": [NOTE_KEYS],
             "detectors": [
                 "tier1.key_scan", "tier1.encoded_key_scan", "keyguard",
+                "tier1.env_scan",
             ],
         },
         {
@@ -106,6 +107,7 @@ def build_catalog(policy: Any) -> list[dict[str, Any]]:
             "related": [NOTE_GDPR, NOTE_CCPA],
             "detectors": [
                 "tier1.pii_scan", "tier1.name_scan", "tier1.csv_scan",
+                "tier1.json_scan", "tier1.env_scan",
                 "tier1.dob_scan", "tier1.address_scan", "tier1.holder_scan",
                 "tier1.short_phone_scan",
             ],
@@ -295,7 +297,8 @@ def get_catalog(policy: Any | None = None) -> list[dict[str, Any]]:
 # from ``tier1.scan`` trace steps; the short names cover layered checks.
 TIER1_STEPS = (
     "tier1.canary_scan", "tier1.key_scan", "tier1.encoded_key_scan",
-    "tier1.pii_scan", "tier1.name_scan", "tier1.csv_scan", "tier1.dob_scan",
+    "tier1.pii_scan", "tier1.name_scan", "tier1.csv_scan",
+    "tier1.json_scan", "tier1.env_scan", "tier1.dob_scan",
     "tier1.address_scan", "tier1.account_scan", "tier1.routing_scan",
     "tier1.iban_scan", "tier1.swift_scan", "tier1.holder_scan",
     "tier1.short_phone_scan", "tier1.business_scan", "tier1.custom_scan",

@@ -45,6 +45,15 @@ a token); coding agents speak OpenAI chat completions at
 `review_url`). Uploads (`/api/upload`, audio transcribed first) join the
 gated text at send time.
 
+File guard (T67): the extension intercepts every attach, drop and file
+paste in the capture phase and posts the bytes to `/api/ext/scan-file`
+(25 MB max), which answers CLEAN | BLOCK | UNSCANNABLE with
+label/count kinds — better slow than leaked, so anything uncleared
+stays blocked. Blocked files offer a redacted copy
+(`/api/ext/redact-file`, always scans CLEAN) and an optional Glimmer
+deep check (`/api/ext/deep-check`, adds findings only, never clears).
+The console upload flow reuses the same verdict store (`/api/scans/…`).
+
 ## 2. Decision pipeline
 
 Tier 1 code detectors run first and are the only thing that can prove a
@@ -121,6 +130,7 @@ flowchart TD
     subgraph Entry["Entry points"]
         App["app.py: FastAPI proxy<br/>scan, gate, forward, re-hydrate"]
         ExtAPI["ext_api.py: loopback API<br/>for the browser extension"]
+        FileGuard["fileguard.py: file scans<br/>redacted copies, deep check"]
         Rules["rules.py: custom org rules<br/>list / add / remove"]
         Health["health.py: component checks<br/>for the status panel"]
     end
@@ -157,6 +167,8 @@ flowchart TD
     App --> Upstream
     App --> Health
     ExtAPI --> Engine
+    ExtAPI --> FileGuard
+    FileGuard --> Engine
     Engine --> Tier1
     Engine --> Reid
     Engine --> Redact

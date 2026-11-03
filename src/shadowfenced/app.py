@@ -9,6 +9,7 @@ same request/response code as an async API. Tests inject an httpx
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -281,6 +282,37 @@ def _doc_fields(text: str) -> dict[str, Any]:
                 "doc_warning": info.get("warning")}
     except Exception:
         return {"doc_type": None, "doc_warning": None}
+
+
+def _fileguard_card(name: str, kind: str, text: str) -> dict[str, Any]:
+    """File-guard card fields for one upload's text (T67, never raises).
+
+    Reuses :mod:`fileguard`: the same verdict store backs the
+    ``/api/scans/...`` redact and deep-check routes for console
+    uploads and extension scans alike.
+    """
+    try:
+        from . import fileguard as fileguard_module
+
+        fields, _decision, code_ms = fileguard_module.summarize_text(
+            text, get_policy(), get_registry()
+        )
+        return fileguard_module.store_scan(name, kind, text, fields, code_ms)
+    except Exception:
+        return {
+            "decision": "UNSCANNABLE",
+            "file_sha256": "",
+            "kinds": [],
+            "why": "Couldn't check this file. Nothing was uploaded.",
+            "has_secret": False,
+            "identity_bundle": False,
+            "overridable": False,
+            "pages": 0,
+            "chars": len(text),
+            "code_ms": 0.0,
+            "deep_check": {"available": False, "estimate_seconds": 0.0},
+            "scan_id": "",
+        }
 
 
 def span_to_dict(span: Span) -> dict[str, Any]:
@@ -1794,6 +1826,7 @@ def _handle_audio_upload(
         "reid": audio_reid,
         "summary": summary,
         "summary_text": "Transcribed by Muse Voice · " + summary_text,
+        "fileguard": _fileguard_card(filename, "audio", text),
         **_doc_fields(text),
     }
 
@@ -2010,6 +2043,7 @@ def handle_upload(filename: str, data: bytes, *, transport: Any | None = None, s
         "status": status,
         "spans": [span_to_dict(s) for s in spans],
         "reid": upload_reid,
+        "fileguard": _fileguard_card(filename, kind, text),
         "summary": summary,
         "summary_text": summary_text,
         **_doc_fields(text),
@@ -2071,6 +2105,102 @@ def upload_image(file_id: str) -> Response:
             },
         )
     return Response(content=record.image_png, media_type="image/png")
+
+
+@app.get("/api/scans/{scan_id}/redacted")
+def scan_redacted(scan_id: str) -> Response:
+    """Download the redacted copy of one blocked scan (T67).
+
+    Shares the file-guard verdict store with the extension flow:
+    ``scan_id`` comes from the upload's ``fileguard`` card or from
+    ``POST /api/ext/scan-file``. 404 for an unknown id, 409 when there
+    is nothing to redact.
+    """
+    import base64 as _base64
+
+    from . import fileguard as fileguard_module
+
+    try:
+        result = fileguard_module.build_redacted_copy((scan_id or "").strip())
+    except fileguard_module.UnknownScan as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "shadowfenced_unknown_scan",
+                "type": "shadowfenced_unknown_scan",
+                "message": str(exc),
+            },
+        ) from exc
+    except fileguard_module.RedactRefused as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "shadowfenced_no_redaction",
+                "type": "shadowfenced_no_redaction",
+                "message": str(exc),
+                "decision": exc.decision,
+            },
+        ) from exc
+    raw = _base64.b64decode(result["content_base64"])
+    filename = re.sub(r'[\r\n"]', "_", str(result["filename"]))[:120]
+    return Response(
+        content=raw,
+        media_type=str(result["media_type"]),
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Redacted-Filename": filename,
+            "X-Redacted-Note": str(result.get("note") or ""),
+        },
+    )
+
+
+@app.post("/api/scans/{scan_id}/deep-check")
+def scan_deep_check_start(scan_id: str) -> dict[str, Any]:
+    """Start a Glimmer deep check over one scan's text (T67, background).
+
+    Adds findings only; poll ``GET /api/scans/deep-check/<id>``.
+    """
+    from . import fileguard as fileguard_module
+
+    try:
+        return fileguard_module.start_deep_check((scan_id or "").strip())
+    except fileguard_module.UnknownScan as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "shadowfenced_unknown_scan",
+                "type": "shadowfenced_unknown_scan",
+                "message": str(exc),
+            },
+        ) from exc
+    except fileguard_module.FileguardError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "shadowfenced_no_deep_check",
+                "type": "shadowfenced_no_deep_check",
+                "message": str(exc),
+                "decision": exc.decision,
+            },
+        ) from exc
+
+
+@app.get("/api/scans/deep-check/{check_id}")
+def scan_deep_check_status(check_id: str) -> dict[str, Any]:
+    """Poll one deep-check job (status, progress, extra findings)."""
+    from . import fileguard as fileguard_module
+
+    payload = fileguard_module.get_deep_check((check_id or "").strip())
+    if payload is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "shadowfenced_unknown_check",
+                "type": "shadowfenced_unknown_check",
+                "message": "unknown or expired check id",
+            },
+        )
+    return payload
 
 
 @app.post("/api/upload")
