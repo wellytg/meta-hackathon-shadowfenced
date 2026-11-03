@@ -37,10 +37,7 @@ user_can_keep:
   beacon: true
 
 allowlist:
-  email_domains:
-    - example.com
-    - example.org
-    - example.net
+  email_domains: []
   shapes:
     - git-sha
     - uuid

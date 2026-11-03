@@ -256,8 +256,9 @@
 
     ## Configuration
     Set your contact address in config.toml, e.g. `admin_email = "jane.doe@example.com"`. Notifications will be sent from `noreply@example.org`. For testing, you can point the webhook at https://hooks.example.net/test.
-  expect: ALLOW
-  acceptable: [ALLOW]
+  # T65: example.* domains no longer allowlisted
+  expect: REDACT
+  acceptable: [REDACT]
   classes: []
   sensitive_values: []
 

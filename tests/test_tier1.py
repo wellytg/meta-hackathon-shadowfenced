@@ -19,7 +19,7 @@ from shadowfenced.canary import (
     encodings,
     make_canary,
 )
-from shadowfenced.policy import load_policy
+from shadowfenced.policy import Allowlist, load_policy
 from shadowfenced.spans import (
     cp_to_utf16,
     make_span_id,
@@ -195,14 +195,29 @@ def test_tier1_under_20ms_on_4kb(policy, registry):
 # --- T3: PII -----------------------------------------------------------------
 
 
-def test_email_proven_and_allowlist_ignored(policy, registry):
+def test_email_proven(policy, registry):
     spans = tier1.scan("mail ada@corvanelabs.com now", policy, registry)
     hit = [s for s in spans if s.subclass == "email"]
     assert len(hit) == 1 and hit[0].status == "proven"
     assert hit[0].suggested_action == "redact" and hit[0].can_keep is True
+
+
+def test_example_domains_flagged_like_any_domain(policy, registry):
     for domain in ("example.com", "example.org", "example.net"):
-        clean = tier1.scan(f"mail ada@{domain} now", policy, registry)
-        assert clean == [], f"allowlisted {domain} was flagged"
+        spans = tier1.scan(f"mail ada@{domain} now", policy, registry)
+        hit = [s for s in spans if s.subclass == "email"]
+        assert len(hit) == 1 and hit[0].status == "proven", domain
+
+
+def test_email_allowlist_still_skips_a_configured_domain(policy, registry):
+    scoped = policy.model_copy(
+        update={"allowlist": Allowlist(
+            email_domains=["internal.test"],
+            shapes=list(policy.allowlist.shapes))})
+    assert tier1.scan("mail ada@internal.test now", scoped, registry) == []
+    assert tier1.scan("mail ada@sub.internal.test now", scoped, registry) == []
+    spans = tier1.scan("mail ada@corvanelabs.com now", scoped, registry)
+    assert any(s.subclass == "email" for s in spans)
 
 
 def test_phone_proven(policy, registry):
@@ -334,6 +349,6 @@ def test_merge_canary_wins_over_password_assignment(policy, registry):
 def test_benign_prose_clean(policy, registry):
     text = (
         "We saw a heron by the lake near the tallow candles stall. "
-        "Email ada@example.com for hotel bookings."
+        "Hotel bookings open next week."
     )
     assert tier1.scan(text, policy, registry) == []
