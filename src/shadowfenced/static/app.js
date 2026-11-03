@@ -612,6 +612,194 @@
     updateEmptyHint();
   }
 
+  /* T67 file guard: blocked uploads get the same outcomes as the
+     extension flow — a "Blocked" card with label-only chips, a
+     "Make a redacted copy" download, and an optional Glimmer
+     deep check with a progress bar. */
+  function fgMinutes(estimateSeconds) {
+    return Math.max(1, Math.round((Number(estimateSeconds) || 0) / 60));
+  }
+
+  function fgEstimateLabel(estimateSeconds) {
+    var s = Math.max(1, Math.round(Number(estimateSeconds) || 0));
+    if (s < 60) return "about " + s + " s";
+    return "about " + Math.max(1, Math.round(s / 60)) + " min";
+  }
+
+  function fgChip(label, count) {
+    var chip = document.createElement("span");
+    chip.className = "fg-chip";
+    chip.textContent = label + " \u00d7" + count;
+    return chip;
+  }
+
+  function fgNote(card, text) {
+    var note = card.querySelector(".fg-note");
+    if (!note) {
+      note = document.createElement("p");
+      note.className = "fg-note";
+      card.appendChild(note);
+    }
+    note.hidden = !text;
+    note.textContent = text || "";
+    return note;
+  }
+
+  function fgDownloadRedacted(card, scanId) {
+    fgNote(card, "Preparing a redacted copy\u2026");
+    fetch("/api/scans/" + encodeURIComponent(scanId) + "/redacted")
+      .then(function (resp) {
+        if (!resp.ok) {
+          return resp.json().then(function (body) {
+            var msg = (body && body.detail && body.detail.message) ||
+              "redacted copy unavailable";
+            throw new Error(msg);
+          });
+        }
+        var filename = resp.headers.get("X-Redacted-Filename") || "redacted.txt";
+        var layoutNote = resp.headers.get("X-Redacted-Note") || "";
+        return resp.blob().then(function (blob) {
+          return { blob: blob, filename: filename, layoutNote: layoutNote };
+        });
+      })
+      .then(function (dl) {
+        var url = URL.createObjectURL(dl.blob);
+        var anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = dl.filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+        fgNote(card, "Saved " + dl.filename + " \u2014 attach it instead." +
+          (dl.layoutNote ? " " + dl.layoutNote + "." : ""));
+      })
+      .catch(function (err) {
+        fgNote(card, String((err && err.message) || err));
+      });
+  }
+
+  function fgPollDeepCheck(card, chipsBox, checkId, knownLabels) {
+    var bar = card.querySelector(".fg-bar");
+    var progress = card.querySelector(".fg-progress");
+    if (progress) progress.hidden = false;
+    var timer = setInterval(function () {
+      fetch("/api/scans/deep-check/" + encodeURIComponent(checkId))
+        .then(function (resp) { return resp.json(); })
+        .then(function (job) {
+          if (bar) bar.style.width = Math.round((job.progress || 0) * 100) + "%";
+          if (job.status === "running") return;
+          clearInterval(timer);
+          if (progress) progress.hidden = true;
+          var findings = job.findings || [];
+          var extra = findings.filter(function (f) {
+            return knownLabels.indexOf(String(f.label).toLowerCase()) === -1;
+          });
+          extra.forEach(function (f) {
+            chipsBox.appendChild(fgChip(String(f.label), f.count));
+            knownLabels.push(String(f.label).toLowerCase());
+          });
+          if (job.status === "done") {
+            fgNote(card, extra.length ?
+              "Deep check found " + extra.length + " more detail" +
+              (extra.length === 1 ? "" : "s") + " \u2014 still blocked." :
+              "Deep check found nothing more.");
+          } else {
+            fgNote(card, job.error || "Deep check unavailable.");
+          }
+        })
+        .catch(function () {
+          clearInterval(timer);
+          if (progress) progress.hidden = true;
+          fgNote(card, "Deep check unavailable.");
+        });
+    }, 2000);
+  }
+
+  function fgStartDeepCheck(card, chipsBox, scanId, button) {
+    button.disabled = true;
+    fgNote(card, "Deep check running \u2014 the file stays blocked.");
+    fetch("/api/scans/" + encodeURIComponent(scanId) + "/deep-check",
+      { method: "POST" })
+      .then(function (resp) { return resp.json(); })
+      .then(function (job) {
+        if (!job || !job.check_id) throw new Error("Deep check unavailable.");
+        if (job.status === "unavailable" || job.status === "failed") {
+          fgNote(card, job.error || "Deep check unavailable.");
+          button.disabled = false;
+          return;
+        }
+        var known = [];
+        Array.prototype.forEach.call(chipsBox.children, function (chip) {
+          known.push(chip.textContent.split(" \u00d7")[0].toLowerCase());
+        });
+        fgPollDeepCheck(card, chipsBox, job.check_id, known);
+      })
+      .catch(function (err) {
+        button.disabled = false;
+        fgNote(card, String((err && err.message) || err));
+      });
+  }
+
+  function showFileGuardCard(body) {
+    var fg = body && body.fileguard;
+    if (!fg || (fg.decision !== "BLOCK" && fg.decision !== "UNSCANNABLE")) return;
+    var card = document.createElement("div");
+    card.className = "banner";
+    card.setAttribute("data-testid", "banner");
+    card.setAttribute("data-decision", "BLOCK");
+    card.setAttribute("data-fg", "1");
+    var title = document.createElement("strong");
+    title.textContent = (fg.decision === "BLOCK" ? "Blocked \u2014 not uploaded: " :
+      "Blocked \u2014 couldn't check this file: ") + (body.name || "file");
+    card.appendChild(title);
+    if (fg.why) {
+      var why = document.createElement("p");
+      why.textContent = fg.why;
+      card.appendChild(why);
+    }
+    var chipsBox = document.createElement("div");
+    chipsBox.className = "fg-chips";
+    (fg.kinds || []).forEach(function (k) {
+      chipsBox.appendChild(fgChip(String(k.label), k.count));
+    });
+    if (chipsBox.children.length) card.appendChild(chipsBox);
+    if (fg.decision === "BLOCK" && fg.scan_id) {
+      var row = document.createElement("div");
+      row.className = "consent-row";
+      var redactBtn = document.createElement("button");
+      redactBtn.type = "button";
+      redactBtn.className = "consent-btn";
+      redactBtn.textContent = "Make a redacted copy";
+      redactBtn.addEventListener("click", function () {
+        fgDownloadRedacted(card, fg.scan_id);
+      });
+      row.appendChild(redactBtn);
+      var deep = fg.deep_check || {};
+      if (deep.available) {
+        var deepBtn = document.createElement("button");
+        deepBtn.type = "button";
+        deepBtn.className = "consent-btn";
+        deepBtn.textContent = "Deep check with Muse Glimmer \u2014 " +
+          fgEstimateLabel(deep.estimate_seconds);
+        deepBtn.addEventListener("click", function () {
+          fgStartDeepCheck(card, chipsBox, fg.scan_id, deepBtn);
+        });
+        row.appendChild(deepBtn);
+      }
+      card.appendChild(row);
+      var progress = document.createElement("div");
+      progress.className = "fg-progress";
+      progress.hidden = true;
+      var bar = document.createElement("div");
+      bar.className = "fg-bar";
+      progress.appendChild(bar);
+      card.appendChild(progress);
+    }
+    thread.appendChild(card);
+    updateEmptyHint();
+  }
+
   function renderChips() {
     if (!fileChips) return;
     fileChips.innerHTML = "";
@@ -721,6 +909,7 @@
                 delete pendingOriginals[okey];
               }
               renderChips();
+              showFileGuardCard(res.body);
             }
           } else {
             var err = document.createElement("div");

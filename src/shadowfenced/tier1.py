@@ -10,6 +10,7 @@ no real-format literal ever appears in this file.
 from __future__ import annotations
 
 import base64
+import csv
 import math
 import re
 import time
@@ -18,7 +19,7 @@ from collections import Counter
 from typing import Any
 
 from .canary import PREFIX as CANARY_PREFIX
-from .redact import base_label
+from .redact import PLACEHOLDER_RE, base_label
 from .canary import CanaryRegistry, encodings
 from .contract import SUBCLASS as CONTRACT_SUBCLASS
 from .contract import scan_contract_clauses
@@ -29,7 +30,7 @@ from .spans import Span, merge_overlaps, span_from_cp_range
 _ANY_CANARY_RE = re.compile(re.escape(CANARY_PREFIX) + r"[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*")
 
 _PASSWORD_RE = re.compile(
-    r"(?i)\b(password|passwd|secret|token)\s*[:=]\s*\S+"
+    r"(?i)(?<![A-Za-z0-9])(password|passwd|secret|token)\s*[:=]\s*\S+"
 )
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _SSN_RE = re.compile(r"\b\d{3}[- ]\d{2}[- ]\d{4}\b")
@@ -78,6 +79,44 @@ _CSV_COLUMNS = {
     "address": "address",
     "ssn": "ssn",
 }
+
+# JSON key / env var (normalised: lower, spaces/underscores/dots/dashes
+# removed) -> PII type. Extends the CSV map with financial identifiers so
+# '{"account": "10001111"}' and 'SORT_CODE=20-11-22' flag their values.
+_KEY_COLUMNS = {
+    "name": "name",
+    "firstname": "name",
+    "lastname": "name",
+    "fullname": "name",
+    "email": "email",
+    "phone": "phone",
+    "mobile": "phone",
+    "dob": "dob",
+    "birth": "dob",
+    "address": "address",
+    "ssn": "ssn",
+    "account": "account",
+    "accountnumber": "account",
+    "accountno": "account",
+    "acct": "account",
+    "sortcode": "sort_code",
+    "sort": "sort_code",
+    "card": "card",
+    "cardnumber": "card",
+    "iban": "iban",
+    "routing": "routing",
+    "routingnumber": "routing",
+    "aba": "routing",
+    "rtn": "routing",
+    "swift": "swift",
+    "bic": "swift",
+}
+
+# Env-var tokens (split on _ . -) that mark the whole value as a secret.
+_SECRET_KEY_TOKENS = frozenset({
+    "password", "passwd", "pwd", "pass", "secret", "token",
+    "key", "keys", "creds", "credentials",
+})
 
 _DOB_CUE_RE = re.compile(
     r"(?i)\b(d\.?\s*o\.?\s*b\.?|born|birth|fecha\s+de\s+nacimiento)\b"
@@ -435,6 +474,9 @@ def _password_value_placeholder(match_text: str) -> bool:
     value = found.group(1).strip().strip("\"'").rstrip(",.;!?")
     if not value:
         return True
+    if PLACEHOLDER_RE.search(value) is not None:
+        # Already redacted ("PASSWORD=[SECRET_1]"): never re-flag.
+        return True
     return _PASSWORD_PLACEHOLDER_RE.search(value) is not None
 
 
@@ -451,9 +493,26 @@ def _scan_provider_keys(text: str, policy: Policy) -> list[Span]:
     for match in _PASSWORD_RE.finditer(text):
         if _password_value_placeholder(match.group()):
             continue
+        # Cover only the value, keep the label ("DB_PASSWORD=[SECRET_1]").
+        # Quotes stay outside the span so they survive redaction.
+        value_match = re.search(r"[:=]\s*(\S+)", match.group())
+        if value_match is None:
+            continue
+        raw_value = value_match.group(1)
+        value_start = match.start() + value_match.start(1)
+        value_end = match.start() + value_match.end(1)
+        if (
+            len(raw_value) >= 2
+            and raw_value[0] in "\"'"
+            and raw_value[-1] == raw_value[0]
+        ):
+            value_start += 1
+            value_end -= 1
+        if value_start >= value_end:
+            continue
         spans.append(
             _emit(
-                text, match.start(), match.end(), "secret",
+                text, value_start, value_end, "secret",
                 "password_assignment", "proven",
                 "Looks like a password or secret assigned inline.",
                 "password-like label followed by : or = and a value",
@@ -599,30 +658,71 @@ def _scan_entropy(text: str, policy: Policy) -> list[Span]:
     spans: list[Span] = []
     for match in re.finditer(r"\S{20,}", text):
         raw = match.group()
-        token = raw.strip(".,;:!?\"'()[]{}<>=")
-        start = match.start() + (match.group().find(token) if token else 0)
-        if len(token) < 20 or "@" in token:
-            continue
-        if _allowlisted_token(policy, token):
-            continue
-        if _decodes_to_file(token):
-            continue
-        if shannon_entropy(token) > 4.0:
-            spans.append(
-                _emit(
-                    text, start, start + len(token), "secret", "entropy",
-                    "ambiguous", "High-entropy token; might be a secret.",
-                    f"length {len(token)}, Shannon entropy "
-                    f"{shannon_entropy(token):.2f} bits/char",
-                    policy, 0.55,
+        # Split on structural punctuation so CSV commas, key=value
+        # assignments, JSON syntax etc never join unrelated values into
+        # one "token" that swallows delimiters and keys. Each part is
+        # judged on its own; offsets track back to the original text.
+        for part in re.finditer(r"[^,;=:()\"'{}\[\]<>|]+", raw):
+            seg = part.group()
+            if PLACEHOLDER_RE.search(seg) is not None:
+                # Already-redacted placeholders are never secrets:
+                # "[PII_NAME_1],[PII_EMAIL_1],..." (one run joined by
+                # CSV commas) is redacted output, not a secret.
+                continue
+            token = seg.strip(".,;:!?\"'()[]{}<>=")
+            if not token:
+                continue
+            lead = len(seg) - len(seg.lstrip(".,;:!?\"'()[]{}<>="))
+            start = match.start() + part.start() + lead
+            if len(token) < 20 or "@" in token:
+                continue
+            if _allowlisted_token(policy, token):
+                continue
+            if _decodes_to_file(token):
+                continue
+            if shannon_entropy(token) > 4.0:
+                spans.append(
+                    _emit(
+                        text, start, start + len(token), "secret", "entropy",
+                        "ambiguous", "High-entropy token; might be a secret.",
+                        f"length {len(token)}, Shannon entropy "
+                        f"{shannon_entropy(token):.2f} bits/char",
+                        policy, 0.55,
+                    )
                 )
-            )
     return spans
 
 
+def _csv_delimiter(header_line: str) -> str:
+    """Delimiter for a header line: tab when tab-separated, else comma."""
+    return "\t" if "\t" in header_line else ","
+
+
+def _csv_parse_row(line: str, delimiter: str) -> list[str]:
+    """Parse one CSV/TSV line with the csv module (quotes honoured)."""
+    try:
+        return next(
+            csv.reader(
+                [line], delimiter=delimiter, quotechar='"',
+                doublequote=True, skipinitialspace=True,
+            )
+        )
+    except Exception:
+        return line.split(delimiter)
+
+
 def _csv_header_map(header_line: str) -> list[str | None] | None:
-    """Map a CSV header line to PII types, or None when not a header."""
-    cells = [cell.strip().strip("\"'") for cell in header_line.split(",")]
+    """Map a CSV/TSV header line to PII types, or None when not a header."""
+    stripped = header_line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    delimiter = _csv_delimiter(header_line)
+    if delimiter not in header_line:
+        return None
+    cells = [
+        cell.strip().strip("\"'")
+        for cell in _csv_parse_row(header_line, delimiter)
+    ]
     if len(cells) < 2:
         return None
     normalised = [re.sub(r"[\s_]+", "", cell.lower()) for cell in cells]
@@ -632,7 +732,7 @@ def _csv_header_map(header_line: str) -> list[str | None] | None:
 
 
 def _csv_tables(text: str) -> list[dict]:
-    """Find CSV tables: header row plus contiguous comma data rows."""
+    """Find CSV/TSV tables: header row plus contiguous data rows."""
     lines = text.split("\n")
     offsets: list[int] = []
     cursor = 0
@@ -646,17 +746,21 @@ def _csv_tables(text: str) -> list[dict]:
         if colmap is None:
             index += 1
             continue
+        delimiter = _csv_delimiter(lines[index])
         rows: list[int] = []
         next_index = index + 1
-        while (
-            next_index < len(lines)
-            and lines[next_index].strip()
-            and "," in lines[next_index]
-        ):
+        while next_index < len(lines):
+            stripped = lines[next_index].strip()
+            if not stripped or stripped.startswith("#"):
+                break
+            if delimiter not in lines[next_index]:
+                break
             rows.append(next_index)
             next_index += 1
         if rows:
-            tables.append({"colmap": colmap, "rows": rows})
+            tables.append(
+                {"colmap": colmap, "rows": rows, "delimiter": delimiter}
+            )
         index = next_index
     return [
         {**table, "lines": lines, "offsets": offsets} for table in tables
@@ -667,35 +771,47 @@ def _csv_cell_span(
     table: dict, row: int, col: int, text: str, policy: Policy,
     subtype: str,
 ) -> Span | None:
-    """Build a proven PII span for one CSV cell value."""
-    cells = table["lines"][row].split(",")
-    if col >= len(cells):
+    """Build a proven PII span for one CSV/TSV cell value."""
+    delimiter = table.get("delimiter", ",")
+    line = table["lines"][row]
+    try:
+        values = _csv_parse_row(line, delimiter)
+    except Exception:
         return None
-    cell = cells[col]
-    value = cell.strip().strip("\"'")
+    if col >= len(values):
+        return None
+    value = values[col].strip().strip("\"'")
     if not value:
         return None
+    if PLACEHOLDER_RE.search(value) is not None:
+        # Already redacted ("[PII_NAME_1]"): never re-flag.
+        return None
+    # Locate the value in the original line, searching cells in order so
+    # quoted delimiters ('"Okafor, Amara"') resolve to the right column.
     line_start = table["offsets"][row]
-    cursor = 0
-    for pos, raw in enumerate(cells):
-        if pos == col:
-            break
-        cursor += len(raw) + 1
-    stripped_lead = len(cell) - len(cell.lstrip())
-    stripped_trail = len(cell) - len(cell.rstrip())
-    quote_lead = 1 if cell.strip()[:1] in "\"'" else 0
-    quote_trail = 1 if cell.strip()[-1:] in "\"'" and len(value) else 0
-    cp_start = line_start + cursor + stripped_lead + quote_lead
-    cp_end = (
-        line_start + cursor + len(cell) - stripped_trail - quote_trail
-    )
-    if cp_start >= cp_end or text[cp_start:cp_end] != value:
-        # Fall back to locating the value inside the line.
-        found = table["lines"][row].find(value)
+    search_from = 0
+    cp_start = -1
+    cp_end = -1
+    for pos in range(col + 1):
+        cell_value = (
+            values[pos].strip().strip("\"'")
+            if pos < len(values) else ""
+        )
+        if not cell_value:
+            delim_at = line.find(delimiter, search_from)
+            search_from = delim_at + 1 if delim_at >= 0 else len(line)
+            continue
+        found = line.find(cell_value, search_from)
         if found < 0:
             return None
-        cp_start = line_start + found
-        cp_end = cp_start + len(value)
+        if pos == col:
+            cp_start = line_start + found
+            cp_end = cp_start + len(cell_value)
+        search_from = found + len(cell_value)
+    if cp_start < 0 or cp_end <= cp_start:
+        return None
+    if text[cp_start:cp_end] != value:
+        return None
     return _emit(
         text, cp_start, cp_end, "pii", subtype, "proven",
         "Looks like personal data in a labelled CSV column.",
@@ -715,6 +831,156 @@ def _scan_csv_pii(text: str, policy: Policy) -> list[Span]:
                 if span is not None:
                     spans.append(span)
     return spans
+
+
+def _key_subtype(key: str) -> str | None:
+    """PII subtype for a JSON key / env var, or None when not sensitive."""
+    normalised = re.sub(r"[\s_.-]+", "", key.lower())
+    return _KEY_COLUMNS.get(normalised)
+
+
+def _is_secret_key(key: str) -> bool:
+    """True when an env var name marks its value as a secret.
+
+    Token-based (split on _ . -) so COMPASS never matches PASS.
+    """
+    tokens = re.split(r"[_.-]+", key.lower())
+    return any(token in _SECRET_KEY_TOKENS for token in tokens if token)
+
+
+def _key_value_plausible(subtype: str, value: str) -> bool:
+    """Light shape check so '{"name": "test"}' is not flagged as PII."""
+    if not value or not value.strip():
+        return False
+    if subtype == "name":
+        words = value.split()
+        caps = [w for w in words if w[:1].isupper()]
+        return len(words) >= 2 and len(caps) >= 2
+    if subtype == "email":
+        return "@" in value
+    if subtype == "phone":
+        return sum(ch.isdigit() for ch in value) >= 7
+    if subtype in ("account", "sort_code", "card", "routing"):
+        return sum(ch.isdigit() for ch in value) >= 6
+    if subtype == "iban":
+        return re.search(r"[A-Z]{2}\d{2}", value) is not None
+    if subtype == "swift":
+        return re.search(r"[A-Z]{6}", value) is not None
+    if subtype in ("dob", "address", "ssn"):
+        return any(ch.isdigit() for ch in value)
+    return True
+
+
+_JSON_PAIR_RE = re.compile(
+    r'"(?P<key>[^"\\]+)"\s*:\s*"(?P<value>(?:[^"\\]|\\.)*)"'
+)
+
+_ENV_LINE_RE = re.compile(
+    r"^\s*(?:export\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_.-]*)"
+    r"\s*(?P<sep>[:=])\s*(?P<rhs>.*)$"
+)
+
+
+def _scan_json_pii(text: str, policy: Policy) -> list[Span]:
+    """Values under sensitive JSON keys as PII (keys kept, values flagged).
+
+    Matches '"key": "value"' pairs anywhere (flat, nested or JSONL) with
+    the value span inside the quotes, so redaction keeps valid JSON with
+    the same keys. Already-redacted placeholders are never re-flagged.
+    """
+    spans: list[Span] = []
+    for match in _JSON_PAIR_RE.finditer(text):
+        subtype = _key_subtype(match.group("key"))
+        if subtype is None:
+            continue
+        value = match.group("value")
+        if PLACEHOLDER_RE.search(value) is not None:
+            continue
+        if not _key_value_plausible(subtype, value):
+            continue
+        spans.append(
+            _emit(
+                text, match.start("value"), match.end("value"),
+                "pii", subtype, "proven",
+                "Looks like personal data under a labelled JSON key.",
+                f"value under a {subtype} key", policy, 0.85,
+            )
+        )
+    return spans
+
+
+def _scan_env_pii(text: str, policy: Policy) -> list[Span]:
+    """Values under sensitive KEY=VALUE names as PII/secrets.
+
+    Keys are kept: spans cover the value only (inside any quotes), so
+    'DB_PASSWORD=[SECRET_1]' keeps its key. Password-like names flag
+    the whole value as a secret; PII names flag it as that PII type.
+    Already-redacted placeholders are never re-flagged.
+    """
+    spans: list[Span] = []
+    line_start = 0
+    for line in text.split("\n"):
+        match = _ENV_LINE_RE.match(line)
+        if match is not None:
+            key = match.group("key")
+            rhs = match.group("rhs")
+            rhs_start = line_start + match.start("rhs")
+            stripped = rhs.strip()
+            if len(stripped) >= 2 and stripped[0] in "\"'":
+                # Quoted value: flag inside the quotes, keep the quotes.
+                idx = rhs.find(stripped[0])
+                end_idx = rhs.rfind(stripped[0])
+                if 0 <= idx < end_idx:
+                    inner = rhs[idx + 1:end_idx]
+                    if inner.strip() and PLACEHOLDER_RE.search(inner) is None:
+                        spans.extend(
+                            _env_value_spans(
+                                text, rhs_start + idx + 1,
+                                rhs_start + end_idx, inner, key, policy,
+                            )
+                        )
+                line_start += len(line) + 1
+                continue
+            value = stripped.strip("\"'")
+            if value and PLACEHOLDER_RE.search(value) is None:
+                found = rhs.find(value)
+                if found >= 0:
+                    spans.extend(
+                        _env_value_spans(
+                            text, rhs_start + found,
+                            rhs_start + found + len(value),
+                            value, key, policy,
+                        )
+                    )
+        line_start += len(line) + 1
+    return spans
+
+
+def _env_value_spans(
+    text: str, cp_start: int, cp_end: int, value: str, key: str,
+    policy: Policy,
+) -> list[Span]:
+    """Spans for one env value: secret when the name says so, else PII."""
+    if _is_secret_key(key):
+        if _PASSWORD_PLACEHOLDER_RE.search(value.strip()) is not None:
+            return []
+        return [
+            _emit(
+                text, cp_start, cp_end, "secret", "password_assignment",
+                "proven", "Looks like a secret stored in an env var.",
+                f"value under a {key.strip()} name", policy, 0.9,
+            )
+        ]
+    subtype = _key_subtype(key)
+    if subtype is None or not _key_value_plausible(subtype, value):
+        return []
+    return [
+        _emit(
+            text, cp_start, cp_end, "pii", subtype, "proven",
+            "Looks like personal data under a labelled name.",
+            f"value under a {subtype} name", policy, 0.85,
+        )
+    ]
 
 
 def _scan_names(text: str, policy: Policy) -> list[Span]:
@@ -1507,6 +1773,8 @@ def scan(
     _run_traced(trace_out, spans, "tier1.pii_scan", counters, _scan_pii, text, policy)
     _run_traced(trace_out, spans, "tier1.name_scan", counters, _scan_names, text, policy)
     _run_traced(trace_out, spans, "tier1.csv_scan", counters, _scan_csv_pii, text, policy)
+    _run_traced(trace_out, spans, "tier1.json_scan", counters, _scan_json_pii, text, policy)
+    _run_traced(trace_out, spans, "tier1.env_scan", counters, _scan_env_pii, text, policy)
     _run_traced(trace_out, spans, "tier1.dob_scan", counters, _scan_dob, text, policy)
     _run_traced(trace_out, spans, "tier1.address_scan", counters, _scan_addresses, text, policy)
     _run_traced(trace_out, spans, "tier1.account_scan", counters, _scan_accounts, text, policy)

@@ -1,0 +1,6 @@
+Meeting notes — Tuesday sync (all fictional)
+
+The team agreed to ship the new dashboard on Friday. Action items:
+Sam will finish the export button and Jo will update the help page.
+The budget review went well and the roadmap is on track for next
+quarter. Next sync is on Monday morning in the main room.

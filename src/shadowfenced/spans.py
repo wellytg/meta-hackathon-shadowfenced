@@ -95,6 +95,18 @@ def _merge_winner(current: Span, span: Span) -> Span:
     spans for the same reason. Otherwise the more severe span wins
     (ties keep the earlier one).
     """
+    if (
+        current.status == "proven" and current.cls == "pii"
+        and span.status == "ambiguous" and span.cls == "secret"
+    ):
+        # Proven PII is certain person data; an ambiguous secret is a
+        # guess. Certain PII must never be labelled SECRET via overlap.
+        return current
+    if (
+        span.status == "proven" and span.cls == "pii"
+        and current.status == "ambiguous" and current.cls == "secret"
+    ):
+        return span
     if current.cls == span.cls:
         if current.subclass == "canary":
             return current

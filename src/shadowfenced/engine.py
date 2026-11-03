@@ -32,6 +32,7 @@ PLACEHOLDER_DESCRIPTIONS = {
     "SECRET": "secret",
     "PII_EMAIL": "email address",
     "PII_PHONE": "phone number",
+    "PII_CARD": "card number",
     "PII_ACCOUNT": "account number",
     "PII_ROUTING": "routing number",
     "PII_IBAN": "IBAN",

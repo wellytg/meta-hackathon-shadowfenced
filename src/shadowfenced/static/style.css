@@ -1538,10 +1538,24 @@ body {
 @media (max-width: 720px) {
   .risk-card { max-width: 100%; }
 }
+/* T67 file-guard card bits: label-only chips and a square progress bar. */
+.fg-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.fg-chip {
+  background: var(--paper-2); color: var(--ink);
+  border: 2px solid var(--line); padding: 2px 8px;
+  font-size: 12px; font-weight: 700; border-radius: 0;
+}
+.fg-progress {
+  height: 14px; margin-top: 8px;
+  background: var(--paper-2); border: 2px solid var(--line);
+}
+.fg-bar { height: 100%; width: 0%; background: var(--mark-review); }
+.fg-note { margin: 8px 0 0; font-size: 13px; }
 @media (max-width: 480px) {
   .risk-row { grid-template-columns: 88px minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) {
   .risk-card, .risk-toggle, .risk-choices button { transition: none; animation: none; }
+  .fg-bar { transition: none; animation: none; }
   .risk-choices button:active { transform: none; }
 }

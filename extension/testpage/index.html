@@ -27,6 +27,10 @@
   .sendrow { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
   #replyArea { margin-top: 14px; border: 2px solid #1a1a1a; padding: 8px;
     min-height: 64px; background: #fff; }
+  #dropZone { margin-top: 10px; border: 2px dashed #1a1a1a; padding: 18px 8px;
+    text-align: center; background: #fff; }
+  #fileLog { margin-top: 10px; border: 2px solid #1a1a1a; padding: 8px;
+    min-height: 24px; background: #f4f1e8; font-size: 13px; }
   #log { margin-top: 14px; border: 2px solid #1a1a1a; padding: 8px;
     min-height: 40px; background: #f4f1e8; font-size: 13px; }
   code { background: #e8e2d2; padding: 0 4px; }
@@ -61,6 +65,14 @@
         <input id="attachInput" type="file">
       </label>
     </div>
+
+    <div class="sendrow">
+      <label class="hint" for="fileInput">File guard demo:
+        <input id="fileInput" type="file" multiple>
+      </label>
+    </div>
+    <div id="dropZone" aria-label="Drop zone">Drop files here to test the file guard.</div>
+    <div id="fileLog" aria-label="Received files">No files received yet.</div>
 
     <div id="replyArea" aria-label="Reply area"></div>
 
@@ -111,6 +123,31 @@
     var reply = document.createElement('div');
     reply.textContent = 'Demo reply: got ' + msg.length + ' characters.';
     replyArea.appendChild(reply);
+  });
+
+  // File guard demo: the extension intercepts change/drop/paste in the
+  // capture phase and stops the event, so these bubble-phase handlers
+  // only run for files the guard cleared (or re-dispatched).
+  var fileInput = document.getElementById('fileInput');
+  var dropZone = document.getElementById('dropZone');
+  var fileLog = document.getElementById('fileLog');
+  var filesCleared = false;
+  function logFiles(prefix, files) {
+    if (!files || !files.length) return;
+    if (!filesCleared) { fileLog.textContent = ''; filesCleared = true; }
+    for (var i = 0; i < files.length; i++) {
+      var line = document.createElement('div');
+      line.textContent = prefix + files[i].name + ' (' + files[i].size + ' bytes)';
+      fileLog.appendChild(line);
+    }
+  }
+  fileInput.addEventListener('change', function () {
+    logFiles('Received: ', fileInput.files);
+  });
+  dropZone.addEventListener('dragover', function (ev) { ev.preventDefault(); });
+  dropZone.addEventListener('drop', function (ev) {
+    ev.preventDefault();
+    logFiles('Dropped: ', ev.dataTransfer && ev.dataTransfer.files);
   });
 
   sampleReply.addEventListener('click', function () {

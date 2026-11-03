@@ -1,0 +1,15 @@
+Team contacts (all fictional — invented for file-guard testing)
+
+Name: Amara Okafor
+Email: amara.okafor@northwind-mail.co
+Phone: 07700 900111
+
+Name: Tomas Reyes
+Email: tomas.reyes@northwind-mail.co
+Phone: 07700 900222
+
+Name: Mei Lin
+Email: mei.lin@foxglove-mail.net
+Phone: 0161 496 0333
+
+Escalations: Jonas Weber <jonas.weber@harborpost-mail.com>, 020 7946 0222.

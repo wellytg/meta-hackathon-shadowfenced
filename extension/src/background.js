@@ -75,6 +75,18 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       case 'SF_REHYDRATE':
         sendResponse(await forward('/api/ext/rehydrate', state.token, { text: msg.text || '' }));
         return;
+      case 'SF_SCAN_FILE':
+        sendResponse(await forwardFile('/api/ext/scan-file', state.token, msg));
+        return;
+      case 'SF_REDACT_FILE':
+        sendResponse(await forward('/api/ext/redact-file', state.token, { scan_id: msg.scan_id || '' }));
+        return;
+      case 'SF_DEEP_START':
+        sendResponse(await forward('/api/ext/deep-check', state.token, { scan_id: msg.scan_id || '' }));
+        return;
+      case 'SF_DEEP_STATUS':
+        sendResponse(await forward('/api/ext/deep-check/' + encodeURIComponent(msg.check_id || ''), state.token, undefined));
+        return;
       case 'SF_HEALTH':
         sendResponse(await forward('/api/ext/health', state.token, undefined));
         return;
@@ -111,6 +123,35 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   })();
   return true; // async response
 });
+
+function b64ToBytes(b64) {
+  var bin = atob(String(b64 || ''));
+  var bytes = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function forwardFile(path, token, msg) {
+  var headers = {};
+  if (token) headers['X-Ext-Token'] = token;
+  var bytes = b64ToBytes(msg.dataBase64 || '');
+  var form = new FormData();
+  form.append('file', new Blob([bytes], { type: msg.mime || 'application/octet-stream' }), msg.name || 'upload');
+  return fetch(SF_BASE + path, { method: 'POST', headers: headers, body: form }).then(function (resp) {
+    if (!resp.ok) {
+      var err = new Error('app returned HTTP ' + resp.status);
+      err.status = resp.status;
+      throw err;
+    }
+    return resp.json();
+  }).then(function (data) {
+    return { ok: true, data: data };
+  }).catch(function (e) {
+    var out = { ok: false, error: String((e && e.message) || e) };
+    if (e && typeof e.status === 'number') out.status = e.status;
+    return out;
+  });
+}
 
 function forward(path, token, body) {
   return callApp(path, token, body).then(function (data) {
