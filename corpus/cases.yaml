@@ -239,8 +239,9 @@
 - id: n-example-email
   category: benign
   input: "Mail hello@example.com for general questions"
-  expect: ALLOW
-  acceptable: [ALLOW]
+  # T65: example.* domains no longer allowlisted
+  expect: REDACT
+  acceptable: [REDACT]
   classes: []
   sensitive_values: []
 

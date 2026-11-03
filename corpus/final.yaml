@@ -349,8 +349,9 @@
 
     commit 1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d
     Author: Jane Doe <jane.doe@example.org>
-  expect: ALLOW
-  acceptable: [ALLOW]
+  # T65: example.* domains no longer allowlisted
+  expect: REDACT
+  acceptable: [REDACT]
   classes: []
   sensitive_values: []
 
@@ -464,7 +465,8 @@
 - id: "f-benign-14"
   category: benign
   input: "Write a unit test for the Luhn check function using the standard test card number from the Stripe docs and an obviously invalid one like 1234 5678 9012 3456. send results to qa-team@example.net"
-  expect: ALLOW
-  acceptable: [ALLOW]
+  # T65: example.* domains no longer allowlisted
+  expect: REDACT
+  acceptable: [REDACT]
   classes: []
   sensitive_values: []

@@ -101,7 +101,7 @@ def test_shop_address_phone_and_hours_are_business_details():
 
 
 def test_cafe_email_for_bookings_is_a_business_detail():
-    text = ("Our cafe on Salt Row opens late; email cafe@example.com "
+    text = ("Our cafe on Salt Row opens late; email cafe@saltrowcafe.com "
             "for bookings.")
     assert reid.assess(text).outcome == "OK"
 
@@ -117,18 +117,18 @@ def test_personal_address_still_holds():
 
 # 5. Job adverts -----------------------------------------------------------------
 def test_hiring_advert_with_role_mailbox_is_not_personal():
-    text = "We are hiring a nurse in Dunmere; apply to jobs@example.com."
+    text = "We are hiring a nurse in Dunmere; apply to jobs@dunmereclinic.com."
     assert reid.assess(text).outcome == "OK"
 
 
 def test_vacancy_with_experience_level_is_not_personal():
     text = ("Vacancy: night-shift technician in Gullhaven, experience "
-            "level 2+. Contact hr@example.com.")
+            "level 2+. Contact hr@gullhavenworks.com.")
     assert reid.assess(text).outcome == "OK"
 
 
 def test_tours_mailbox_marks_job_title_and_town_as_role():
-    text = "We need a driver in Dunmere; contact tours@example.com."
+    text = "We need a driver in Dunmere; contact tours@dunmeretours.com."
     assert reid.assess(text).outcome == "OK"
 
 
