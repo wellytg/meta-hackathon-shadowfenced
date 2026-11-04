@@ -75,6 +75,16 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       case 'SF_REHYDRATE':
         sendResponse(await forward('/api/ext/rehydrate', state.token, { text: msg.text || '' }));
         return;
+      case 'SF_CHOICE':
+        sendResponse(await forward('/api/ext/choice', state.token, {
+          decision_id: msg.decision_id || '',
+          choice: msg.choice || '',
+          kinds: msg.kinds || [],
+          rule_ids: msg.rule_ids || [],
+          site: msg.site || '',
+          source: msg.source || 'text'
+        }));
+        return;
       case 'SF_SCAN_FILE':
         sendResponse(await forwardFile('/api/ext/scan-file', state.token, msg));
         return;

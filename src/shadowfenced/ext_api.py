@@ -8,6 +8,8 @@ gate: no cloud calls, no network. Endpoints:
   placeholder map stays in server memory under a short id (15 minute TTL).
 - ``POST /api/ext/rehydrate``: restore placeholders to real values for
   display only.
+- ``POST /api/ext/choice``: record one card choice (fields only) in the
+  chained decision log.
 - ``GET /api/ext/pairing``: show the pairing token in the local console
   ("Pair browser extension" card). Same localhost page only.
 - ``POST /api/ext/scan-file``: guard one attached file (multipart, 25 MB
@@ -49,9 +51,21 @@ class ScanBody(BaseModel):
     text: str = Field(default="")
 
 
+class ChoiceBody(BaseModel):
+    """One extension card choice (fields only; never values)."""
+
+    decision_id: str = Field(default="")
+    choice: str = Field(default="")
+    kinds: list[str] = Field(default_factory=list)
+    rule_ids: list[str] | None = None
+    site: str = Field(default="")
+    source: str = Field(default="text")
+
+
 class RedactBody(BaseModel):
     """Text to gate before send."""
 
+    site: str = Field(default="")
     text: str = Field(default="")
 
 
@@ -240,6 +254,51 @@ def ext_redact(body: RedactBody, _guard: None = Depends(ext_guard)) -> dict[str,
     text = body.text or ""
     decision = _live_gate(text)
     notes = engine.user_message(decision)
+    from . import ecs_log as _ecs_log
+
+    site = _ecs_log.clean_site(getattr(body, "site", "") or "")
+    kinds = [kind for kind in (_ecs_log.span_kind(s) for s in decision.spans) if kind]
+    rule_ids = list(decision.rule_ids or [])
+    try:
+        from .app import get_policy as _get_policy
+
+        from . import suggest as _suggest
+
+        auto = decision.decision == "WARN" and _suggest.auto_redact_covers(
+            _get_policy(), kinds, site, rule_ids
+        )
+    except Exception:
+        auto = False
+    try:
+        from .config import get_settings as _get_settings
+
+        if auto:
+            decision.evidence["auto_rule"] = "auto_redact"
+        _ecs_log.append_decision(
+            _get_settings().log_path, decision, text, site=site, source="text"
+        )
+        _ecs_log.clear_last_write_error()
+    except Exception as exc:
+        try:
+            _ecs_log.note_write_failure(exc, _ecs_log.resolve_path(None))
+        except Exception:
+            pass
+    if auto:
+        proven = [s for s in decision.spans if s.status == "proven"]
+        safe_text, mapping = redact(text, proven) if proven else (text, {})
+        mapping_id = decision.decision_id
+        if mapping:
+            save_mapping(mapping_id, mapping)
+        log.info("ext_api redact: auto rule hid kinds without asking")
+        return {
+            "decision": "REDACT",
+            "safe_text": safe_text,
+            "notes": notes + " Hidden automatically per your rule.",
+            "id": mapping_id,
+            "decision_id": decision.decision_id,
+            "kinds": kinds,
+            "rule_ids": rule_ids,
+        }
     log.info(
         "ext_api redact: decision=%s spans=%d placeholders=%d",
         decision.decision,
@@ -249,13 +308,27 @@ def ext_redact(body: RedactBody, _guard: None = Depends(ext_guard)) -> dict[str,
     if decision.decision == "BLOCK":
         _reid = (decision.evidence or {}).get("reid", {}) or {}
         _payload: dict[str, Any] = {"decision": "BLOCK", "safe_text": "", "notes": notes}
+        _payload.update(
+            {
+                "decision_id": decision.decision_id,
+                "kinds": kinds,
+                "rule_ids": rule_ids,
+            }
+        )
         if isinstance(_reid, dict) and _reid.get("outcome") == "BLOCK":
             _payload["combination"] = list(_reid.get("combination") or [])
             _payload["generalised_text"] = str(_reid.get("generalised_text") or "")
         return _payload
     if decision.decision == "ALLOW":
         safe = decision.sent_text if decision.sent_text is not None else text
-        return {"decision": "ALLOW", "safe_text": safe, "notes": notes}
+        return {
+            "decision": "ALLOW",
+            "safe_text": safe,
+            "notes": notes,
+            "decision_id": decision.decision_id,
+            "kinds": kinds,
+            "rule_ids": rule_ids,
+        }
     if decision.sent_text is not None and decision.placeholders:
         # REDACT, or WARN layered over a redaction: the map is already
         # stored server-side under this decision id by the gate.
@@ -264,6 +337,9 @@ def ext_redact(body: RedactBody, _guard: None = Depends(ext_guard)) -> dict[str,
             "safe_text": decision.sent_text,
             "notes": notes,
             "id": decision.decision_id,
+            "decision_id": decision.decision_id,
+            "kinds": kinds,
+            "rule_ids": rule_ids,
         }
     # HOLD without a redacted send: still offer the proven-span redaction
     # so the extension can show safe text; the map lives 15 minutes.
@@ -280,8 +356,83 @@ def ext_redact(body: RedactBody, _guard: None = Depends(ext_guard)) -> dict[str,
             "safe_text": safe_text,
             "notes": notes,
             "id": mapping_id,
+            "decision_id": decision.decision_id,
+            "kinds": kinds,
+            "rule_ids": rule_ids,
         }
-    return {"decision": decision.decision, "safe_text": text, "notes": notes}
+    return {
+        "decision": decision.decision,
+        "safe_text": text,
+        "notes": notes,
+        "decision_id": decision.decision_id,
+        "kinds": kinds,
+        "rule_ids": rule_ids,
+    }
+
+
+@router.post("/choice")
+def ext_choice(body: ChoiceBody, _guard: None = Depends(ext_guard)) -> dict[str, Any]:
+    """Record one extension card choice (fields only; token guarded)."""
+    from . import ecs_log
+    from . import rule_catalog as catalog_module
+    from .config import get_settings
+
+    try:
+        kinds = ecs_log.clean_kinds(body.kinds)
+        decision_id = ecs_log.clean_decision_id(body.decision_id)
+        choice = ecs_log.clean_choice(body.choice)
+        site = ecs_log.clean_site(body.site)
+        source = ecs_log.clean_source(body.source)
+        rule_ids = (
+            ecs_log.clean_rule_ids(body.rule_ids)
+            if body.rule_ids is not None
+            else catalog_module.rule_ids_for_kinds(kinds)
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "shadowfenced_bad_choice",
+                "type": "shadowfenced_bad_choice",
+                "message": str(exc),
+            },
+        ) from exc
+    try:
+        record = ecs_log.append_choice(
+            get_settings().log_path,
+            decision_id=decision_id,
+            choice=choice,
+            kinds=kinds,
+            rule_ids=rule_ids,
+            site=site,
+            source=source,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "shadowfenced_bad_choice",
+                "type": "shadowfenced_bad_choice",
+                "message": str(exc),
+            },
+        ) from exc
+    except Exception as exc:
+        try:
+            ecs_log.note_write_failure(
+                exc, ecs_log.resolve_path(get_settings().log_path)
+            )
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "shadowfenced_log_unwritable",
+                "type": "shadowfenced_log_unwritable",
+                "message": "decision log not writable",
+            },
+        ) from exc
+    log.info("ext_api choice: choice=%s site=%s", choice, site)
+    return {"ok": True, "ts": record["ts"]}
 
 
 @router.post("/rehydrate")

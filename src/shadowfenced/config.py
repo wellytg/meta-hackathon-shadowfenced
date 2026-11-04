@@ -40,6 +40,8 @@ _ENV_KEYS = (
     "SF_HOSTED_DICTATION",
     "SHADOWFENCED_EXT_TOKEN",
     "SF_EXT_TOKEN_FILE",
+    "SF_FINGERPRINT_SECRET",
+    "SF_FINGERPRINT_SECRET_FILE",
 )
 
 DEFAULT_LOG_PATH = "runs/decisions.jsonl"
@@ -106,6 +108,8 @@ class Settings(BaseModel):
     hosted_dictation: bool = False
     ext_token: str = ""
     ext_token_file: str = ""
+    fingerprint_secret: str = ""
+    fingerprint_secret_file: str = ""
 
     @property
     def meta_available(self) -> bool:
@@ -208,6 +212,8 @@ def get_settings(env: dict[str, str] | None = None) -> Settings:
         hosted_dictation=_parse_flag(merged.get("SF_HOSTED_DICTATION"), False),
         ext_token=merged.get("SHADOWFENCED_EXT_TOKEN", ""),
         ext_token_file=merged.get("SF_EXT_TOKEN_FILE", ""),
+        fingerprint_secret=merged.get("SF_FINGERPRINT_SECRET", ""),
+        fingerprint_secret_file=merged.get("SF_FINGERPRINT_SECRET_FILE", ""),
     )
 
 

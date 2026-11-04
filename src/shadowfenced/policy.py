@@ -7,7 +7,7 @@ import re
 import threading
 import uuid
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -92,6 +92,95 @@ class CustomRule(BaseModel):
         return self
 
 
+# Suggestion-driven local sections (T69): auto_redact, cue_allow,
+# block_kinds, org_domains. Hard limits are enforced here as well as in
+# the suggester: auto_redact takes PII kinds only, block_kinds never
+# takes secrets, and cue_allow never takes secret-ish cues.
+
+#: Cue words that must never skip the model check: they point at
+#: secrets, keys, or credentials. Mirrors the secret-ish alternatives
+#: of ``engine._SCREEN_CUE_RE`` (a test keeps them in sync).
+SECRET_CUES = frozenset({
+    "password", "passwd", "creds", "credential", "credentials",
+    "secret", "token", "key", "keys", "keystore", "vault",
+    "ssn", "social security",
+})
+
+_KIND_RE = re.compile(r"[a-z0-9_]{1,32}:[a-z0-9_]{1,48}")
+_DOMAIN_RE = re.compile(
+    r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}"
+)
+
+
+def validate_local_kind(kind: str, *, classes: set[str]) -> str:
+    """Check one ``cls:subclass`` kind for a habit section."""
+    text = (kind or "").strip().lower()
+    if not _KIND_RE.fullmatch(text):
+        raise ValueError(f"bad kind {kind!r}: want cls:subclass")
+    cls = text.split(":", 1)[0]
+    if cls not in classes:
+        raise ValueError(f"kind {text!r} is not allowed here")
+    return text
+
+
+def validate_org_domain(domain: str) -> str:
+    """Check one organisation email domain (lowercased, no values)."""
+    text = (domain or "").strip().lower().rstrip(".")
+    if not _DOMAIN_RE.fullmatch(text):
+        raise ValueError(f"bad domain {domain!r}")
+    return text
+
+
+def validate_cue_allow(cue: str) -> str:
+    """Check one cue word allowed to pass without the model check."""
+    text = re.sub(r"\s+", " ", (cue or "").strip().lower())
+    if not text or len(text) > 64 or not re.fullmatch(r"[a-z ]+", text):
+        raise ValueError(f"bad cue {cue!r}")
+    if text in SECRET_CUES:
+        raise ValueError(
+            f"cue {text!r} points at secrets and cannot skip review"
+        )
+    return text
+
+
+class AutoRedactEntry(BaseModel):
+    """One auto-redact rule: hide KIND and send without asking."""
+
+    kind: str = ""
+    site: str = ""
+
+    @model_validator(mode="after")
+    def _check(self) -> AutoRedactEntry:
+        self.kind = validate_local_kind(self.kind, classes={"pii"})
+        site = (self.site or "").strip().lower()
+        if site and site != "app" and not _DOMAIN_RE.fullmatch(site):
+            raise ValueError(f"bad site {self.site!r}")
+        self.site = site
+        return self
+
+
+class LocalPolicy(BaseModel):
+    """Validated ``policy.local.yaml``: custom rules + habit sections."""
+
+    custom_rules: list[CustomRule] = Field(default_factory=list)
+    auto_redact: list[AutoRedactEntry] = Field(default_factory=list)
+    cue_allow: list[str] = Field(default_factory=list)
+    block_kinds: list[str] = Field(default_factory=list)
+    org_domains: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check(self) -> LocalPolicy:
+        self.cue_allow = [validate_cue_allow(c) for c in (self.cue_allow or [])]
+        self.block_kinds = [
+            validate_local_kind(k, classes={"pii", "business"})
+            for k in (self.block_kinds or [])
+        ]
+        self.org_domains = [
+            validate_org_domain(d) for d in (self.org_domains or [])
+        ]
+        return self
+
+
 class Codename(BaseModel):
     name: str
     context: Literal["project_or_caps"] = "project_or_caps"
@@ -111,6 +200,10 @@ class Policy(BaseModel):
     user_can_keep: dict[str, bool] = Field(default_factory=dict)
     allowlist: Allowlist = Field(default_factory=Allowlist)
     custom_rules: list[CustomRule] = Field(default_factory=list)
+    auto_redact: list[AutoRedactEntry] = Field(default_factory=list)
+    cue_allow: list[str] = Field(default_factory=list)
+    block_kinds: list[str] = Field(default_factory=list)
+    org_domains: list[str] = Field(default_factory=list)
 
     @field_validator("actions", "user_can_keep")
     @classmethod
@@ -133,7 +226,7 @@ class Policy(BaseModel):
         domain = domain.lower()
         return any(
             domain == allowed.lower() or domain.endswith("." + allowed.lower())
-            for allowed in self.allowlist.email_domains
+            for allowed in [*self.allowlist.email_domains, *self.org_domains]
         )
 
     def codename_names(self) -> list[str]:
@@ -145,6 +238,65 @@ def local_policy_path() -> Path:
     """Local custom-rule file: ``SF_LOCAL_POLICY`` wins, else the repo root."""
     override = os.environ.get(_LOCAL_ENV_VAR, "").strip()
     return Path(override) if override else _LOCAL_DEFAULT
+
+
+#: Local-file sections in canonical order (custom rules first).
+LOCAL_SECTIONS = (
+    "custom_rules", "auto_redact", "cue_allow", "block_kinds", "org_domains",
+)
+
+
+def load_local_document(path: str | Path | None = None) -> dict[str, Any]:
+    """Raw mapping from the local file ({} when missing)."""
+    if is_hosted():
+        # Hosted demo: rules live in memory only, never on disk.
+        with _HOSTED_LOCK:
+            return {
+                "custom_rules": [rule.model_dump() for rule in _HOSTED_RULES]
+            }
+    target = Path(path) if path else local_policy_path()
+    try:
+        raw_text = target.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        data = yaml.safe_load(raw_text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"local policy file {target} is not valid YAML: {exc}") from exc
+    if data is None:
+        return {}
+    if isinstance(data, dict):
+        return dict(data)
+    if isinstance(data, list):
+        # Legacy: a bare rule list means custom_rules.
+        return {"custom_rules": data}
+    raise ValueError(f"local policy file {target} must hold a mapping")
+
+
+def validate_local_document(doc: dict[str, Any]) -> LocalPolicy:
+    """Validate a raw local-file mapping (raises ValueError when bad)."""
+    return LocalPolicy.model_validate(dict(doc or {}))
+
+
+def load_local_policy(path: str | Path | None = None) -> LocalPolicy:
+    """Validated local file: custom rules plus habit sections."""
+    doc = load_local_document(path)
+    items = doc.get("custom_rules", [])
+    if not isinstance(items, list):
+        raise ValueError("local policy custom_rules must hold a rule list")
+    return validate_local_document(doc)
+
+
+def dump_local_document(doc: dict[str, Any]) -> str:
+    """Serialise a raw local-file mapping (canonical section order)."""
+    ordered: dict[str, Any] = {}
+    for section in LOCAL_SECTIONS:
+        if section in doc:
+            ordered[section] = doc[section]
+    for key, value in dict(doc).items():
+        if key not in ordered:
+            ordered[key] = value
+    return yaml.safe_dump(ordered, sort_keys=False, allow_unicode=True)
 
 
 def load_custom_rules(path: str | Path | None = None) -> list[CustomRule]:
@@ -175,14 +327,20 @@ def load_custom_rules(path: str | Path | None = None) -> list[CustomRule]:
     return [CustomRule.model_validate(item) for item in items]
 
 
-def _write_custom_rules(rules: list[CustomRule], path: Path) -> None:
-    """Persist custom rules; the file itself stays git-ignored."""
+def _write_local_document(doc: dict[str, Any], path: Path) -> None:
+    """Persist a raw local-file mapping; the file itself stays git-ignored."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"custom_rules": [rule.model_dump() for rule in rules]}
-    path.write_text(
-        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    path.write_text(dump_local_document(doc), encoding="utf-8")
+
+
+def _write_custom_rules(rules: list[CustomRule], path: Path) -> None:
+    """Persist custom rules, keeping every other local section."""
+    try:
+        doc = load_local_document(path)
+    except ValueError:
+        doc = {}
+    doc["custom_rules"] = [rule.model_dump() for rule in rules]
+    _write_local_document(doc, path)
 
 
 def add_custom_rule(kind: str, value: str, action: str, note: str = "") -> CustomRule:
@@ -268,11 +426,16 @@ def default_policy_path() -> Path:
 
 
 def load_policy(path: str | Path | None = None) -> Policy:
-    """Load and validate the policy file, merging local custom rules."""
+    """Load the policy file, merging local rules and habit sections."""
     target = Path(path) if path is not None else default_policy_path()
     raw = yaml.safe_load(target.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(f"policy file {target} must contain a mapping")
     policy = Policy.model_validate(raw)
-    policy.custom_rules = load_custom_rules()
+    local = load_local_policy()
+    policy.custom_rules = list(local.custom_rules)
+    policy.auto_redact = list(local.auto_redact)
+    policy.cue_allow = list(local.cue_allow)
+    policy.block_kinds = list(local.block_kinds)
+    policy.org_domains = list(local.org_domains)
     return policy
