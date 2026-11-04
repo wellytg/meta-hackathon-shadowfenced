@@ -20,6 +20,10 @@ to approve them.
 
 ▶ [Demo video (2:48)](https://youtu.be/v1Njzg2lkus) · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run (fictional data only; hosted mode, see below)
 
+Built from scratch during the Meta Global AI Developer Hackathon (Oct 26 – Nov 4, 2026); first commit Oct 27. Pre-existing: open-source libraries and Meta's models.
+
+Bonus prizes we are entering: **Best Build on Meta Open Weight Models** — Muse Glimmer 30B runs on our own GPU as the load-bearing Tier 2 judge; **Best Agentic Use-Case** — a guard for coding agents (OpenAI-compatible proxy, every message role checked, keys stopped), built by the Muse Code agent from 79 briefs.
+
 ## Try it in one minute
 
 - **No install:** open the live demo, or run the 10 quick cases against it: `python setup/try_cases.py`.
@@ -38,7 +42,7 @@ to approve them.
 - Browser extension that guards ChatGPT and Gemini (both tested live).
 - File guard: files are stopped before upload and scanned locally; bank statements, secrets and identity bundles cannot be uploaded as-is; a one-click redacted copy keeps CSV/JSON structure; an optional Glimmer deep check adds findings.
 - OpenAI-compatible proxy for CLI agents and SDKs (`POST /v1/chat/completions`): every message role is checked, and real keys are fingerprinted without being stored.
-- Screenshot redaction (opt-in): Glimmer finds the sensitive regions, SAM 3.1 makes the exact masks.
+- Screenshot redaction (opt-in, default `off`): Glimmer finds the sensitive regions on this PC and either `local` mode box-fills them here or `on` mode sends the screenshot to Meta's API for exact SAM 3.1 masks.
 - Muse Voice dictation in the web app, and transcription of audio uploads.
 - A hash-chained decision log that stores fingerprints, never values.
 - Learns from your choices: a "What it caught" panel (counts by kind, never values) and rule suggestions you approve, which edit your local rules file (`policy.local.yaml`, with a backup).
@@ -91,9 +95,11 @@ the leak. The judge runs on the user's own machine.
 | Muse Code | Wrote the product code and tests from 79 human-written briefs in `docs/muse-briefs/` | Local agent |
 | Muse Voice | Dictation and audio-upload transcription | Meta Model API |
 | Muse Image | Storyboard panels and banner art (`docs/assets/generated/`) | Meta Model API |
-| SAM 3.1 | Exact masks for screenshot redaction | Local |
+| SAM 3.1 | Exact masks for screenshot redaction (opt-in `on` mode; default `off`, `local` mode box-fills on this PC) | Meta Model API |
 
 "Meta checks Meta": a local Meta open-weight model screens what is sent to a Meta cloud model.
+
+Cloud calls (answering, hosted judging, voice, image, SAM masks (opt-in)) go to the Meta Model API at `https://api.meta.ai/v1` (docs at `https://dev.meta.ai/`); the answering model is `muse-spark-1.3` (`META_MODEL` in `src/shadowfenced/config.py`).
 
 ## Results (honest numbers)
 
@@ -118,6 +124,8 @@ Latency: Tier 1 (`tier1.scan` only) p50 0.45 ms, p95 0.94 ms, max 1.78 ms over a
 messages (5 runs, average 188 characters, measured Nov 3 on the dev PC). Glimmer reviews take
 about 10–20 s each.
 
+Reproduce any number through one runner — see [`eval/`](eval/README.md): `python eval/run.py --suite final --judge glimmer` writes a fresh `runs/eval_<date>_final_glimmer.json`.
+
 ## Known limits
 
 - Review rate: 27.5 % of messages still need a person, and harmless messages with sensitive words
@@ -135,6 +143,8 @@ about 10–20 s each.
   the final set). Tighter name and address detectors are the next step.
 - No model training was done. `docs/FINETUNE.md` describes a distillation pipeline that was not
   run; it is future work.
+- Exact SAM masks need the cloud mode, which sends the screenshot to the Meta Model API;
+  the local mode keeps it on the PC but uses rectangular boxes.
 
 ## Run it
 
