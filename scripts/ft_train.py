@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-MODEL_ID = "meta-llama/Llama-3.2-3B-Instruct"
+MODEL_ID = os.environ.get("SF_FT_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
 
 SYSTEM_PROMPT = (
     "Classify text a user is about to send to an outside AI. "
@@ -158,13 +159,29 @@ def train(cfg: TrainConfig, train_path: Path, val_path: Path,
         report_to="none",
     )
     if has_sft:
+        from trl import SFTConfig  # noqa: E402
+        sft_args = SFTConfig(
+            output_dir=args.output_dir,
+            per_device_train_batch_size=cfg.per_device_batch,
+            gradient_accumulation_steps=cfg.grad_accum,
+            num_train_epochs=cfg.epochs,
+            learning_rate=cfg.lr,
+            optim="paged_adamw_8bit",
+            gradient_checkpointing=True,
+            logging_steps=10,
+            save_steps=100,
+            seed=cfg.seed,
+            bf16=torch.cuda.is_bf16_supported(),
+            report_to="none",
+            max_length=cfg.max_len,
+            dataset_text_field="text",
+        )
         trainer = SFTTrainer(
             model=model,
-            args=args,
+            args=sft_args,
             train_dataset=Dataset.from_dict({"text": train_texts}),
             eval_dataset=Dataset.from_dict({"text": val_texts}),
             processing_class=tokenizer,
-            max_seq_length=cfg.max_len,
         )
     else:
         from transformers import Trainer  # noqa: E402
