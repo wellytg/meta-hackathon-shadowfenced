@@ -38,6 +38,8 @@
     </select>
   </div>
   <div class="topbar-actions">
+    <button id="tips-open" class="tips-open" type="button" aria-haspopup="dialog" title="What counts as sensitive?">What counts as sensitive?</button>
+    <button id="intro-reopen" class="intro-reopen" type="button" aria-label="Show the intro again" title="Show the intro again">?</button>
     <button id="chats-toggle" class="chats-toggle" type="button"
       aria-expanded="false" aria-controls="sessions-panel">Chats</button>
     <button id="details-toggle" class="details-toggle" type="button"
@@ -71,6 +73,13 @@
     <p class="sessions-note">Chats live in this page only. They are never stored or sent anywhere.</p>
   </nav>
   <section class="chat-col" aria-label="Conversation">
+    <div id="demo-bar" class="demo-bar" hidden>
+      <span id="demo-status" class="demo-status" role="status">Demo ready.</span>
+      <span class="demo-btns">
+        <button id="demo-skip" class="demo-skip" type="button">Skip typing</button>
+        <button id="demo-stop" class="demo-stop" type="button">Stop</button>
+      </span>
+    </div>
     <div id="thread" class="thread" aria-live="polite">
       <div id="empty-hint" data-testid="empty-hint" class="thread-hint">Type or paste anything. Sensitive text is underlined as you type, and only clean or redacted text is sent to the AI.</div>
     </div>
@@ -173,6 +182,66 @@
     </details>
   </div>
 </main>
+<footer class="app-footer">
+  <p>Hackathon build. Use at your own risk — see <a href="https://github.com/wellytg/meta-hackathon-shadowfenced/blob/main/SECURITY.md">SECURITY.md</a>. Built from scratch for the <a href="https://github.com/wellytg/meta-hackathon-shadowfenced">Meta Global AI Developer Hackathon, Oct 26 – Nov 4, 2026</a>. <a href="https://github.com/wellytg/meta-hackathon-shadowfenced/blob/main/docs/JUDGES.md">Guide for judges</a>.</p>
+</footer>
+<div id="intro-overlay" class="intro-overlay" hidden>
+  <div class="intro-card" role="dialog" aria-modal="true" aria-labelledby="intro-title">
+    <button id="intro-close" class="intro-close" type="button" aria-label="Close the intro">×</button>
+    <h2 id="intro-title">Shadowfenced in 30 seconds</h2>
+    <p class="intro-line">Shadowfenced checks what you type on your own machine, before any AI sees it.</p>
+    <ul class="intro-points">
+      <li>Stops keys and secrets before they leave.</li>
+      <li>Swaps personal data for placeholders, then restores the real values in answers.</li>
+      <li>Works in chats, files, and coding agents.</li>
+    </ul>
+    <div class="intro-btns">
+      <button id="intro-play" class="intro-play" type="button">Play the demo</button>
+      <button id="intro-try" class="intro-try" type="button">Try it yourself</button>
+      <a id="intro-how" class="intro-how" href="/welcome/">How it works</a>
+    </div>
+    <p class="intro-small">Public demo — use made-up data only.</p>
+  </div>
+</div>
+<aside id="tips-panel" class="tips-panel" role="dialog" aria-labelledby="tips-title" hidden>
+  <div class="tips-head">
+    <h2 id="tips-title">What counts as sensitive?</h2>
+    <button id="tips-close" class="tips-close" type="button" aria-label="Close the tips panel">×</button>
+  </div>
+  <ol class="tips-list">
+    <li>
+      <h3>Keys and tokens</h3>
+      <p>Example: a 40-character token pasted from a chat log.</p>
+      <p>They hide in <code>.env</code> files, <code>~/.aws/credentials</code>, and logs.</p>
+      <p>Shadowfenced blocks them. Nothing is sent.</p>
+    </li>
+    <li>
+      <h3>Personal data</h3>
+      <p>Example: <code>ada@example.com</code>.</p>
+      <p>Shadowfenced swaps it for a placeholder like <code>[PII_EMAIL_1]</code>. The real value is restored in answers.</p>
+    </li>
+    <li>
+      <h3>Identity combinations</h3>
+      <p>Example: a name, birthday, address, and phone number in one message.</p>
+      <p>Each part is personal data. Together they identify one person. Shadowfenced blocks the bundle.</p>
+    </li>
+    <li>
+      <h3>Client and contract text</h3>
+      <p>Example: Corvane Labs renewal, clause 12.4.</p>
+      <p>Shadowfenced swaps client names and clauses for placeholders.</p>
+    </li>
+    <li>
+      <h3>Bank details</h3>
+      <p>Example: <code>GB29 NWBK 6016 1331 9268 19</code>.</p>
+      <p>Shadowfenced swaps account numbers and sort codes for placeholders.</p>
+    </li>
+    <li>
+      <h3>Files</h3>
+      <p>Example: a staff list CSV.</p>
+      <p>Shadowfenced scans files before upload. Risky files are stopped or redacted.</p>
+    </li>
+  </ol>
+</aside>
 <script src="app.js"></script>
 <script src="rules.js"></script>
 <script src="reid.js"></script>

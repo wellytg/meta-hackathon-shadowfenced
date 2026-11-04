@@ -436,3 +436,34 @@ body {
   border-left: 4px solid var(--signal);
   padding-left: 12px;
 }
+/*__T83_WELCOME__*/
+/* T83: quick links, decision diagram, hackathon footer line. */
+.quick { margin-top: 28px; }
+.quick .kicker { margin-bottom: 10px; }
+.quick-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.quick-links a {
+  display: inline-block;
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--paper);
+  background: var(--ink);
+  text-decoration: none;
+  padding: 8px 16px;
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--signal);
+}
+.quick-links a:hover { background: var(--steel-deep); }
+.quick-links a:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--signal); }
+.decision-fig { margin-bottom: 8px; }
+.hackathon-line { margin-top: 8px; }
+.colophon a { color: var(--steel-deep); }
+@media (max-width: 560px) {
+  .quick-links a { padding: 8px 12px; font-size: 13px; }
+}
