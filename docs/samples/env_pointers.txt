@@ -1,0 +1,5 @@
+# Staging config sample (DEMO ONLY - fictional pointers, no real secrets)
+AWS_ACCESS_KEY_ID=see-vault-staging-deploy-key
+AWS_SECRET_ACCESS_KEY=ask-devops-for-access
+DEPLOY_KEY_PATH=~/.aws/credentials
+DATABASE_URL=postgres://demo-user:not-a-real-password@localhost:5432/demo
