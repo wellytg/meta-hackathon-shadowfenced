@@ -1,9 +1,9 @@
 """Extension polish tests (T42): build flavours, icons, popup, cards, test page.
 
-- The release build must mention only loopback + the four chat sites.
+- The release build must mention only loopback + the five chat sites.
 - The dev build (``build.py --dev``) additionally matches the test page.
 - Icons exist as SVG source plus 16/32/48/128 px PNGs with exact sizes.
-- The popup has its title bar, 3-state status, Paste/Save, four site
+- The popup has its title bar, 3-state status, Paste/Save, five site
   switches and the Test button at ~340px with no rounded corners.
 - In-page cards live in a closed shadow root with focus/Escape handling.
 - The local test page imitates a chat composer.
@@ -29,8 +29,10 @@ EXPECTED_HOSTS = {
     "https://gemini.google.com/*",
     "https://meta.ai/*",
     "https://www.meta.ai/*",
+    "https://grok.com/*",
+    "https://www.grok.com/*",
 }
-FOUR_SITES = ("chatgpt.com", "claude.ai", "gemini.google.com", "meta.ai")
+FIVE_SITES = ("chatgpt.com", "claude.ai", "gemini.google.com", "meta.ai", "grok.com")
 ICON_SIZES = (16, 32, 48, 128)
 
 
@@ -53,13 +55,13 @@ def _png_size(path: Path) -> tuple[int, int]:
     return w, h
 
 
-def test_release_build_has_only_four_sites_plus_loopback():
+def test_release_build_has_only_five_sites_plus_loopback():
     _build(dev=False)
     for name in ("chrome", "firefox"):
         manifest = _dist_manifest(name)
         assert set(manifest["host_permissions"]) == EXPECTED_HOSTS, name
         matches = [m for block in manifest["content_scripts"] for m in block["matches"]]
-        for site in FOUR_SITES:
+        for site in FIVE_SITES:
             assert any(site in m for m in matches), f"{name} missing {site}"
         for m in matches:
             assert "8000" not in m and "testpage" not in m and "localhost" not in m, (
@@ -81,7 +83,7 @@ def test_dev_build_adds_test_page_only():
         matches = [m for block in manifest["content_scripts"] for m in block["matches"]]
         assert "http://127.0.0.1:8000/*" in matches, f"{name}: no test-page match"
         assert "http://127.0.0.1:8000/*" in manifest["host_permissions"], name
-        for site in FOUR_SITES:
+        for site in FIVE_SITES:
             assert any(site in m for m in matches), f"{name} missing {site}"
 
 
@@ -114,7 +116,7 @@ def test_popup_has_required_ui():
     assert 'id="status"' in html and 'id="statusIcon"' in html
     assert 'id="paste"' in html and 'id="save"' in html
     assert 'id="test"' in html and 'id="testResult"' in html
-    for site in ("chatgpt", "claude", "gemini", "meta"):
+    for site in ("chatgpt", "claude", "gemini", "meta", "grok"):
         assert f'data-site="{site}"' in html, f"popup missing switch {site}"
     js = (SRC / "popup.js").read_text(encoding="utf-8")
     assert "SF_HEALTH" in js and "SF_SCAN" in js, "popup never probes the local app"

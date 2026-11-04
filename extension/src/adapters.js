@@ -1,6 +1,6 @@
 'use strict';
 
-/* Site adapters â€” the four supported chat sites plus the local
+/* Site adapters â€” the five supported chat sites plus the local
  * demo-page adapter in this one file.
  * Each adapter carries CSS selectors for the message editor, the send
  * button, the AI reply area, and file-attachment affordances.
@@ -109,6 +109,28 @@ var ADAPTERS = [
       '[data-testid*="attach" i]:not(button)',
       '[data-testid*="file" i]:not(button)',
       '[aria-label*="attached" i]'
+    ]
+  },
+  {
+    id: 'grok',
+    hosts: ['grok.com'],
+    editor: [
+      'textarea[aria-label*="Ask Grok" i]',
+      'form textarea',
+      'textarea'
+    ],
+    sendButton: [
+      'form button[type="submit"]',
+      'button[aria-label*="Submit" i]',
+      'button[aria-label*="Send" i]'
+    ],
+    replyArea: [
+      'main [role="log"]',
+      'main article',
+      'main'
+    ],
+    attachment: [
+      'input[type="file"]'
     ]
   },
   {
