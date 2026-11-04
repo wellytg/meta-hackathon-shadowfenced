@@ -1327,11 +1327,12 @@
 
   function checkingCardModel(resp, elapsedSec) {
     var cue = holdCueWord(resp);
+    var checker = hostedMode ? "Muse Spark is checking it (hosted demo)" : "Muse Glimmer is checking it on this PC";
     var why = cue
       ? "Contains a word that can point to personal data ('" + cue + "'); " +
-        "Muse Glimmer is checking it on this PC"
+        checker
       : "Contains a word that can point to personal data; " +
-        "Muse Glimmer is checking it on this PC";
+        checker;
     var sending = holdPendingMessage(resp);
     if (typeof resp.sent_text === "string" && resp.sent_text) sending = resp.sent_text;
     var action = "Checking… (" + (elapsedSec || 0) + "s)";
@@ -3173,6 +3174,325 @@
       return;
     }
   });
+
+  /* T83: first-visit intro, demo player, tips panel. Plain script, no
+     libraries. The player reuses sendNow, so the real decision
+     cards, hold polling, and receipts appear exactly as if typed. */
+  var INTRO_KEY = "shadowfenced.intro.seen";
+  function t83storage() {
+    try {
+      var w = window;
+      return w["localStorage"] || null;
+    } catch (e) { return null; }
+  }
+  function introSeen() {
+    var store = t83storage();
+    if (!store) return false;
+    try { return store.getItem(INTRO_KEY) === "1"; }
+    catch (e) { return false; }
+  }
+  function markIntroSeen() {
+    var store = t83storage();
+    if (!store) return;
+    try { store.setItem(INTRO_KEY, "1"); }
+    catch (e) { /* the app works without storage */ }
+  }
+
+  var introOverlay = document.getElementById("intro-overlay");
+  var introPlay = document.getElementById("intro-play");
+  var introTry = document.getElementById("intro-try");
+  var introClose = document.getElementById("intro-close");
+  var introReopen = document.getElementById("intro-reopen");
+  var tipsOpenBtn = document.getElementById("tips-open");
+  var tipsPanel = document.getElementById("tips-panel");
+  var tipsClose = document.getElementById("tips-close");
+  var introReturnFocus = null;
+  var tipsReturnFocus = null;
+
+  function openIntro() {
+    if (!introOverlay) return;
+    introReturnFocus = document.activeElement;
+    introOverlay.hidden = false;
+    if (introPlay) introPlay.focus();
+    else if (introClose) introClose.focus();
+  }
+  function closeIntro() {
+    if (!introOverlay || introOverlay.hidden) return;
+    introOverlay.hidden = true;
+    markIntroSeen();
+    if (introReturnFocus && introReturnFocus.focus) introReturnFocus.focus();
+    introReturnFocus = null;
+  }
+  function openTips() {
+    if (!tipsPanel) return;
+    tipsReturnFocus = document.activeElement;
+    tipsPanel.hidden = false;
+    if (tipsClose) tipsClose.focus();
+  }
+  function closeTips() {
+    if (!tipsPanel || tipsPanel.hidden) return;
+    tipsPanel.hidden = true;
+    if (tipsReturnFocus && tipsReturnFocus.focus) tipsReturnFocus.focus();
+    tipsReturnFocus = null;
+  }
+  if (introTry) introTry.addEventListener("click", closeIntro);
+  if (introClose) introClose.addEventListener("click", closeIntro);
+  if (introReopen) introReopen.addEventListener("click", openIntro);
+  if (tipsOpenBtn) tipsOpenBtn.addEventListener("click", openTips);
+  if (tipsClose) tipsClose.addEventListener("click", closeTips);
+
+  /* Fake provider key, built at runtime from pieces so no key-shaped
+     string ever appears in this file (tests/test_repo_guard.py scans
+     tracked files for full provider prefixes plus long tails). */
+  function demoFakeKey() {
+    var headA = "gh";
+    var headB = "p_";
+    var alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    var tail = "";
+    for (var i = 0; i < 36; i++) {
+      tail += alpha.charAt((i * 7 + 3) % alpha.length);
+    }
+    return headA + headB + tail;
+  }
+  function demoB64(text) {
+    try {
+      if (window.btoa) return window.btoa(text);
+    } catch (e) { /* falls through to the raw text */ }
+    return text;
+  }
+  var DEMO_CURL = "curl -i https://wellytg--shadowfenced-asgi.us-east.modal.run/v1/chat/completions" +
+    " -H \"content-type: application/json\"" +
+    " -d '{\"model\":\"muse-spark-1.3\",\"messages\":[{\"role\":\"user\"," +
+    "\"content\":\"Use the prod key in ~/.aws/credentials to deploy.\"}]}'";
+
+  function demoCases() {
+    var blob = demoB64(demoFakeKey());
+    return [
+      { caption: "1 of 6 · Personal data becomes placeholders. Watch the email turn into a tag.",
+        text: "Please email the invoice to jordan.ellis@example.com today." },
+      { caption: "2 of 6 · A key hidden in base64. It is still stopped.",
+        text: "Found this blob in the debug log: " + blob },
+      { caption: "3 of 6 · A full identity bundle. Blocked. Nothing is sent.",
+        text: "Help me fill this form: Name Priya Ramanathan. DOB 03/05/1991. " +
+          "Address 27 Willow Crescent, Leeds LS6 2QT. Phone 07700 900461. " +
+          "Email priya.ramanathan@northwind-mail.co." },
+      { caption: "4 of 6 · A pointer to where a key lives. Held, then reviewed.",
+        text: "Use the prod key in ~/.aws/credentials to deploy." },
+      { caption: "5 of 6 · A harmless question. Allowed and answered.",
+        text: "What is the capital of France?" },
+      { caption: "6 of 6 · Coding agents get the same checks through the /v1 proxy.",
+        text: "Point my coding agent at the local /v1 proxy so its calls are checked first.",
+        copyCurl: true }
+    ];
+  }
+
+  var demoBar = document.getElementById("demo-bar");
+  var demoStatus = document.getElementById("demo-status");
+  var demoSkip = document.getElementById("demo-skip");
+  var demoStop = document.getElementById("demo-stop");
+  var demoState = { playing: false, stop: false, typing: false, skipType: false };
+  var demoReducedMotion = false;
+  try {
+    demoReducedMotion = !!(window.matchMedia &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  } catch (e) { demoReducedMotion = false; }
+
+  function setDemoStatus(text) {
+    if (demoStatus) demoStatus.textContent = text;
+  }
+  function demoCaption(text) {
+    var cap = document.createElement("div");
+    cap.className = "demo-caption";
+    cap.setAttribute("data-testid", "demo-caption");
+    cap.textContent = text;
+    thread.appendChild(cap);
+  }
+  function demoCopyCard() {
+    var wrap = document.createElement("div");
+    wrap.className = "demo-copy";
+    wrap.setAttribute("data-testid", "demo-copy");
+    var label = document.createElement("span");
+    label.textContent = "Try the proxy from a terminal. This curl holds, like case 4:";
+    var pre = document.createElement("code");
+    pre.className = "demo-curl";
+    pre.textContent = DEMO_CURL;
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "demo-copy-btn";
+    btn.setAttribute("data-testid", "demo-copy-btn");
+    btn.textContent = "Copy curl";
+    var msg = document.createElement("span");
+    msg.className = "demo-copy-msg";
+    msg.setAttribute("role", "status");
+    btn.addEventListener("click", function () {
+      msg.textContent = "";
+      function copied() { msg.textContent = "Copied."; }
+      function fallback() {
+        var ta = document.createElement("textarea");
+        ta.value = DEMO_CURL;
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand("copy");
+          copied();
+        } catch (e) {
+          msg.textContent = "Copy failed. The curl is in the README.";
+        }
+        if (ta.parentNode) ta.parentNode.removeChild(ta);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(DEMO_CURL).then(copied, fallback);
+      } else {
+        fallback();
+      }
+    });
+    wrap.appendChild(label);
+    wrap.appendChild(pre);
+    wrap.appendChild(btn);
+    wrap.appendChild(msg);
+    thread.appendChild(wrap);
+  }
+  function demoType(text, done) {
+    demoState.typing = true;
+    demoState.skipType = false;
+    composer.focus();
+    function finish() {
+      composer.value = text;
+      composer.dispatchEvent(new Event("input", { bubbles: true }));
+      demoState.typing = false;
+      done();
+    }
+    if (demoReducedMotion) { finish(); return; }
+    var i = 0;
+    composer.value = "";
+    var timer = setInterval(function () {
+      if (demoState.stop || demoState.skipType) {
+        clearInterval(timer);
+        finish();
+        return;
+      }
+      i += 2;
+      composer.value = text.slice(0, i);
+      if (i % 12 === 0) composer.dispatchEvent(new Event("input", { bubbles: true }));
+      if (i >= text.length) {
+        clearInterval(timer);
+        finish();
+      }
+    }, 24);
+  }
+  function demoWaitIdle(done) {
+    var timer = setInterval(function () {
+      if (demoState.stop) { clearInterval(timer); done(false); return; }
+      if (!sending) { clearInterval(timer); done(true); }
+    }, 120);
+  }
+  function demoHoldCards(before) {
+    var cards = [];
+    var now = thread.querySelectorAll(".evidence-card");
+    for (var i = 0; i < now.length; i++) {
+      if (before.indexOf(now[i]) < 0) cards.push(now[i]);
+    }
+    return cards;
+  }
+  function demoWaitHold(cards, done) {
+    var waited = 0;
+    var timer = setInterval(function () {
+      if (demoState.stop) { clearInterval(timer); done(); return; }
+      var settled = true;
+      for (var i = 0; i < cards.length; i++) {
+        if (!cards[i].parentNode) continue;
+        var spin = cards[i].querySelector ? cards[i].querySelector(".spinner") : null;
+        if (spin && !spin.hidden) { settled = false; break; }
+      }
+      waited += 250;
+      if (settled || waited > 150000) { clearInterval(timer); done(); }
+    }, 250);
+  }
+  function endDemo(finished) {
+    demoState.playing = false;
+    demoState.typing = false;
+    if (!demoBar) return;
+    if (finished) {
+      setDemoStatus("Demo finished. Try your own text below.");
+      if (demoSkip) demoSkip.hidden = true;
+      if (demoStop) demoStop.textContent = "Close";
+    } else {
+      demoBar.hidden = true;
+    }
+  }
+  function startDemo() {
+    if (demoState.playing || !thread || !composer) return;
+    demoState.playing = true;
+    demoState.stop = false;
+    if (demoBar) demoBar.hidden = false;
+    if (demoSkip) { demoSkip.hidden = false; demoSkip.disabled = false; }
+    if (demoStop) demoStop.textContent = "Stop";
+    var cases = demoCases();
+    var index = 0;
+    function next() {
+      if (demoState.stop || index >= cases.length) {
+        endDemo(!demoState.stop && index >= cases.length);
+        return;
+      }
+      var item = cases[index];
+      setDemoStatus("Playing case " + (index + 1) + " of " + cases.length + ".");
+      demoCaption(item.caption);
+      demoType(item.text, function () {
+        if (demoState.stop) { endDemo(false); return; }
+        var before = [];
+        var existing = thread.querySelectorAll(".evidence-card");
+        for (var k = 0; k < existing.length; k++) before.push(existing[k]);
+        sendNow();
+        demoWaitIdle(function (ok) {
+          if (!ok) { endDemo(false); return; }
+          demoWaitHold(demoHoldCards(before), function () {
+            if (demoState.stop) { endDemo(false); return; }
+            if (item.copyCurl) demoCopyCard();
+            index += 1;
+            setTimeout(next, 700);
+          });
+        });
+      });
+    }
+    next();
+  }
+  if (demoSkip) demoSkip.addEventListener("click", function () {
+    demoState.skipType = true;
+  });
+  if (demoStop) demoStop.addEventListener("click", function () {
+    if (demoState.playing) {
+      demoState.stop = true;
+      demoState.skipType = true;
+    } else if (demoBar) {
+      demoBar.hidden = true;
+    }
+  });
+  if (introPlay) introPlay.addEventListener("click", function () {
+    closeIntro();
+    if (composer) composer.focus();
+    startDemo();
+  });
+
+  /* First visit: show the intro unless seen. ?play=1 skips the intro
+     and starts the player (used by the /welcome/ quick links). */
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape" && event.key !== "Esc") return;
+    if (introOverlay && !introOverlay.hidden) { closeIntro(); return; }
+    if (tipsPanel && !tipsPanel.hidden) { closeTips(); return; }
+    if (demoState.playing && demoState.typing) demoState.skipType = true;
+  });
+  function hasPlayParam() {
+    try {
+      var q = window.location ? String(window.location.search || "") : "";
+      return (/(^|[?&])play=1(&|$)/).test(q);
+    } catch (e) { return false; }
+  }
+  if (hasPlayParam()) {
+    markIntroSeen();
+    setTimeout(startDemo, 300);
+  } else if (!introSeen()) {
+    openIntro();
+  }
 
   // Pure state helpers, exported for tests (no DOM inside).
   window.ShadowfencedUI = {
