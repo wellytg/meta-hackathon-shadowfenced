@@ -1,10 +1,10 @@
 # Shadowfenced browser extension (T42)
 
-Manifest V3 guard rail for four AI chat sites — `chatgpt.com`, `claude.ai`,
-`gemini.google.com`, `meta.ai` — backed by the local Shadowfenced app.
+Manifest V3 guard rail for five AI chat sites — `chatgpt.com`, `claude.ai`,
+`gemini.google.com`, `meta.ai`, `grok.com` — backed by the local Shadowfenced app.
 One codebase, no third-party libraries, no remote code, no analytics.
 `permissions` is `storage` only; `host_permissions` is the local app plus
-only the four sites.
+only the five sites. (`grok.com` was added Nov 4 and is not yet tested live.)
 
 Square Windows 3.11 look everywhere: hard 2px ink outlines, paper
 background, system fonts, no rounded corners. Safety orange means blocked,
@@ -29,7 +29,7 @@ steel blue means allowed, amber means review.
 - `manifest_chrome.json` / `manifest_firefox.json` — per-store manifests.
 - `src/logic.js` — pure, testable logic (`selectAdapter`, `spansToRanges`,
   `failSafeDecision`); loads in Node without a browser.
-- `src/adapters.js` — the four sites plus the local demo-page adapter in
+- `src/adapters.js` — the five sites plus the local demo-page adapter in
   one file (the demo adapter only matches under the dev build).
 - `src/content.js` — composer scanning overlay, hover card, send
   interception, attachment badge, reply rehydration. All UI lives in one

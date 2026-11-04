@@ -1,7 +1,7 @@
 """Extension manifest + source hygiene tests (T36).
 
 Both store manifests must stay minimal (MV3, storage-only, loopback +
-the four chat sites) and the extension sources must contain no remote
+the five chat sites) and the extension sources must contain no remote
 code or analytics.
 """
 
@@ -21,8 +21,10 @@ EXPECTED_HOSTS = {
     "https://gemini.google.com/*",
     "https://meta.ai/*",
     "https://www.meta.ai/*",
+    "https://grok.com/*",
+    "https://www.grok.com/*",
 }
-FOUR_SITES = ("chatgpt.com", "claude.ai", "gemini.google.com", "meta.ai")
+FIVE_SITES = ("chatgpt.com", "claude.ai", "gemini.google.com", "meta.ai", "grok.com")
 
 REQUIRED_KEYS = (
     "manifest_version",
@@ -55,11 +57,11 @@ def test_required_mv3_keys():
         assert data["name"] and data["version"], name
 
 
-def test_host_permissions_limited_to_loopback_plus_four_sites():
+def test_host_permissions_limited_to_loopback_plus_five_sites():
     for name, data in _manifests().items():
         hosts = set(data["host_permissions"])
         assert "http://127.0.0.1:8765/*" in hosts, name
-        for site in FOUR_SITES:
+        for site in FIVE_SITES:
             assert any(site in h for h in hosts), f"{name} missing {site}"
         assert hosts == EXPECTED_HOSTS, f"{name}: {sorted(hosts)}"
 
@@ -75,12 +77,12 @@ def test_firefox_manifest_has_gecko_id():
     assert gecko.get("id"), "firefox manifest needs gecko id"
 
 
-def test_content_scripts_cover_four_sites_and_exist():
+def test_content_scripts_cover_five_sites_and_exist():
     for name, data in _manifests().items():
         scripts = data["content_scripts"]
         assert scripts, name
         matches = [m for block in scripts for m in block.get("matches", [])]
-        for site in FOUR_SITES:
+        for site in FIVE_SITES:
             assert any(site in m for m in matches), f"{name} missing {site}"
         for block in scripts:
             for js in block.get("js", []):

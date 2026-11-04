@@ -8,7 +8,7 @@
  * - Bridges messages between content scripts and the local app. */
 
 var SF_BASE = 'http://127.0.0.1:8765';
-var SF_SITES = ['chatgpt', 'claude', 'gemini', 'meta'];
+var SF_SITES = ['chatgpt', 'claude', 'gemini', 'meta', 'grok'];
 
 function getState() {
   return new Promise(function (resolve) {
@@ -38,6 +38,7 @@ function hostToSiteId(host) {
   if (h.indexOf('claude.ai') !== -1) return 'claude';
   if (h.indexOf('gemini.google.com') !== -1) return 'gemini';
   if (h.indexOf('meta.ai') !== -1) return 'meta';
+  if (h.indexOf('grok.com') !== -1) return 'grok';
   return null;
 }
 

@@ -10,7 +10,9 @@
     "https://claude.ai/*",
     "https://gemini.google.com/*",
     "https://meta.ai/*",
-    "https://www.meta.ai/*"
+    "https://www.meta.ai/*",
+    "https://grok.com/*",
+    "https://www.grok.com/*"
   ],
   "background": {
     "service_worker": "src/background.js"
@@ -38,7 +40,9 @@
         "https://claude.ai/*",
         "https://gemini.google.com/*",
         "https://meta.ai/*",
-        "https://www.meta.ai/*"
+        "https://www.meta.ai/*",
+        "https://grok.com/*",
+        "https://www.grok.com/*"
       ],
       "js": ["src/logic.js", "src/adapters.js", "src/content.js"],
       "run_at": "document_idle"

@@ -50,13 +50,14 @@ def validate_manifest(data: dict, target: str, dev: bool = False) -> list[str]:
     hosts = set(data.get("host_permissions", []))
     if "http://127.0.0.1:8765/*" not in hosts:
         errors.append("host_permissions must include http://127.0.0.1:8765/*")
-    for site in ("chatgpt.com", "claude.ai", "gemini.google.com", "meta.ai"):
+    for site in ("chatgpt.com", "claude.ai", "gemini.google.com", "meta.ai", "grok.com"):
         if not any(site in h for h in hosts):
             errors.append(f"host_permissions missing site {site}")
     allowed = {"http://127.0.0.1:8765/*",
                "https://chatgpt.com/*", "https://claude.ai/*",
                "https://gemini.google.com/*", "https://meta.ai/*",
-               "https://www.meta.ai/*"}
+               "https://www.meta.ai/*",
+               "https://grok.com/*", "https://www.grok.com/*"}
     if dev:
         allowed |= set(DEV_TEST_HOSTS)
     if len(hosts - allowed) != 0:
