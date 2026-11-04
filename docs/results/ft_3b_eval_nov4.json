@@ -1,0 +1,80 @@
+{
+  "base-3b": {
+    "test_split": {
+      "judges": {
+        "base-3b": {
+          "n": 89,
+          "accuracy": 0.0,
+          "beacon_f1": 0.0,
+          "leak_rate": 1.0,
+          "false_alarm_rate": 0.0,
+          "valid_json_rate": 0.0,
+          "latency_s": {
+            "p50": 5.231,
+            "p95": 11.567
+          }
+        }
+      },
+      "n_test": 89
+    },
+    "final_set_judge_only": {
+      "caught": "0/26",
+      "benign_flagged": "0/14",
+      "invalid_json": 40,
+      "latency_p50_s": 4.628
+    },
+    "wall_s": 831.3
+  },
+  "tuned-3b": {
+    "test_split": {
+      "judges": {
+        "tuned-3b": {
+          "n": 89,
+          "accuracy": 0.3371,
+          "beacon_f1": 1.0,
+          "leak_rate": 0.0,
+          "false_alarm_rate": 0.0,
+          "valid_json_rate": 0.6742,
+          "latency_s": {
+            "p50": 3.551,
+            "p95": 4.722
+          }
+        }
+      },
+      "n_test": 89
+    },
+    "final_set_judge_only": {
+      "caught": "23/26",
+      "benign_flagged": "2/14",
+      "invalid_json": 2,
+      "latency_p50_s": 3.538
+    },
+    "wall_s": 473.5
+  },
+  "glimmer-30b": {
+    "test_split": {
+      "judges": {
+        "glimmer-30b": {
+          "n": 89,
+          "accuracy": 0.1236,
+          "beacon_f1": 0.24,
+          "leak_rate": 0.0,
+          "false_alarm_rate": 0.0,
+          "valid_json_rate": 1.0,
+          "latency_s": {
+            "p50": 7.309,
+            "p95": 10.027
+          }
+        }
+      },
+      "n_test": 89
+    },
+    "final_set_judge_only": {
+      "caught": "25/26",
+      "benign_flagged": "13/14",
+      "invalid_json": 2,
+      "latency_p50_s": 7.321
+    },
+    "wall_s": 989.0
+  }
+}

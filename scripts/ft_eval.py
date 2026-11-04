@@ -151,8 +151,13 @@ def base_predictor(model_id: str, adapter_dir: Path | None = None) -> Predictor:
     from ft_train import SYSTEM_PROMPT  # noqa: E402
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
+    import torch  # noqa: E402
+    from transformers import BitsAndBytesConfig  # noqa: E402
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, device_map="auto", load_in_4bit=True)
+        model_id, device_map="auto",
+        quantization_config=BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16))
     if adapter_dir is not None:
         model = PeftModel.from_pretrained(model, str(adapter_dir))
 

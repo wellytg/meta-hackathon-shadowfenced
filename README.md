@@ -132,6 +132,25 @@ about 10–20 s each.
 
 Reproduce any number through one runner — see [`eval/`](eval/README.md): `python eval/run.py --suite final --judge glimmer` writes a fresh `runs/eval_<date>_final_glimmer.json`.
 
+### Experiment: a small trained judge (Nov 4, not used in the product)
+
+We trained Llama 3.2 3B Instruct (QLoRA, 4-bit) on our 722 synthetic judge examples: 3 epochs,
+20 minutes on one RTX 5070 (12 GB). We then compared three judges on their own, without the code
+tiers, on the sealed final set, which was not in the training data:
+
+| Judge (alone) | Sensitive caught | Harmless flagged | Unreadable answers | Median time |
+|---|---|---|---|---|
+| Llama 3.2 3B, base | 0 of 26 | 0 of 14 | 40 of 40 | 4.6 s |
+| **Llama 3.2 3B, trained** | **23 of 26** | **2 of 14** | 2 of 40 | **3.5 s** |
+| Muse Glimmer 30B | 25 of 26 | 13 of 14 | 2 of 40 | 7.3 s |
+
+The base model never answered in the judge format. After training, the 3B judge is about twice as
+fast as Glimmer and far less over-cautious, but it misses 3 sensitive messages to Glimmer's 1.
+In the full pipeline the code tiers settle most of Glimmer's harmless flags, so Glimmer stays the
+judge. This is one run on 40 messages. Details and the held-out split (89 rows) are in
+`docs/results/ft_3b_eval_nov4.json`; method in [`docs/FINETUNE.md`](docs/FINETUNE.md). We trained
+Llama 3.2 3B rather than Glimmer because a 30B model does not fit for training on a 12 GB GPU.
+
 ## Known limits
 
 - Review rate: 27.5 % of messages still need a person, and harmless messages with sensitive words
@@ -147,8 +166,8 @@ Reproduce any number through one runner — see [`eval/`](eval/README.md): `pyth
   finding, and text aimed at the safety check stays held.
 - Partial leaks: names, a date of birth and a street address without context words (3 of 26 in
   the final set). Tighter name and address detectors are the next step.
-- No model training was done. `docs/FINETUNE.md` describes a distillation pipeline that was not
-  run; it is future work.
+- The product uses no trained model: Glimmer 30B is the judge as released by Meta. One training
+  experiment (a small 3B judge, below) was run on Nov 4 and is not wired into the app.
 - Exact SAM masks need the cloud mode, which sends the screenshot to the Meta Model API;
   the local mode keeps it on the PC but uses rectangular boxes.
 

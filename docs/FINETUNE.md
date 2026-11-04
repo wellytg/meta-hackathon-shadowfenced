@@ -83,3 +83,29 @@ Glimmer on class accuracy and leak rate while keeping latency near the
 base 3B (~1 s vs ~11 s). If leak rate does not move, add more
 near-miss/beacon rows and re-run; if valid-JSON rate drops, the verdict
 schema in the training completions diverged from the judge schema.
+
+## Results (Nov 4, one run)
+
+Trained on the 722-row training split (89 validation, 89 test) with `scripts/ft_train.py`
+(QLoRA, 3 epochs, about 20 minutes on an RTX 5070 12 GB; final-step training loss 0.19).
+Evaluated with `scripts/ft_eval_seq.py`, which loads one judge at a time so they fit on a 12 GB GPU:
+
+```
+python scripts/ft_eval_seq.py <path-to-Llama-3.2-3B-Instruct> runs/ft/adapter runs/ft/eval_seq.json
+```
+
+Sealed final set (`corpus/final.yaml`, 40 messages, none in the training data), judge alone:
+
+| Judge | Sensitive caught | Harmless flagged | Invalid JSON | p50 latency |
+|---|---|---|---|---|
+| base 3B | 0/26 | 0/14 | 40 | 4.6 s |
+| tuned 3B | 23/26 | 2/14 | 2 | 3.5 s |
+| Glimmer 30B | 25/26 | 13/14 | 2 | 7.3 s |
+
+Held-out test split (89 rows): the tuned 3B returned valid JSON on 67 % of rows (base 0 %), with
+beacon F1 1.0 and no leaks. Class accuracy is 34 %; Glimmer scores low on this split (12 %)
+because its production prompt uses its own class names, so that column compares formats more than
+judgement. Raw numbers: `docs/results/ft_3b_eval_nov4.json`.
+
+The adapter is not committed and the app does not use it. Next steps: more near-miss rows for the
+3 misses, a stricter JSON format, and a run inside the full pipeline.
