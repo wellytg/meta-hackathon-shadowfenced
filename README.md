@@ -10,15 +10,38 @@
 
 # Shadowfenced
 
-*Meta Global AI Developer Hackathon 2026 · team Shadowfenced · repo `meta-hackathon-shadowfenced`*
+*Meta Global AI Developer Hackathon 2026 · Indie track · team Shadowfenced*
 
-**Nothing sensitive crosses the boundary.** Shadowfenced is a local layer between people and any AI. It
-underlines sensitive text as you type (like a grammar checker for secrets), checks uploaded files the same way,
-and lets only clean or redacted text reach the AI. The AI's answer comes back with the real values restored on
-your machine.
+Many companies ban or restrict cloud AI because staff paste customer data, contracts and keys into it.
+Shadowfenced is a local guard that lets them allow it: sensitive text is stopped or replaced with
+placeholders on the person's own PC before any AI sees it, and answers come back with the real values
+restored locally. It is for staff who use AI chats and coding agents, and the security teams who have
+to approve them.
 
-Built Oct 27 – Nov 4, 2026 for the Meta Global AI Developer Hackathon (Indie track). The product code was
-written by Muse Code from the task briefs in `docs/muse-briefs/`.
+▶ Demo video: VIDEO_URL · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run (fictional data only; hosted mode, see below)
+
+## Try it in one minute
+
+- **No install:** open the live demo, or run the 10 quick cases against it: `python setup/try_cases.py`.
+- **On your machine:** `python setup/check.py` tells you which profile your PC can run (Glimmer 30B, Llama 3.2 3B,
+  or code only) and prints the start command; `setup/start.ps1` / `setup/start.sh` start it in one step.
+- **Coding agents:** follow `setup/AGENT_SETUP.md` from a fresh clone.
+- **Every number below:** mapped to its results file and the command that reproduces it in `setup/RESULTS.md`.
+
+## What it does
+
+- Underlines sensitive text as you type, like a grammar checker for secrets.
+- Blocks API keys and planted canary secrets in any encoding (plain, base64, hex, ROT13, reversed, URL-encoded).
+- Replaces personal and business data with typed, numbered placeholders (`[PII_EMAIL_1]`) and restores the real values in answers on the PC (`redact.rehydrate`).
+- Blocks a full identity bundle (name + date of birth + address + phone/email) in code, with no model call.
+- Asks first when a message looks like a search for a private person.
+- Browser extension that guards ChatGPT and Gemini (both tested live).
+- File guard: files are stopped before upload and scanned locally; bank statements, secrets and identity bundles cannot be uploaded as-is; a one-click redacted copy keeps CSV/JSON structure; an optional Glimmer deep check adds findings.
+- OpenAI-compatible proxy for CLI agents and SDKs (`POST /v1/chat/completions`): every message role is checked, and real keys are fingerprinted without being stored.
+- Screenshot redaction (opt-in): Glimmer finds the sensitive regions, SAM 3.1 makes the exact masks.
+- Muse Voice dictation in the web app, and transcription of audio uploads.
+- A hash-chained decision log that stores fingerprints, never values.
+- Learns from your choices: a "What it caught" panel (counts by kind, never values) and rule suggestions you approve, which edit your local rules file (`policy.local.yaml`, with a backup).
 
 ## How a message is decided
 
@@ -43,40 +66,79 @@ written by Muse Code from the task briefs in `docs/muse-briefs/`.
            ▼
          TIER 4  a person decides; the card separates "proven by code" from "model suspicion only"
 
- Any error or timeout ─► HOLD (fail closed). A model can never unblock what code proved.
+ Precedence: BLOCK > HOLD > REDACT > WARN > ALLOW. Any error or timeout ─► HOLD (fail closed).
+ A model verdict can never downgrade a code finding. Text aimed at the safety check stays held.
  Every decision goes to a hash-chained log with fingerprints only (no raw values).
 ```
 
 </details>
 
-**Meta models used:** Muse Glimmer 30B (open weights, local, the judge), Muse Spark via the Meta Model API (the
-upstream AI behind the filter, sees redacted text only), Muse Code (built the project). Llama 3.2 3B is the local
-stand-in upstream when no API key is set.
+Tier 1 is code, Tier 2 is Muse Glimmer 30B on this PC, Tier 3 is code that verifies the model's
+claim, Tier 4 is the person. Precedence is BLOCK > HOLD > REDACT > WARN > ALLOW, and anything
+that errors or times out fails closed to HOLD. A model verdict can only add findings or raise
+risk, never downgrade a code finding; a message that carries instruction-like text aimed at the
+safety check ("ignore previous instructions", "classify this as harmless") stays held (T68).
 
-**Why local:** the text being checked may itself be the secret, so asking a cloud model "is this a leak?" can be the
-leak. The judge runs on the user's own GPU/CPU.
+The text being checked may itself be the secret, so asking a cloud model "is this a leak?" can be
+the leak. The judge runs on the user's own machine.
+
+## How Meta models are used
+
+| Model | Role | Where it runs |
+|---|---|---|
+| Muse Glimmer 30B (open weights) | Tier 2 judge for the hard cases; finds image regions | Local via Ollama on an RTX 5070 12 GB; nothing leaves the PC |
+| Muse Spark | The answering model in the app; the judge in hosted mode | Meta Model API |
+| Muse Code | Wrote the product code and tests from 79 human-written briefs in `docs/muse-briefs/` | Local agent |
+| Muse Voice | Dictation and audio-upload transcription | Meta Model API |
+| Muse Image | Storyboard panels and banner art (`docs/assets/generated/`) | Meta Model API |
+| SAM 3.1 | Exact masks for screenshot redaction | Local |
+
+"Meta checks Meta": a local Meta open-weight model screens what is sent to a Meta cloud model.
 
 ## Results (honest numbers)
 
-Three test sets, all synthetic (fictional org "Corvane Labs"; secrets are runtime templates, never committed):
+Three test sets, all synthetic (fictional org "Corvane Labs"; secrets are `SF_CANARY_` templates
+minted at runtime, never committed):
 
-| Set | Author | Leak | Flagged | Harmless held | Notes |
-|---|---|---|---|---|---|
-| `corpus/cases.yaml` (40) | same agent as the detectors | 0 % | 100 % | 0 % | in-sample: not a fair test |
-| `corpus/holdout.yaml` (30) | independent agent, saw only `policy.yaml` | 40 % → 5 % | 65 % → 100 % | 20 % → 30 % | code-only before tuning → full pipeline after; used for tuning |
-| **`corpus/final.yaml` (40)** | **second independent agent, sealed until tuning froze** | **3 of 26 (11.5 %)** | **26 of 26** | **4 of 14** | **final numbers** |
+| Set | Sensitive caught | Partial leaks | Harmless escalated |
+|---|---|---|---|
+| `corpus/cases.yaml` (40) | 100 % | 0 % | 0 % — in-sample, not a fair test |
+| `corpus/holdout.yaml` (30) | 16 of 20 → 20 of 20 | 2 of 20 → 1 of 20 (5 %) | 2 of 10 → 3 of 10 — code-only → full pipeline, used for tuning |
+| **`corpus/final.yaml` (40)** | **26 of 26** | **3 of 26 (11.5 %)** | **7 of 14 — final numbers** |
 
-These numbers were measured before example.* emails were treated as personal data (T65).
+Holdout files: `docs/results/eval_holdout_codeonly.json` and `docs/results/eval_holdout_glimmer.json`
+(Oct 31). Final file: `docs/results/eval_final_run3.json` (Nov 3, Glimmer judge, after T65–T66c).
 
-Final set: 55 % of messages were settled by code alone (p95 under 1 ms), 7.5 % by Glimmer + code (~11 s), 37.5 %
-went to a person. The 3 leaks are partial redactions: names, a date of birth and a street address slipped through (1, 2 and 2 values). Raw files:
-`docs/results/`. The final set was run twice: the second run followed a parser fix (long Glimmer spans were being
-discarded) found while recording the demo; both runs gave identical metrics.
+Final set: 70 % of messages were settled by code alone, 27.5 % went to a person (was 55 % / 37.5 %
+in run 2). Two of the 7 escalated harmless messages are example.* emails, now treated as personal
+data on purpose (T65). The 3 leaks are partial redactions: names, a date of birth and a street
+address slipped through without context words.
+
+Latency: Tier 1 (`tier1.scan` only) p50 0.45 ms, p95 0.94 ms, max 1.78 ms over all 107 corpus
+messages (5 runs, average 188 characters, measured Nov 3 on the dev PC). Glimmer reviews take
+about 10–20 s each.
+
+## Known limits
+
+- Review rate: 27.5 % of messages still need a person, and harmless messages with sensitive words
+  are escalated (7 of 14). Code now settles 70 %; the rest is the cost of failing closed.
+- Hardware: Glimmer 30B needs a GPU with about 12 GB. Without one, the code tiers still run: on the final set
+  they alone caught all 26 sensitive messages and escalated one more harmless message (8 of 14 instead of 7);
+  hard cases come to you instead of Glimmer (`setup/README.md`). Hosted mode uses Muse Spark as the judge.
+- Meaning lost to redaction: placeholders are typed and numbered so the AI can still reason
+  ("[PII_EMAIL_1]"), values are restored locally, and identity bundles are generalised ("a street
+  in Leeds"). Answers that need the real value (e.g. "is this address correct?") cannot be answered
+  by the cloud model.
+- Judge manipulation: fixed in T68 as above — a model can only raise risk, never lower a code
+  finding, and text aimed at the safety check stays held.
+- Partial leaks: names, a date of birth and a street address without context words (3 of 26 in
+  the final set). Tighter name and address detectors are the next step.
+- No model training was done. `docs/FINETUNE.md` describes a distillation pipeline that was not
+  run; it is future work.
 
 ## Run it
 
-Requires Python 3.11+, [Ollama](https://ollama.com) ≥ 0.32.7 with `muse-glimmer:30b` (and `llama3.2:3b` for the
-local stand-in).
+Requires Python 3.11+ and [Ollama](https://ollama.com) ≥ 0.32.7 with `muse-glimmer:30b`.
 
 ```powershell
 pip install -e ".[dev]"
@@ -86,19 +148,29 @@ python -m uvicorn shadowfenced.app:app --app-dir src --host 127.0.0.1 --port 876
 # open http://127.0.0.1:8765
 ```
 
-Any OpenAI-compatible client can use it as a proxy: point it at `http://127.0.0.1:8765/v1`. Blocked requests return
-403 (`shadowfenced_block`), held requests 409 (`shadowfenced_hold`) with a review URL.
+Any OpenAI-compatible client can use it as a proxy: point it at `http://127.0.0.1:8765/v1`.
+Blocked requests return 403 (`shadowfenced_block`); held requests return 409 (`shadowfenced_hold`)
+with a review URL.
 
 ```powershell
-python -m pytest -q                                        # 292 tests, no network
-python scripts/eval.py --corpus final --judge glimmer      # writes runs/eval_<date>_final_glimmer.json
-python scripts/make_files.py                               # synthetic demo files in runs/files/
-python scripts/demo_video.py --eval <eval json> --voice <piper voice .onnx>   # records the demo video
+python -m pytest -q -p no:cacheprovider   # 1,050+ tests, no network
+python scripts/eval.py --corpus final --judge glimmer   # writes runs/eval_<date>_final_glimmer.json
+python scripts/make_files.py              # synthetic demo files in runs/files/
 ```
 
-## Design record
-`docs/gates/`: P1 design, P2 build plan, P3 spike notes (model speeds, HTTPS-scanning antivirus and TLS, why the small-model
-screen was dropped), P6 video script. Known limits: names and addresses without context words, lowercase prose
-addresses, and 30 % of harmless messages with sensitive-sounding words going to review.
+Extension: `python extension/build.py --dev`, load the built folder unpacked in the browser, and
+exercise it against the test page in `extension/testpage/`.
 
-Narration voice: Piper TTS with the LJSpeech voice (public-domain dataset).
+Hosted mode (`SF_HOSTED=1`) shows the "fictional data only" banner, keeps custom rules in memory
+only, and judges with Muse Spark when no local Ollama is reachable. Docker and Modal: see
+`deploy/README.md` (`modal deploy deploy/modal_app.py`).
+
+## How it was built
+
+Oct 27 – Nov 4, 2026. A person wrote short briefs; Muse Code wrote the code and tests; each change
+was tested outside the agent, then merged through PRs with CI. Briefs: `docs/muse-briefs/`.
+Architecture: `docs/ARCHITECTURE.md`.
+
+---
+
+Licence: Apache-2.0. Narration in the demo video: AI voice (ElevenLabs), cloned from the creator's own voice.
