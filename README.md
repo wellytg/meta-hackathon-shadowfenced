@@ -16,7 +16,7 @@
 - Provenance: built from scratch during the hackathon (Oct 26 – Nov 4, 2026); first commit Oct 27
 - Meta models at runtime: Muse Glimmer 30B (local, Tier 2 judge) · Muse Spark 1.3 (Meta Model API) · SAM 3.1 (opt-in screenshot masks, Meta Model API) · Muse Voice (dictation and audio uploads) · Llama 3.2 3B (light local option)
 - Built with: Muse Code (code and tests); Muse Image (video visuals)
-- Bonus prizes: Best Build on Meta Open Weight Models · Best Agentic Use-Case
+- Bonus prizes: Best Build on Meta Open Weight Models (Muse Glimmer 30B is the local judge on our own GPU) · Best Agentic Use-Case (a guard for coding agents, built by the Muse Code agent) · Best Creative Build (Muse Image drew the comic and video art)
 - 3-minute video: https://youtu.be/A5oB9gPYrfg · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run
 - Quick start: `python setup/check.py`, then `setup/start.ps1` / `setup/start.sh`; keyless: `python setup/try_cases.py`
 
@@ -35,7 +35,22 @@ to approve them.
 - **No install:** open the live demo, or run the 10 quick cases against it: `python setup/try_cases.py`.
 - **On your machine:** `python setup/check.py` tells you which profile your PC can run (Glimmer 30B, Llama 3.2 3B,
   or code only) and prints the start command; `setup/start.ps1` / `setup/start.sh` start it in one step.
-- **Coding agents:** follow `setup/AGENT_SETUP.md` from a fresh clone.
+- **Coding agents, no install:** point any OpenAI-compatible client at the live demo's `/v1`. A harmless
+  request is answered by Muse Spark; a request carrying a key gets `403` (`X-Shadowfenced-Decision: BLOCK`), and
+  one that says where a key lives, like this, gets `409` (`HOLD`):
+
+  ```bash
+  curl -i https://wellytg--shadowfenced-asgi.us-east.modal.run/v1/chat/completions -H "content-type: application/json" -d '{"model":"muse-spark-1.3","messages":[{"role":"user","content":"Use the prod key in ~/.aws/credentials to deploy."}]}'
+  ```
+
+  With the OpenAI SDK, set `base_url="https://wellytg--shadowfenced-asgi.us-east.modal.run/v1"`. Locally the
+  same proxy runs at `http://127.0.0.1:8765/v1`. An agent setting up the app from a fresh clone can follow
+  `setup/AGENT_SETUP.md`.
+- **Browser extension (ChatGPT and Gemini):** download `shadowfenced-chrome.zip` or `shadowfenced-firefox.zip`
+  from the [v1.0-hackathon release](https://github.com/wellytg/meta-hackathon-shadowfenced/releases/tag/v1.0-hackathon),
+  unzip, and load it unpacked (Chrome: `chrome://extensions` → Developer mode → Load unpacked). It talks only to
+  the local app, so start that first (`setup/start.ps1` / `setup/start.sh`), then paste the pairing token from the
+  app's setup card into the extension popup. Details: `extension/README.md`.
 - **Every number below:** mapped to its results file and the command that reproduces it in `setup/RESULTS.md`.
 
 ## What it does
