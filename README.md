@@ -36,11 +36,11 @@ to approve them.
 - **On your machine:** `python setup/check.py` tells you which profile your PC can run (Glimmer 30B, Llama 3.2 3B,
   or code only) and prints the start command; `setup/start.ps1` / `setup/start.sh` start it in one step.
 - **Coding agents, no install:** point any OpenAI-compatible client at the live demo's `/v1`. A harmless
-  request is answered by Muse Spark; a request carrying a key gets `403` with `X-Shadowfenced-Decision: BLOCK`
-  (use fake keys only):
+  request is answered by Muse Spark; a request carrying a key gets `403` (`X-Shadowfenced-Decision: BLOCK`), and
+  one that says where a key lives, like this, gets `409` (`HOLD`):
 
   ```bash
-  curl -i https://wellytg--shadowfenced-asgi.us-east.modal.run/v1/chat/completions     -H "content-type: application/json"     -d '{"model":"muse-spark-1.3","messages":[{"role":"user","content":"deploy with AKIAIOSFODNN7EXAMPLE"}]}'
+  curl -i https://wellytg--shadowfenced-asgi.us-east.modal.run/v1/chat/completions -H "content-type: application/json" -d '{"model":"muse-spark-1.3","messages":[{"role":"user","content":"Use the prod key in ~/.aws/credentials to deploy."}]}'
   ```
 
   With the OpenAI SDK, set `base_url="https://wellytg--shadowfenced-asgi.us-east.modal.run/v1"`. Locally the
