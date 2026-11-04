@@ -126,7 +126,7 @@ def meta_judge(
     messages = [
         {
             "role": "system",
-            "content": judge_module.SYSTEM_PROMPT + " Reply with JSON only.",
+            "content": judge_module.SYSTEM_PROMPT + HOSTED_JUDGE_SCHEMA,
         },
         {"role": "user", "content": judge_module.quote_as_data(window)},
     ]
@@ -136,7 +136,38 @@ def meta_judge(
         )
     except Exception:
         return None
-    return judge_module._parse_content(answer)
+    return _parse_meta_judgement(answer)
+
+
+#: The local judge gets the verdict schema through Ollama's ``format``
+#: option; the Meta API call does not, so the keys and classes are
+#: spelled out here (T77). Without them every hosted review failed
+#: closed as "unavailable".
+HOSTED_JUDGE_SCHEMA = (
+    " Reply with one JSON object and nothing else, with exactly these keys:"
+    ' "cls" (one of "secret", "pii", "business", "beacon", "benign"),'
+    ' "is_beacon" (true or false), "sensitivity" (number 0 to 1),'
+    ' "confidence" (number 0 to 1), "span" (string).'
+)
+
+
+def _parse_meta_judgement(answer: Any) -> Any:
+    """Parse Spark's verdict: plain JSON, fenced JSON, or JSON in text.
+
+    Same strict schema as the local judge; None on anything else, so
+    the review still fails closed.
+    """
+    from . import judge as judge_module
+
+    if not isinstance(answer, str) or not answer.strip():
+        return None
+    direct = judge_module._parse_content(answer)
+    if direct is not None:
+        return direct
+    start, end = answer.find("{"), answer.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    return judge_module._parse_content(answer[start : end + 1])
 
 
 def meta_person_search(

@@ -1430,7 +1430,7 @@
     spinner.className = "spinner";
     var label = document.createElement("span");
     label.className = "ev-label";
-    label.textContent = checkingCue ? "Muse Glimmer is checking it on this PC… " : "Local Muse Glimmer (30B, on this PC) is reviewing\u2026 ";
+    label.textContent = hostedMode ? "Muse Spark is reviewing it (hosted demo)\u2026 " : checkingCue ? "Muse Glimmer is checking it on this PC… " : "Local Muse Glimmer (30B, on this PC) is reviewing\u2026 ";
     var elapsed = document.createElement("span");
     elapsed.className = "ev-elapsed";
     elapsed.textContent = "0s";

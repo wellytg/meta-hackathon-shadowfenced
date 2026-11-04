@@ -550,3 +550,46 @@ def test_renderer_links_are_inert_and_highlights_survive(rendered):
     assert "href" not in rendered["link"]
     assert "[x](javascript:alert(1))" in rendered["link"]
     assert '<span class="hl">world</span>' in rendered["highlight"]
+
+
+def test_spark_judge_prompt_names_schema_and_parses_fenced_json(hosted_env):
+    """T77: the Meta call has no ``format`` schema, so the prompt names the
+    keys, and a fenced or wrapped JSON answer still parses."""
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        content = "Here is my verdict:\n```json\n" + json.dumps(
+            _benign_payload(confidence=0.9)) + "\n```"
+        return httpx.Response(200, json={"choices": [
+            {"message": {"role": "assistant", "content": content}}]})
+
+    result = hosted_module.meta_judge(
+        "Summarise the life of Ada Lovelace",
+        transport=httpx.MockTransport(handler))
+    assert result is not None and result.cls == "benign"
+    system = json.loads(calls[0].content.decode("utf-8"))["messages"][0]["content"]
+    for key in ("cls", "is_beacon", "sensitivity", "confidence", "span"):
+        assert f'"{key}"' in system
+
+
+def test_spark_judge_garbage_still_fails_closed(hosted_env):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [
+            {"message": {"role": "assistant", "content": "I think it is fine."}}]})
+
+    assert hosted_module.meta_judge(
+        "x", transport=httpx.MockTransport(handler)) is None
+
+
+def test_hosted_hold_card_names_spark_not_glimmer():
+    from shadowfenced import app as app_module
+    card = {"judge": hosted_module.HOSTED_JUDGE_LABEL,
+            "title": "Glimmer checked it: nothing sensitive. Sent.",
+            "user_message": "Held for review.",
+            "model_suspicion_only": [{"why_unverified": "Glimmer unavailable"}]}
+    out = app_module._name_hosted_judge(card)
+    assert out["title"] == "Muse Spark checked it: nothing sensitive. Sent."
+    assert out["model_suspicion_only"][0]["why_unverified"] == "Muse Spark unavailable"
+    local = {"judge": None, "title": "Glimmer checked it: nothing sensitive. Sent."}
+    assert app_module._name_hosted_judge(local)["title"].startswith("Glimmer")

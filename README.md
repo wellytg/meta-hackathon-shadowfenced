@@ -98,7 +98,7 @@ the leak. The judge runs on the user's own machine.
 |---|---|---|
 | Muse Glimmer 30B (open weights) | Tier 2 judge for the hard cases; finds image regions | Local via Ollama on an RTX 5070 12 GB; nothing leaves the PC |
 | Muse Spark | The answering model in the app; the judge in hosted mode | Meta Model API |
-| Muse Code | Wrote the product code and tests from 84 briefs in `docs/muse-briefs/` (briefs drafted with AI assistance, steered, checked and approved by a person) | Local agent |
+| Muse Code | Wrote the product code and tests from the 87 brief files in `docs/muse-briefs/` (94 tasks; the video, made earlier, says 79) (briefs drafted with AI assistance, steered, checked and approved by a person) | Local agent |
 | Muse Voice | Dictation and audio-upload transcription | Meta Model API |
 | Muse Image | Storyboard panels and banner art (`docs/assets/generated/`) | Meta Model API |
 | SAM 3.1 | Exact masks for screenshot redaction (opt-in `on` mode; default `off`, `local` mode box-fills on this PC) | Meta Model API |
@@ -197,12 +197,14 @@ Extension: `python extension/build.py --dev`, load the built folder unpacked in 
 exercise it against the test page in `extension/testpage/`.
 
 Hosted mode (`SF_HOSTED=1`) shows the "fictional data only" banner, keeps custom rules in memory
-only, and judges with Muse Spark when no local Ollama is reachable. Docker and Modal: see
+only, and judges with Muse Spark when no local Ollama is reachable. In that mode Spark reads the
+held message in order to judge it, which is why the hosted demo is for fictional data only; in the
+local product Spark only ever receives the redacted text. Docker and Modal: see
 `deploy/README.md` (`modal deploy deploy/modal_app.py`).
 
 ## How it was built
 
-Oct 27 – Nov 4, 2026. The 84 briefs in `docs/muse-briefs/` were planned with AI assistance
+Oct 27 – Nov 4, 2026. The 87 brief files in `docs/muse-briefs/` were planned with AI assistance
 (brainstorming and drafting) and steered, checked and approved by a person; Muse Code wrote the code
 and tests; each change was tested outside the agent, then merged through PRs with CI. Pre-existing:
 open-source libraries and Meta's models.
