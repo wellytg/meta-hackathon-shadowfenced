@@ -21,4 +21,7 @@ USER sfuser
 
 EXPOSE 8765
 
+# 0.0.0.0 is required here (the server must accept the container's
+# forwarded port); loopback-only exposure is enforced at publish time
+# (compose maps 127.0.0.1:8765:8765, never 0.0.0.0).
 CMD ["uvicorn", "shadowfenced.app:app", "--host", "0.0.0.0", "--port", "8765"]

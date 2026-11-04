@@ -473,7 +473,14 @@ async def ext_scan_file(
 
     # Sync read of the spooled upload: no await, so tests drive this
     # route without an event loop (socket creation is forbidden there).
-    data = file.file.read()
+    # The size is proven before the body is trusted (T81, mirrors
+    # app._read_upload_capped): a declared size past the cap answers
+    # without reading at all, otherwise one bounded read (cap + 1).
+    declared = getattr(file, "size", None)
+    if isinstance(declared, int) and declared >= 0 and declared > fileguard.EXT_SCAN_MAX_BYTES:
+        data = bytes(fileguard.EXT_SCAN_MAX_BYTES + 1)
+    else:
+        data = bytes(file.file.read(fileguard.EXT_SCAN_MAX_BYTES + 1) or b"")
     payload = fileguard.scan_upload(
         file.filename or "upload",
         bytes(data or b""),
