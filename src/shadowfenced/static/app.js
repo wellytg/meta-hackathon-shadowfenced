@@ -1327,11 +1327,12 @@
 
   function checkingCardModel(resp, elapsedSec) {
     var cue = holdCueWord(resp);
+    var checker = hostedMode ? "Muse Spark is checking it (hosted demo)" : "Muse Glimmer is checking it on this PC";
     var why = cue
       ? "Contains a word that can point to personal data ('" + cue + "'); " +
-        "Muse Glimmer is checking it on this PC"
+        checker
       : "Contains a word that can point to personal data; " +
-        "Muse Glimmer is checking it on this PC";
+        checker;
     var sending = holdPendingMessage(resp);
     if (typeof resp.sent_text === "string" && resp.sent_text) sending = resp.sent_text;
     var action = "Checking… (" + (elapsedSec || 0) + "s)";
