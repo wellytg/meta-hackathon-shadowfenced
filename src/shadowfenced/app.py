@@ -1513,7 +1513,24 @@ def hold_status(hold_id: str) -> Any:
     hold = holds.HOLDS.get(hold_id)
     if hold is None:
         return _hold_not_found(hold_id)
-    return holds.hold_card(hold)
+    return _name_hosted_judge(holds.hold_card(hold))
+
+
+def _name_hosted_judge(card: Any) -> Any:
+    """Hosted demo: the card text names the judge that really ran (T77).
+
+    The hold texts say "Glimmer"; when Muse Spark judged instead (hosted
+    mode, no local Ollama), say "Muse Spark" so the page is accurate.
+    """
+    if not isinstance(card, dict) or card.get("judge") != hosted_module.HOSTED_JUDGE_LABEL:
+        return card
+    for key in ("title", "user_message"):
+        if isinstance(card.get(key), str):
+            card[key] = card[key].replace("Glimmer", "Muse Spark")
+    for item in card.get("model_suspicion_only") or []:
+        if isinstance(item, dict) and isinstance(item.get("why_unverified"), str):
+            item["why_unverified"] = item["why_unverified"].replace("Glimmer", "Muse Spark")
+    return card
 
 
 @app.post("/api/holds/{hold_id}/rule")
