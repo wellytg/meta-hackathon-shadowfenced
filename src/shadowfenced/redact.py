@@ -105,11 +105,56 @@ def _bare_pattern(lookup: dict[str, str]) -> re.Pattern[str] | None:
                       re.IGNORECASE)
 
 
+#: Markdown inline link/image targets: only the ``(target)`` part is a
+#: no-restore zone; the display text restores normally.
+_LINK_TARGET_RE = re.compile(r"!?\[[^\]\n]*\]\(([^)\n]*)\)")
+
+#: Bare URLs (any scheme, plus mailto:) up to whitespace or a quote or
+#: angle bracket. Deliberately over-wide: covering a neighbouring char
+#: only keeps one more placeholder redacted, while missing a URL would
+#: leak a value into a link the user might open.
+_BARE_URL_RE = re.compile(r"(?:[A-Za-z][A-Za-z0-9+.-]*://|mailto:)[^\s<>\"']+")
+
+
+def _url_skip_spans(answer: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """No-restore zones: markdown link/image targets, then bare URLs (T81)."""
+    targets = [
+        (match.start(1), match.end(1))
+        for match in _LINK_TARGET_RE.finditer(answer)
+    ]
+    urls = [
+        (match.start(), match.end())
+        for match in _BARE_URL_RE.finditer(answer)
+    ]
+    return targets, urls
+
+
+def _skip_kind_at(
+    pos: int,
+    targets: list[tuple[int, int]],
+    urls: list[tuple[int, int]],
+) -> str | None:
+    """Why position ``pos`` keeps its placeholder, if it does (T81)."""
+    for start, end in targets:
+        if start <= pos < end:
+            return "link target"
+    for start, end in urls:
+        if start <= pos < end:
+            return "URL"
+    return None
+
+
 def _restore_bare(
     segment: str, lookup: dict[str, str], pattern: re.Pattern[str],
-    out_len: int,
+    out_len: int, base: int = 0,
+    targets: list[tuple[int, int]] | None = None,
+    urls: list[tuple[int, int]] | None = None,
 ) -> tuple[str, list[dict], int]:
-    """Restore bare placeholder names inside one bracket-free segment."""
+    """Restore bare placeholder names inside one bracket-free segment.
+
+    ``base`` is the segment's offset in the full answer, so URL zones
+    (computed over the whole answer) still line up.
+    """
     pieces: list[str] = []
     highlights: list[dict] = []
     cursor = 0
@@ -117,6 +162,21 @@ def _restore_bare(
         canonical = f"[{match.group(1).upper()}]"
         value = lookup.get(canonical)
         if value is None:
+            continue
+        kind = _skip_kind_at(
+            base + match.start(), targets or [], urls or []
+        )
+        if kind is not None:
+            pieces.append(segment[cursor:match.end()])
+            start = out_len + match.start() - cursor
+            length = match.end() - match.start()
+            highlights.append(
+                {"start": start, "end": start + length,
+                 "placeholder": canonical,
+                 "note": f"left redacted inside a {kind}"}
+            )
+            out_len += match.end() - cursor
+            cursor = match.end()
             continue
         pieces.append(segment[cursor:match.start()])
         start = out_len + match.start() - cursor
@@ -145,11 +205,17 @@ def rehydrate(
     into the returned text and unmatched lists canonical placeholders
     with no mapping. Bare names with no mapping are plain text: they
     are left alone and never reported as unmatched.
+
+    A placeholder sitting inside a URL or a markdown link/image target
+    is never restored (the value would leak into a link the user might
+    open): the placeholder stays in place and the highlights carry a
+    ``note`` entry pointing at it.
     """
     if not mapping and PLACEHOLDER_RE.search(answer) is None:
         return answer, [], []
     lookup = {_canonical(*_split_key(k)): v for k, v in mapping.items()}
     bare = _bare_pattern(lookup)
+    targets, urls = _url_skip_spans(answer)
     highlights: list[dict] = []
     unmatched: list[str] = []
     parts: list[str] = []
@@ -160,7 +226,7 @@ def rehydrate(
         gap = answer[cursor:match.start()]
         if bare is not None and gap:
             restored, gap_marks, out_len = _restore_bare(
-                gap, lookup, bare, out_len
+                gap, lookup, bare, out_len, cursor, targets, urls
             )
             parts.append(restored)
             highlights.extend(gap_marks)
@@ -174,19 +240,34 @@ def rehydrate(
             if canonical not in unmatched:
                 unmatched.append(canonical)
         else:
-            parts.append(value)
-            highlights.append(
-                {
-                    "start": out_len,
-                    "end": out_len + len(value),
-                    "placeholder": canonical,
-                }
-            )
-            out_len += len(value)
+            kind = _skip_kind_at(match.start(), targets, urls)
+            if kind is not None:
+                parts.append(match.group(0))
+                highlights.append(
+                    {
+                        "start": out_len,
+                        "end": out_len + match.end() - match.start(),
+                        "placeholder": canonical,
+                        "note": f"left redacted inside a {kind}",
+                    }
+                )
+                out_len += match.end() - match.start()
+            else:
+                parts.append(value)
+                highlights.append(
+                    {
+                        "start": out_len,
+                        "end": out_len + len(value),
+                        "placeholder": canonical,
+                    }
+                )
+                out_len += len(value)
         cursor = match.end()
     tail = answer[cursor:]
     if bare is not None and tail:
-        restored, tail_marks, out_len = _restore_bare(tail, lookup, bare, out_len)
+        restored, tail_marks, out_len = _restore_bare(
+            tail, lookup, bare, out_len, cursor, targets, urls
+        )
         parts.append(restored)
         highlights.extend(tail_marks)
     else:
