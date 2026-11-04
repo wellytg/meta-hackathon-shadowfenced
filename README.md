@@ -17,7 +17,7 @@
 - Meta models at runtime: Muse Glimmer 30B (local, Tier 2 judge) · Muse Spark 1.3 (Meta Model API) · SAM 3.1 (opt-in screenshot masks, Meta Model API) · Muse Voice (dictation and audio uploads) · Llama 3.2 3B (light local option)
 - Built with: Muse Code (code and tests); Muse Image (video visuals)
 - Bonus prizes: Best Build on Meta Open Weight Models · Best Agentic Use-Case
-- 3-minute video: https://youtu.be/v1Njzg2lkus · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run
+- 3-minute video: https://youtu.be/A5oB9gPYrfg · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run
 - Quick start: `python setup/check.py`, then `setup/start.ps1` / `setup/start.sh`; keyless: `python setup/try_cases.py`
 
 *Meta Global AI Developer Hackathon 2026 · Indie track · team Shadowfenced*
@@ -28,7 +28,7 @@ placeholders on the person's own PC before any AI sees it, and answers come back
 restored locally. It is for staff who use AI chats and coding agents, and the security teams who have
 to approve them.
 
-▶ [Demo video (2:48)](https://youtu.be/v1Njzg2lkus) · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run (fictional data only; hosted mode, see below)
+▶ [Demo video (2:57)](https://youtu.be/A5oB9gPYrfg) · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run (fictional data only; hosted mode, see below)
 
 ## Try it in one minute
 
