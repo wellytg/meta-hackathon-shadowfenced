@@ -18,7 +18,7 @@ placeholders on the person's own PC before any AI sees it, and answers come back
 restored locally. It is for staff who use AI chats and coding agents, and the security teams who have
 to approve them.
 
-▶ Demo video: VIDEO_URL · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run (fictional data only; hosted mode, see below)
+▶ [Demo video (2:48)](https://youtu.be/v1Njzg2lkus) · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run (fictional data only; hosted mode, see below)
 
 ## Try it in one minute
 
