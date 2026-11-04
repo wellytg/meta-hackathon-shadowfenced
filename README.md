@@ -10,6 +10,16 @@
 
 # Shadowfenced
 
+## Submission overview
+
+- Track: Indie Developer · problem statement: Push the Frontier
+- Provenance: built from scratch during the hackathon (Oct 26 – Nov 4, 2026); first commit Oct 27
+- Meta models at runtime: Muse Glimmer 30B (local, Tier 2 judge) · Muse Spark 1.3 (Meta Model API) · SAM 3.1 (opt-in screenshot masks, Meta Model API) · Muse Voice (dictation and audio uploads) · Llama 3.2 3B (light local option)
+- Built with: Muse Code (code and tests); Muse Image (video visuals)
+- Bonus prizes: Best Build on Meta Open Weight Models · Best Agentic Use-Case
+- 3-minute video: https://youtu.be/v1Njzg2lkus · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run
+- Quick start: `python setup/check.py`, then `setup/start.ps1` / `setup/start.sh`; keyless: `python setup/try_cases.py`
+
 *Meta Global AI Developer Hackathon 2026 · Indie track · team Shadowfenced*
 
 Many companies ban or restrict cloud AI because staff paste customer data, contracts and keys into it.
@@ -19,10 +29,6 @@ restored locally. It is for staff who use AI chats and coding agents, and the se
 to approve them.
 
 ▶ [Demo video (2:48)](https://youtu.be/v1Njzg2lkus) · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run (fictional data only; hosted mode, see below)
-
-Built from scratch during the Meta Global AI Developer Hackathon (Oct 26 – Nov 4, 2026); first commit Oct 27. Pre-existing: open-source libraries and Meta's models.
-
-Bonus prizes we are entering: **Best Build on Meta Open Weight Models** — Muse Glimmer 30B runs on our own GPU as the load-bearing Tier 2 judge; **Best Agentic Use-Case** — a guard for coding agents (OpenAI-compatible proxy, every message role checked, keys stopped), built by the Muse Code agent from 79 briefs.
 
 ## Try it in one minute
 
@@ -92,7 +98,7 @@ the leak. The judge runs on the user's own machine.
 |---|---|---|
 | Muse Glimmer 30B (open weights) | Tier 2 judge for the hard cases; finds image regions | Local via Ollama on an RTX 5070 12 GB; nothing leaves the PC |
 | Muse Spark | The answering model in the app; the judge in hosted mode | Meta Model API |
-| Muse Code | Wrote the product code and tests from 79 human-written briefs in `docs/muse-briefs/` | Local agent |
+| Muse Code | Wrote the product code and tests from 84 briefs in `docs/muse-briefs/` (briefs drafted with AI assistance, steered, checked and approved by a person) | Local agent |
 | Muse Voice | Dictation and audio-upload transcription | Meta Model API |
 | Muse Image | Storyboard panels and banner art (`docs/assets/generated/`) | Meta Model API |
 | SAM 3.1 | Exact masks for screenshot redaction (opt-in `on` mode; default `off`, `local` mode box-fills on this PC) | Meta Model API |
@@ -177,8 +183,10 @@ only, and judges with Muse Spark when no local Ollama is reachable. Docker and M
 
 ## How it was built
 
-Oct 27 – Nov 4, 2026. A person wrote short briefs; Muse Code wrote the code and tests; each change
-was tested outside the agent, then merged through PRs with CI. Briefs: `docs/muse-briefs/`.
+Oct 27 – Nov 4, 2026. The 84 briefs in `docs/muse-briefs/` were planned with AI assistance
+(brainstorming and drafting) and steered, checked and approved by a person; Muse Code wrote the code
+and tests; each change was tested outside the agent, then merged through PRs with CI. Pre-existing:
+open-source libraries and Meta's models.
 Architecture: `docs/ARCHITECTURE.md`.
 
 ---
