@@ -24,6 +24,14 @@ benchmark built from the synthetic sets.
 See `docs/security/`. Fixes from the Nov 4 review. DOCX parts the file guard
 misses. CSRF on the local console. Extension answer restore.
 
+## Extension watch
+
+List installed extensions that can read AI chat sites and warn about them.
+Needs the `management` permission, which shows an install warning, so it
+would be opt-in. Built-in browser assistants cannot be detected by an
+extension. Blocking or disabling other extensions is out of scope without
+the person's explicit choice.
+
 ## More places
 
 More AI sites in the extension. IDE agents through the proxy. A

@@ -40,6 +40,12 @@ Page scripts on an AI site can read what you type before the extension acts.
 This is a limit of any in-page guard. Review the code before loading it. See
 `extension/README.md`.
 
+Any other extension with access to an AI chat site can read what you type
+on that page before Shadowfenced acts, as can built-in browser assistants
+such as Gemini in Chrome or Copilot in Edge. Shadowfenced cannot block that
+today. Check Chrome/Edge extension details → Site access to see what can
+read each site.
+
 ## More detail
 
 See `docs/security/` for the threat model, the red-team results, and the Nov 4
