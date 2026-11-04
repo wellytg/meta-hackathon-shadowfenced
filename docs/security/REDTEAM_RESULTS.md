@@ -4,7 +4,7 @@
 product stops is a passing test. Each one it does not stop is a strict
 `xfail` (fails today, CI stays green, gap stays visible).
 
-Totals: **STOPPED 32 · PARTIAL 3 · KNOWN GAP 17** (test cases; the 5 MB stress
+Totals: **STOPPED 35 · PARTIAL 3 · KNOWN GAP 14** after the T81 fixes (first run: STOPPED 32 · PARTIAL 3 · KNOWN GAP 17) (test cases; the 5 MB stress
 probe below was run by hand and is not in the suite).
 
 No product code was changed. No one-or-two-line fix was safe enough to take
@@ -82,9 +82,9 @@ verdict or a careless approve could release the blob still encoded.
 
 | Attack | Expected | Result | Test | Status |
 |---|---|---|---|---|
-| Placeholder in markdown image URL | not restored | restored: real value inside the URL | `test_placeholder_in_image_url_not_restored` | KNOWN GAP |
-| Placeholder in markdown link URL | not restored | restored | `test_placeholder_in_link_url_not_restored` | KNOWN GAP |
-| Hostile upstream answer, end to end | answer safe | answer carries a live URL with the real value | `test_evil_image_url_end_to_end` | KNOWN GAP |
+| Placeholder in markdown image URL | not restored | restored: real value inside the URL | `test_placeholder_in_image_url_not_restored` | STOPPED (fixed in T81) |
+| Placeholder in markdown link URL | not restored | restored | `test_placeholder_in_link_url_not_restored` | STOPPED (fixed in T81) |
+| Hostile upstream answer, end to end | answer safe | answer carries a live URL with the real value | `test_evil_image_url_end_to_end` | STOPPED (fixed in T81) |
 | Plain placeholder in prose (control) | restores | restores | `test_plain_placeholder_still_restores_control` | STOPPED |
 | Console renderer link output | no links | no `<a>`/`href` (bold/italic/code only) | `test_console_renderer_makes_no_links` | PARTIAL |
 

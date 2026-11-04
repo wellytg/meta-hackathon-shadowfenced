@@ -20,6 +20,7 @@ from typing import Any, Literal
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 
 from . import engine
@@ -93,6 +94,32 @@ async def _hosted_rate_limit(request: Request, call_next):
     if limited is not None:
         return limited
     return await call_next(request)
+
+#: Hosts allowed to reach the local console (T81): loopback plus the
+#: Starlette test client. Anything else (a DNS-rebinding name resolving
+#: to 127.0.0.1) gets a 400 in local mode.
+LOCAL_TRUSTED_HOSTS = ["127.0.0.1", "localhost", "testserver"]
+
+
+class _LocalTrustedHostMiddleware(TrustedHostMiddleware):
+    """Trusted-host check that stays off in hosted demo mode.
+
+    Local mode serves the console on loopback only, so unknown Host
+    headers are rejected (DNS rebinding fails). Hosted mode serves a
+    public hostname, so the check is skipped there entirely.
+    """
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") == "http" and hosted_module.is_hosted():
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
+if not hosted_module.is_hosted():
+    app.add_middleware(
+        _LocalTrustedHostMiddleware, allowed_hosts=LOCAL_TRUSTED_HOSTS
+    )
 
 _POLICY: Policy | None = None
 _REGISTRY: CanaryRegistry | None = None
@@ -384,6 +411,17 @@ def _shadowfenced_field(decision: engine.Decision) -> dict[str, Any]:
     return field
 
 
+#: Message fields ever forwarded upstream (T81): ``name``,
+#: ``function_call`` and anything else the client sent is dropped, so
+#: only gated role/content/tool fields cross the boundary.
+_FORWARD_FIELDS = ("role", "content", "tool_calls", "tool_call_id")
+
+
+def _forward_safe_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Copy of one message with only the forwardable fields kept."""
+    return {key: message[key] for key in _FORWARD_FIELDS if key in message}
+
+
 def _forward_messages(
     messages: list[dict[str, Any]],
     sent_text: str | list[Any] | None,
@@ -396,7 +434,11 @@ def _forward_messages(
     """
     if isinstance(sent_text, list):
         return _forward_chat_messages(messages, sent_text, decision)
-    kept = [m for m in messages if isinstance(m, dict) and m.get("role") != "user"]
+    kept = [
+        _forward_safe_message(m)
+        for m in messages
+        if isinstance(m, dict) and m.get("role") != "user"
+    ]
     if decision == "REDACT" and sent_text is not None:
         kept.insert(0, {"role": "system", "content": REDACT_NOTE})
     if sent_text is not None:
@@ -418,7 +460,7 @@ def _forward_chat_messages(
     out: list[dict[str, Any]] = []
     for original, item in zip(messages, redacted):
         if isinstance(item, dict):
-            out.append(item)
+            out.append(_forward_safe_message(item))
         elif (
             isinstance(item, str)
             and isinstance(original, dict)
@@ -426,9 +468,9 @@ def _forward_chat_messages(
         ):
             new_message = dict(original)
             new_message["content"] = item
-            out.append(new_message)
+            out.append(_forward_safe_message(new_message))
         elif isinstance(original, dict):
-            out.append(original)
+            out.append(_forward_safe_message(original))
         else:
             out.append({"role": "user", "content": str(original)})
     if decision == "REDACT":
@@ -475,10 +517,17 @@ def _rebuild_chat_message(
         iterator = iter(content_pieces)
         for part in content:
             _, is_text = _part_text(part)
-            if is_text and isinstance(part, dict):
-                part = dict(part)
-                part["text"] = next(iterator, "")
-            parts.append(part)
+            if is_text:
+                if isinstance(part, dict):
+                    part = dict(part)
+                    part["text"] = next(iterator, "")
+                    parts.append(part)
+                else:
+                    # Plain-string parts gate like dict text parts, so the
+                    # redacted string goes back here (never the raw one).
+                    parts.append(next(iterator, ""))
+            else:
+                parts.append(part)
         new_message["content"] = parts
     tool_calls = message.get("tool_calls")
     if isinstance(tool_calls, list):
@@ -1120,11 +1169,333 @@ def _with_live_suspicions(text: str, spans: list[Span]) -> list[Span]:
         return spans
 
 
+def _other_role_messages(messages: list[Any]) -> list[Any]:
+    """Non-user messages: everything ``extract_user_text`` skips (T81)."""
+    return [
+        message
+        for message in messages
+        if isinstance(message, dict) and message.get("role") != "user"
+    ]
+
+
+def _user_toolcarriers(messages: list[Any]) -> list[Any]:
+    """Synthetic carriers gating user tool-call arguments (T81).
+
+    ``/api/send`` forwards user messages as plain content (tool calls are
+    dropped), but a secret sitting in the arguments must still block, so
+    each argument set is gated once through the chat engine as an
+    assistant carrier. Carriers exist for the verdict only: they are
+    never forwarded and their placeholders never merge.
+    """
+    carriers: list[Any] = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if (
+                isinstance(call, dict)
+                and isinstance(call.get("function"), dict)
+                and "arguments" in call["function"]
+            ):
+                carriers.append(
+                    {"role": "assistant", "content": "", "tool_calls": [call]}
+                )
+    return carriers
+
+
+def _redacted_other_messages(
+    messages: list[Any], other_items: list[Any]
+) -> list[Any]:
+    """Copy of the request messages with redacted non-user roles (T81)."""
+    iterator = iter(other_items)
+    out: list[Any] = []
+    for message in messages:
+        if isinstance(message, dict) and message.get("role") != "user":
+            try:
+                out.append(next(iterator))
+            except StopIteration:
+                out.append(message)
+        else:
+            out.append(message)
+    return out
+
+
+def _merge_placeholder_maps(
+    primary: dict[str, str], secondary: dict[str, str]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Merge two placeholder maps; renumber secondary keys on collision.
+
+    Returns ``(merged, renames)`` where ``renames`` maps the secondary
+    keys that collided with a different value to their fresh numbers,
+    so forwarded text can be rewritten to match.
+    """
+    merged = dict(primary)
+    renames: dict[str, str] = {}
+    counters: dict[str, int] = {}
+    for key in merged:
+        base, _, number = key.strip().strip("[]").rpartition("_")
+        try:
+            counters[base] = max(counters.get(base, 0), int(number))
+        except ValueError:
+            pass
+    for key, value in secondary.items():
+        if key not in merged:
+            merged[key] = value
+            base, _, number = key.strip().strip("[]").rpartition("_")
+            try:
+                counters[base] = max(counters.get(base, 0), int(number))
+            except ValueError:
+                pass
+        elif merged[key] == value:
+            continue
+        else:
+            base, _, _ = key.strip().strip("[]").rpartition("_")
+            counters[base] = counters.get(base, 0) + 1
+            while f"[{base}_{counters[base]}]" in merged:
+                counters[base] += 1
+            fresh = f"[{base}_{counters[base]}]"
+            renames[key] = fresh
+            merged[fresh] = value
+    return merged, renames
+
+
+def _rename_placeholders_in_messages(
+    messages: list[Any], renames: dict[str, str]
+) -> list[Any]:
+    """Copies of messages with renamed placeholders swapped in (T81)."""
+    if not renames:
+        return list(messages)
+
+    def _fix(value: Any) -> Any:
+        if isinstance(value, str):
+            for old, new in renames.items():
+                if old in value:
+                    value = value.replace(old, new)
+            return value
+        if isinstance(value, list):
+            return [_fix(item) for item in value]
+        if isinstance(value, dict):
+            return {key: _fix(item) for key, item in value.items()}
+        return value
+
+    return [_fix(message) if isinstance(message, dict) else message
+            for message in messages]
+
+
+def _merge_other_verdict(
+    user_decision: engine.Decision,
+    other_decision: engine.Decision,
+    forward_base: list[Any],
+) -> tuple[engine.Decision, list[Any]]:
+    """Fold an ALLOW/REDACT other-roles verdict into the user decision.
+
+    Other-role placeholders join the user map (renumbered on collision,
+    with the forwarded messages rewritten to match) so the answer
+    re-hydrates both roles. The merged spans keep each gate's own
+    coordinates: user offsets run over the user text, other offsets
+    over the joined other-role text.
+    """
+    import dataclasses
+
+    other_placeholders = dict(other_decision.placeholders or {})
+    if not other_placeholders or user_decision.decision not in (
+        "ALLOW", "REDACT", "WARN"
+    ):
+        return user_decision, forward_base
+    merged, renames = _merge_placeholder_maps(
+        dict(user_decision.placeholders or {}), other_placeholders
+    )
+    if renames:
+        renamed = _rename_placeholders_in_messages(
+            [
+                message
+                for message in forward_base
+                if isinstance(message, dict) and message.get("role") != "user"
+            ],
+            renames,
+        )
+        iterator = iter(renamed)
+        forward_base = [
+            next(iterator)
+            if isinstance(message, dict) and message.get("role") != "user"
+            else message
+            for message in forward_base
+        ]
+    total = float(
+        (user_decision.latency_ms or {}).get("total", 0.0)
+    ) + float(
+        (other_decision.latency_ms or {}).get("total", 0.0)
+    )
+    final = dataclasses.replace(
+        user_decision,
+        decision=(
+            "REDACT" if user_decision.decision == "ALLOW"
+            else user_decision.decision
+        ),
+        spans=[*user_decision.spans, *other_decision.spans],
+        placeholders=dict(merged),
+        resolved_tier=max(
+            user_decision.resolved_tier, other_decision.resolved_tier
+        ),
+        latency_ms={"total": total},
+        reasons=[*user_decision.reasons, *other_decision.reasons],
+        evidence={
+            **(other_decision.evidence or {}),
+            **(user_decision.evidence or {}),
+        },
+        rule_ids=list(
+            dict.fromkeys(
+                [
+                    *(user_decision.rule_ids or []),
+                    *(other_decision.rule_ids or []),
+                ]
+            )
+        ),
+    )
+    save_mapping(final.decision_id, merged)
+    return final, forward_base
+
+
+def _check_combined_roles(
+    decision: engine.Decision, text: str, other_text: str
+) -> engine.Decision:
+    """Escalate when the roles jointly block or hold (T81).
+
+    The user text and the other roles gate separately above, so a bundle
+    split across the boundary only shows up jointly. REDACT and ALLOW
+    from the joint check change nothing (each role already carries its
+    own redaction); BLOCK, HOLD and WARN escalate.
+    """
+    if not other_text or decision.decision in ("BLOCK", "HOLD", "WARN"):
+        return decision
+    combined = engine.gate(
+        text + "\n" + other_text if text else other_text,
+        get_policy(),
+        get_registry(),
+        mode="send",
+    )
+    if combined.decision == "BLOCK":
+        return combined
+    if combined.decision in ("HOLD", "WARN") and decision.decision in (
+        "ALLOW", "REDACT"
+    ):
+        if combined.decision == "WARN":
+            return _hold_for(combined, "multi-role message needs review")
+        return combined
+    return decision
+
+
 @app.post("/api/send")
 def send(body: SendRequest) -> dict[str, Any]:
-    """Gate the user text, forward it when allowed, re-hydrate the answer."""
+    """Gate every message role, forward it when allowed, re-hydrate the answer."""
     provider = resolve_provider(body.provider)
     trace: list[dict[str, Any]] = []
+    # T81: non-user roles used to reach the cloud unchecked. Gate them
+    # with the same /v1 engine first; any BLOCK/HOLD there decides the
+    # send before the user text is even looked at.
+    other_messages = _other_role_messages(body.messages)
+    other_text = ""
+    other_forward: list[Any] | None = None
+    if other_messages:
+        other_started = time.perf_counter()
+        other_decision, other_items, other_text = _gate_chat_messages(
+            other_messages
+        )
+        trace.append(
+            {
+                "step": "gate.other_roles",
+                "tool": "gate",
+                "detail": (
+                    f"{len(other_messages)} non-user message(s): "
+                    f"{other_decision.decision}"
+                ),
+                "result": other_decision.decision,
+                "ms": round(
+                    (time.perf_counter() - other_started) * 1000, 3
+                ),
+            }
+        )
+        if other_decision.decision == "BLOCK":
+            _log_decision(other_decision, other_text)
+            return _send_response(other_decision, None, [], [], provider, trace)
+        if other_decision.decision in ("HOLD", "WARN"):
+            # WARN has no confirm flow here (that flow is keyed to the
+            # user gate), so a worrying non-user role holds for review.
+            held = (
+                other_decision
+                if other_decision.decision == "HOLD"
+                else _hold_for(other_decision, "non-user message needs review")
+            )
+            trace.append(
+                {
+                    "step": "gate.hold_reason",
+                    "tool": "gate",
+                    "detail": "non-user message needs review; send held",
+                    "result": "HOLD",
+                    "ms": 0.0,
+                }
+            )
+            _log_decision(held, other_text)
+            _register_hold(
+                held, other_text, body.messages, provider,
+                why="non-user message needs review",
+            )
+            return _send_response(held, None, [], [], provider, trace)
+        other_forward = _redacted_other_messages(
+            body.messages, list(other_items or [])
+        )
+    carriers = _user_toolcarriers(body.messages)
+    if carriers:
+        carrier_started = time.perf_counter()
+        carrier_decision, _, carrier_text = _gate_chat_messages(carriers)
+        trace.append(
+            {
+                "step": "gate.user_tool_args",
+                "tool": "gate",
+                "detail": (
+                    f"{len(carriers)} user tool-argument set(s): "
+                    f"{carrier_decision.decision}"
+                ),
+                "result": carrier_decision.decision,
+                "ms": round(
+                    (time.perf_counter() - carrier_started) * 1000, 3
+                ),
+            }
+        )
+        if carrier_decision.decision == "BLOCK":
+            _log_decision(carrier_decision, carrier_text)
+            return _send_response(
+                carrier_decision, None, [], [], provider, trace
+            )
+        if carrier_decision.decision in ("HOLD", "WARN"):
+            carrier_held = (
+                carrier_decision
+                if carrier_decision.decision == "HOLD"
+                else _hold_for(
+                    carrier_decision, "user tool arguments need review"
+                )
+            )
+            trace.append(
+                {
+                    "step": "gate.hold_reason",
+                    "tool": "gate",
+                    "detail": "user tool arguments need review; send held",
+                    "result": "HOLD",
+                    "ms": 0.0,
+                }
+            )
+            _log_decision(carrier_held, carrier_text)
+            _register_hold(
+                carrier_held, carrier_text, body.messages, provider,
+                why="user tool arguments need review",
+            )
+            return _send_response(carrier_held, None, [], [], provider, trace)
+    forward_base: list[Any] = (
+        other_forward if other_forward is not None else body.messages
+    )
     text, clean = extract_user_text(body.messages)
     file_texts, file_error = _file_sections(body.file_ids)
     if file_error is not None:
@@ -1140,7 +1511,7 @@ def send(body: SendRequest) -> dict[str, Any]:
             }
         )
         _log_decision(decision, text)
-        _register_hold(decision, text, body.messages, provider, why=file_error)
+        _register_hold(decision, text, forward_base, provider, why=file_error)
         return _send_response(decision, None, [], [], provider, trace)
     if file_texts:
         text = text + "".join(file_texts) if text else "".join(file_texts).lstrip("\n")
@@ -1163,26 +1534,34 @@ def send(body: SendRequest) -> dict[str, Any]:
         )
         _log_decision(decision, text)
         _register_hold(
-            decision, text, body.messages, provider,
+            decision, text, forward_base, provider,
             why="non-text content parts need review",
         )
         return _send_response(decision, None, [], [], provider, trace)
+    if other_forward is not None:
+        # T81: fold the other-roles redaction into this decision, then
+        # re-check the roles jointly so a bundle split across the user
+        # text and another role still blocks.
+        decision, forward_base = _merge_other_verdict(
+            decision, other_decision, forward_base
+        )
+        decision = _check_combined_roles(decision, text, other_text)
     _log_decision(decision, text)
     if decision.decision in ("BLOCK", "HOLD", "WARN"):
         if decision.decision == "HOLD":
-            _register_hold(decision, text, body.messages, provider)
+            _register_hold(decision, text, forward_base, provider)
         if decision.decision == "WARN":
             auto = _maybe_auto_confirm_warn(
-                decision, text, body.messages, provider
+                decision, text, forward_base, provider
             )
             if auto is not None:
                 return auto
-            _warn_store_save(decision, text, body.messages, provider)
+            _warn_store_save(decision, text, forward_base, provider)
         return _send_response(decision, None, [], [], provider, trace)
     try:
         answer = _send_upstream(
             _forward_messages(
-                body.messages, decision.sent_text, decision.decision
+                forward_base, decision.sent_text, decision.decision
             ),
             provider,
         )
@@ -2640,11 +3019,51 @@ def scan_deep_check_status(check_id: str) -> dict[str, Any]:
     return payload
 
 
+def _upload_limit_for(filename: str) -> int:
+    """Max accepted bytes for one console upload (T81).
+
+    Audio allows the 32 MB transcription cap; everything else uses the
+    document cap (1 MB hosted, else 2 MB).
+    """
+    from .extract import MAX_AUDIO_BYTES, is_audio_file, max_file_bytes
+
+    if is_audio_file(filename or ""):
+        return MAX_AUDIO_BYTES
+    return max_file_bytes()
+
+
+def _upload_oversize_stand_in(file: Any, limit: int) -> bytes | None:
+    """Stand-in oversized bytes when the declared size already proves it.
+
+    Returns ``limit + 1`` bytes without touching the body, so the usual
+    too-large/unscannable payload comes back; None when the body must
+    still be read (no declared size, or within the cap).
+    """
+    declared = getattr(file, "size", None)
+    if isinstance(declared, int) and declared >= 0 and declared > limit:
+        return bytes(limit + 1)
+    return None
+
+
+async def _read_upload_capped(file: UploadFile, limit: int) -> bytes:
+    """Read one upload body, proving its size before trusting it (T81).
+
+    A declared size past the cap answers without reading the body at
+    all; otherwise a single read of at most ``limit + 1`` bytes bounds
+    memory no matter what the client sends.
+    """
+    stand_in = _upload_oversize_stand_in(file, limit)
+    if stand_in is not None:
+        return stand_in
+    return bytes(await file.read(limit + 1) or b"")
+
+
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
     """Accept one multipart file, extract its text, and scan it."""
-    data = await file.read()
-    return handle_upload(file.filename or "upload", data)
+    name = file.filename or "upload"
+    data = await _read_upload_capped(file, _upload_limit_for(name))
+    return handle_upload(name, data)
 
 
 # --- voice dictation (T34) --------------------------------------------------
@@ -2771,6 +3190,7 @@ def providers() -> dict[str, Any]:
 @app.post("/api/provider")
 def set_provider(body: ProviderRequest) -> dict[str, Any]:
     """Set the default upstream provider (any registry id)."""
+    _refuse_hosted_storage()
     global _PROVIDER_OVERRIDE
     name = (body.id or "").strip().lower()
     if providers_registry.get_provider(name) is None:
@@ -2996,8 +3416,11 @@ def log_events(limit: int = 50) -> dict[str, Any]:
     Each entry carries ``ts``, ``decision_id``, ``decision`` (outcome),
     ``tier``, ``reasons`` (class labels) and ``fingerprints``
     (``sha256(value)[:12]``) only -- raw values are never written to
-    the log and never returned here.
+    the log and never returned here. Refused in hosted demo mode:
+    the ids double as hold ids, so listing them would let one visitor
+    open another visitor's held messages.
     """
+    _refuse_hosted_storage()
     import json as _json
 
     from . import ecs_log
