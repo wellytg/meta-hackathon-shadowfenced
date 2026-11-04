@@ -45,14 +45,21 @@ def test_no_raw_values_and_shape(tmp_path):
     log = str(tmp_path / "decisions.jsonl")
     record = ecs_log.append_decision(log, _gate(EMAIL_TEXT), EMAIL_TEXT)
     assert set(record) == {
-        "ts", "decision_id", "decision", "tier", "classes",
-        "fingerprints", "latency_ms", "prev_hash", "hash",
+        "event", "ts", "decision_id", "decision", "tier", "classes",
+        "kinds", "rule_ids", "cue", "site", "source",
+        "fingerprints", "domain_prints", "latency_ms", "prev_hash", "hash",
     }
+    assert record["event"] == "decision"
+    assert record["site"] == "app"
+    assert record["source"] == "text"
     raw = (tmp_path / "decisions.jsonl").read_text(encoding="utf-8")
     assert RAW_EMAIL not in raw
     assert ecs_log.fingerprint(RAW_EMAIL) in raw
     assert record["fingerprints"] == [ecs_log.fingerprint(RAW_EMAIL)]
     assert record["classes"] == ["pii"]
+    assert record["kinds"] == ["pii:email"]
+    assert len(record["domain_prints"]) == 1
+    assert "corvanelabs.com" not in raw
 
 
 def test_chain_links_prev_hash(tmp_path):

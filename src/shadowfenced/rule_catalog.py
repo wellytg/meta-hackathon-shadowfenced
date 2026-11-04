@@ -411,3 +411,35 @@ def detector_coverage(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
             if key in covered:
                 covered[key].add(str(entry.get("id", "")))
     return covered
+
+
+def catalogue_ids() -> list[str]:
+    """Catalogue entry ids in display order."""
+    return list(_CATALOGUE_ORDER)
+
+
+def rule_ids_for_kinds(kinds: list[str] | tuple[str, ...]) -> list[str]:
+    """Map ``cls:subclass`` kind labels to catalogue ids.
+
+    Same mapping as :func:`rule_ids_for_decision` (subclass table,
+    then the class fallback), for callers that only kept kinds.
+    """
+    found: set[str] = set()
+    for item in kinds or []:
+        text = str(item or "").strip().lower()
+        if ":" not in text:
+            continue
+        cls, _, sub = text.partition(":")
+        rule = _SUBCLASS_TO_RULE.get(sub)
+        if rule is None:
+            if cls == "secret":
+                rule = "api-keys"
+            elif cls == "beacon":
+                rule = "suspicious-text"
+            elif cls == "business":
+                rule = "business-details"
+            elif cls == "pii":
+                rule = "personal-data"
+        if rule is not None:
+            found.add(rule)
+    return [rule for rule in _CATALOGUE_ORDER if rule in found]

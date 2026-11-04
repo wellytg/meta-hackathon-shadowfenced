@@ -1,0 +1,71 @@
+/* T69 "What it caught" + rule suggestions (Classic square style). */
+.history-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+.kind-chip {
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: var(--steel-pale);
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: break-word;
+}
+.suggest-card {
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: var(--paper);
+  box-shadow: 4px 4px 0 var(--line);
+  padding: 8px 10px;
+  margin: 8px 0;
+}
+.suggest-card h3 { margin: 0 0 4px; font-size: 14px; }
+.suggest-diff {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border: 2px solid var(--line);
+  background: var(--paper-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.suggest-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.suggest-row button {
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: var(--paper-2);
+  box-shadow: 2px 2px 0 var(--line);
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 36px;
+}
+.suggest-row button:hover { background: var(--sand); }
+.suggest-row button:disabled { opacity: 0.45; cursor: default; }
+.suggest-row input[type="text"] {
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: var(--paper-2);
+  padding: 4px 8px;
+  font-size: 13px;
+  min-height: 36px;
+  flex: 1 1 160px;
+}
+.suggest-error {
+  font-size: 12px;
+  color: var(--signal-deep);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.chip-keep, .chip-copy {
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: var(--paper);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.chip-keep:hover, .chip-copy:hover { background: var(--sand); }
+.chip-keep:disabled, .chip-copy:disabled { opacity: 0.45; cursor: default; }

@@ -334,7 +334,17 @@ def _gate_send(
     Proven-only input redacts and clean input allows, both with no
     model call.
     """
-    if ambiguous or has_sensitivity_cue(text):
+    allowed_cues = set(getattr(policy, "cue_allow", None) or [])
+    cue_allowed = False
+    if not ambiguous and not spans and allowed_cues:
+        _cue_here = cue_word(text)
+        cue_allowed = _cue_here is not None and _cue_here in allowed_cues
+        if cue_allowed:
+            reasons.append(
+                f"sensitivity cue '{_cue_here}' passes per your rule "
+                "(no Tier 1 finding) -> no hold"
+            )
+    if ambiguous or (has_sensitivity_cue(text) and not cue_allowed):
         latency_ms["tier2"] = 0.0
         latency_ms["tier3"] = 0.0
         latency_ms["total"] = (time.perf_counter() - total_started) * 1000
@@ -571,6 +581,29 @@ def _gate_impl(
             reasons.append(
                 f"{len(custom_block)} custom rule span(s) "
                 "with action block -> BLOCK"
+            )
+            if mode == "send":
+                latency_ms["tier2"] = 0.0
+                latency_ms["tier3"] = 0.0
+            return Decision(
+                decision="BLOCK",
+                decision_id=uuid.uuid4().hex,
+                spans=spans,
+                sent_text=None,
+                placeholders={},
+                resolved_tier=1,
+                latency_ms=latency_ms,
+                reasons=reasons,
+            )
+        kind_blocked = set(getattr(policy, "block_kinds", None) or [])
+        kind_block = [
+            s for s in enforced
+            if s.status == "proven"
+            and f"{s.cls}:{s.subclass}" in kind_blocked
+        ]
+        if kind_block:
+            reasons.append(
+                f"{len(kind_block)} span(s) of your blocked kind(s) -> BLOCK"
             )
             if mode == "send":
                 latency_ms["tier2"] = 0.0

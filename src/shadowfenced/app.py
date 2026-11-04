@@ -1172,6 +1172,11 @@ def send(body: SendRequest) -> dict[str, Any]:
         if decision.decision == "HOLD":
             _register_hold(decision, text, body.messages, provider)
         if decision.decision == "WARN":
+            auto = _maybe_auto_confirm_warn(
+                decision, text, body.messages, provider
+            )
+            if auto is not None:
+                return auto
             _warn_store_save(decision, text, body.messages, provider)
         return _send_response(decision, None, [], [], provider, trace)
     try:
@@ -1531,6 +1536,7 @@ def hold_rule(hold_id: str, body: RuleRequest) -> Any:
                     },
                 },
             )
+        _log_hold_choice(hold, hold_id, "deny")
         return holds.hold_card(denied)
     try:
         result = holds.approve_hold(
@@ -1549,6 +1555,8 @@ def hold_rule(hold_id: str, body: RuleRequest) -> Any:
                 "message": str(exc),
             },
         ) from exc
+    if result is not None:
+        _log_hold_choice(hold, hold_id, "approve")
     if result is None:
         return JSONResponse(
             status_code=409,
@@ -1581,7 +1589,7 @@ class WarnConfirmRequest(BaseModel):
     choice: str = ""  # send_anyway | send_generalised
 
 
-def confirm_warn(decision_id: str, choice: str) -> dict[str, Any]:
+def confirm_warn(decision_id: str, choice: str, *, auto: bool = False) -> dict[str, Any]:
     """Confirm a WARN: forward the original or generalised text upstream.
 
     Reuses the WARN decision id so the follow-up is tied to the warning
@@ -1678,8 +1686,8 @@ def confirm_warn(decision_id: str, choice: str) -> dict[str, Any]:
         placeholders=placeholders,
         resolved_tier=decision.resolved_tier,
         latency_ms=dict(decision.latency_ms),
-        reasons=[*decision.reasons, f"user confirmed warn -> {mode}"],
-        evidence=dict(evidence),
+        reasons=[*decision.reasons, f"{'auto rule' if auto else 'user'} confirmed warn -> {mode}"],
+        evidence={**dict(evidence), **({"auto_rule": "auto_redact"} if auto else {})},
         status="complete",
         doc_type=decision.doc_type,
         doc_warning=decision.doc_warning,
@@ -1689,6 +1697,11 @@ def confirm_warn(decision_id: str, choice: str) -> dict[str, Any]:
         _warn_log_path = get_settings().log_path
         ecs_log.append_decision(
             _warn_log_path, confirmed, record.get("text") or "")
+        if not auto:
+            _log_card_choice(
+                mapping_id,
+                "send_generalised" if mode in generalise_modes else "send_anyway",
+                decision.spans, _decision_rule_ids(decision))
         ecs_log.clear_last_write_error()
     except Exception as exc:
         try:
@@ -1711,6 +1724,430 @@ def confirm_warn(decision_id: str, choice: str) -> dict[str, Any]:
 def warn_confirm(decision_id: str, body: WarnConfirmRequest) -> Any:
     """Confirm a WARN decision: send anyway or send generalised."""
     return confirm_warn(decision_id, body.choice)
+
+
+class ChoiceRequest(BaseModel):
+    """One card choice (fields only; never values or message text)."""
+
+    decision_id: str = ""
+    choice: str = ""
+    kinds: list[str] = Field(default_factory=list)
+    rule_ids: list[str] | None = None
+    site: str = "app"
+    source: str = "text"
+
+
+class SuggestionApplyRequest(BaseModel):
+    """Apply body; ``domain`` is required for org-domain suggestions."""
+
+    domain: str = ""
+
+
+def _choice_error(status: int, code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status,
+        detail={"code": code, "type": code, "message": message},
+    )
+
+
+def _log_card_choice(
+    decision_id: str,
+    choice: str,
+    spans: list[Any],
+    rule_ids: list[str] | None,
+    *,
+    site: str = "app",
+    source: str = "text",
+) -> None:
+    """Best-effort choice logging for server-side card actions."""
+    log_path: str | None = None
+    try:
+        from . import ecs_log
+
+        log_path = get_settings().log_path
+        kinds = [kind for kind in (ecs_log.span_kind(s) for s in spans) if kind]
+        ecs_log.append_choice(
+            log_path,
+            decision_id=decision_id,
+            choice=choice,
+            kinds=kinds,
+            rule_ids=list(rule_ids or []),
+            site=site,
+            source=source,
+        )
+        ecs_log.clear_last_write_error()
+    except Exception as exc:
+        try:
+            from . import ecs_log as _ecs_log
+
+            resolved = _ecs_log.resolve_path(log_path)
+            _ecs_log.note_write_failure(exc, resolved)
+        except Exception:
+            logger.warning(
+                "decision log not writable: %s path=%s",
+                type(exc).__name__,
+                str(log_path),
+            )
+
+
+def _log_hold_choice(hold: Any, hold_id: str, choice: str) -> None:
+    """Best-effort choice logging for hold approve/deny."""
+    try:
+        from . import rule_catalog as catalog_module
+
+        rule_ids = catalog_module.rule_ids_for_decision(hold)
+    except Exception:
+        rule_ids = []
+    _log_card_choice(
+        hold_id, choice, list(getattr(hold, "spans", None) or []), rule_ids
+    )
+
+
+def _maybe_auto_confirm_warn(
+    decision: engine.Decision,
+    text: str,
+    messages: list[Any],
+    provider: str | None,
+) -> dict[str, Any] | None:
+    """Auto-confirm a WARN covered by an auto-redact rule (None = ask).
+
+    Every kind on the decision must be covered for this site, and
+    protected rules (secrets, bundle, person-search) never auto-pass.
+    """
+    try:
+        from . import ecs_log
+        from . import suggest as suggest_module
+
+        kinds = [kind for kind in (ecs_log.span_kind(s) for s in decision.spans) if kind]
+        covered = suggest_module.auto_redact_covers(
+            get_policy(), kinds, "app", _decision_rule_ids(decision)
+        )
+    except Exception:
+        covered = False
+    if not covered:
+        return None
+    _warn_store_save(decision, text, messages, provider)
+    try:
+        return confirm_warn(decision.decision_id, "send_anyway", auto=True)
+    except Exception:
+        return None
+
+
+@app.post("/api/choice")
+def record_choice(body: ChoiceRequest) -> dict[str, Any]:
+    """Record one card choice (fields only) in the chained log."""
+    from . import ecs_log
+    from . import rule_catalog as catalog_module
+
+    try:
+        kinds = ecs_log.clean_kinds(body.kinds)
+        decision_id = ecs_log.clean_decision_id(body.decision_id)
+        choice = ecs_log.clean_choice(body.choice)
+        site = ecs_log.clean_site(body.site)
+        source = ecs_log.clean_source(body.source)
+        rule_ids = (
+            ecs_log.clean_rule_ids(body.rule_ids)
+            if body.rule_ids is not None
+            else catalog_module.rule_ids_for_kinds(kinds)
+        )
+    except ValueError as exc:
+        raise _choice_error(
+            422, "shadowfenced_bad_choice", str(exc)
+        ) from exc
+    try:
+        record = ecs_log.append_choice(
+            get_settings().log_path,
+            decision_id=decision_id,
+            choice=choice,
+            kinds=kinds,
+            rule_ids=rule_ids,
+            site=site,
+            source=source,
+        )
+    except ValueError as exc:
+        raise _choice_error(
+            422, "shadowfenced_bad_choice", str(exc)
+        ) from exc
+    except Exception as exc:
+        try:
+            ecs_log.note_write_failure(
+                exc, ecs_log.resolve_path(get_settings().log_path)
+            )
+        except Exception:
+            pass
+        raise _choice_error(
+            503, "shadowfenced_log_unwritable", "decision log not writable"
+        ) from exc
+    return {"ok": True, "ts": record["ts"]}
+
+
+@app.get("/api/history")
+def history(
+    site: str = "", kind: str = "", limit: int = 200
+) -> dict[str, Any]:
+    """Recent detections plus choices: the "What it caught" panel.
+
+    One row per decision (latest outcome wins), joined with the latest
+    choice for that decision; counts per kind for the last 7 / 30 days.
+    Fields only, never values. The public demo shows its notice instead.
+    """
+    if hosted_module.is_hosted():
+        return {
+            "hosted": True,
+            "notice": hosted_module.HOSTED_BANNER,
+            "events": [],
+            "counts_7d": {},
+            "counts_30d": {},
+            "sites": [],
+            "kinds": [],
+        }
+    import time as _time
+
+    from . import ecs_log
+
+    now = _time.time()
+    week_ago = now - 7 * 86400
+    month_ago = now - 30 * 86400
+    latest: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    choices: dict[str, dict[str, Any]] = {}
+    for event in ecs_log.read_events(get_settings().log_path):
+        etype = str(event.get("event") or "decision")
+        key = event.get("decision_id")
+        if etype == "choice" and isinstance(key, str) and key:
+            choices[key] = event
+            continue
+        if etype != "decision":
+            continue
+        if not isinstance(key, str) or not key:
+            continue
+        if key not in latest:
+            order.append(key)
+        latest[key] = event
+    wanted_site = ecs_log.clean_site(site) if site.strip() else ""
+    wanted_kind = str(kind or "").strip().lower()
+    rows: list[dict[str, Any]] = []
+    counts_7d: dict[str, int] = {}
+    counts_30d: dict[str, int] = {}
+    sites: set[str] = set()
+    kinds: set[str] = set()
+    for key in order:
+        event = latest[key]
+        ts = _history_ts(event.get("ts"))
+        kinds_here = [str(item) for item in event.get("kinds") or []]
+        for label in kinds_here:
+            kinds.add(label)
+            if ts is not None and ts >= month_ago:
+                counts_30d[label] = counts_30d.get(label, 0) + 1
+                if ts >= week_ago:
+                    counts_7d[label] = counts_7d.get(label, 0) + 1
+        event_site = str(event.get("site") or "app")
+        sites.add(event_site)
+        if wanted_site and event_site != wanted_site:
+            continue
+        if wanted_kind and wanted_kind not in [item.lower() for item in kinds_here]:
+            continue
+        picked = choices.get(key, {})
+        rows.append(
+            {
+                "ts": event.get("ts"),
+                "decision_id": key,
+                "decision": event.get("decision"),
+                "site": event_site,
+                "source": event.get("source") or "text",
+                "kinds": kinds_here,
+                "rule_ids": list(event.get("rule_ids") or []),
+                "choice": picked.get("choice"),
+                "choice_ts": picked.get("ts"),
+            }
+        )
+    rows.reverse()
+    clamped = max(1, min(int(limit), 500))
+    return {
+        "hosted": False,
+        "events": rows[:clamped],
+        "counts_7d": counts_7d,
+        "counts_30d": counts_30d,
+        "sites": sorted(sites),
+        "kinds": sorted(kinds),
+    }
+
+
+def _history_ts(value: Any) -> float | None:
+    """Epoch seconds for one log timestamp (None when unparseable)."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        from datetime import datetime, timezone
+
+        moment = datetime.fromisoformat(value)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return moment.timestamp()
+    except ValueError:
+        return None
+
+
+@app.delete("/api/history")
+def delete_history() -> dict[str, Any]:
+    """Delete history: chain a marker, then truncate to it (local only)."""
+    if hosted_module.is_hosted():
+        raise _choice_error(
+            403,
+            "shadowfenced_hosted_history_locked",
+            "history cannot be deleted in the public demo",
+        )
+    from . import ecs_log
+
+    try:
+        marker = ecs_log.clear_history(get_settings().log_path)
+    except Exception as exc:
+        try:
+            ecs_log.note_write_failure(
+                exc, ecs_log.resolve_path(get_settings().log_path)
+            )
+        except Exception:
+            pass
+        raise _choice_error(
+            503, "shadowfenced_log_unwritable", "decision log not writable"
+        ) from exc
+    return {"ok": True, "ts": marker["ts"], "events": 1}
+
+
+@app.get("/api/suggestions")
+def list_suggestions() -> dict[str, Any]:
+    """Open rule suggestions derived from habit patterns (local only)."""
+    if hosted_module.is_hosted():
+        return {
+            "suggestions": [],
+            "disabled": True,
+            "notice": hosted_module.HOSTED_BANNER,
+        }
+    from . import suggest as suggest_module
+
+    return {
+        "suggestions": suggest_module.open_suggestions(
+            get_settings().log_path
+        ),
+        "disabled": False,
+    }
+
+
+@app.post("/api/suggestions/{suggestion_id}/apply")
+def apply_suggestion(
+    suggestion_id: str, body: SuggestionApplyRequest
+) -> dict[str, Any]:
+    """Apply one suggestion: write the local file (undoable)."""
+    from . import suggest as suggest_module
+
+    try:
+        result = suggest_module.apply_suggestion(
+            suggestion_id,
+            log_path=get_settings().log_path,
+            domain=(body.domain or ""),
+        )
+    except PermissionError as exc:
+        raise _choice_error(
+            403, "shadowfenced_hosted_suggestions_disabled", str(exc)
+        ) from exc
+    except KeyError as exc:
+        raise _choice_error(
+            404, "shadowfenced_unknown_suggestion", str(exc)
+        ) from exc
+    except ValueError as exc:
+        raise _choice_error(
+            422, "shadowfenced_bad_suggestion", str(exc)
+        ) from exc
+    reset_state()
+    return result
+
+
+@app.post("/api/suggestions/{suggestion_id}/dismiss")
+def dismiss_suggestion(suggestion_id: str) -> dict[str, Any]:
+    """Dismiss one suggestion (hidden; the choice is logged)."""
+    from . import suggest as suggest_module
+
+    try:
+        return suggest_module.dismiss_suggestion(
+            suggestion_id, log_path=get_settings().log_path
+        )
+    except PermissionError as exc:
+        raise _choice_error(
+            403, "shadowfenced_hosted_suggestions_disabled", str(exc)
+        ) from exc
+    except KeyError as exc:
+        raise _choice_error(
+            404, "shadowfenced_unknown_suggestion", str(exc)
+        ) from exc
+
+
+@app.post("/api/suggestions/{suggestion_id}/undo")
+def undo_suggestion(suggestion_id: str) -> dict[str, Any]:
+    """Undo one applied suggestion by restoring its backup."""
+    from . import suggest as suggest_module
+
+    try:
+        result = suggest_module.undo_suggestion(
+            suggestion_id, log_path=get_settings().log_path
+        )
+    except PermissionError as exc:
+        raise _choice_error(
+            403, "shadowfenced_hosted_suggestions_disabled", str(exc)
+        ) from exc
+    except KeyError as exc:
+        raise _choice_error(
+            404, "shadowfenced_unknown_suggestion", str(exc)
+        ) from exc
+    except ValueError as exc:
+        raise _choice_error(
+            422, "shadowfenced_bad_suggestion", str(exc)
+        ) from exc
+    reset_state()
+    return result
+
+
+@app.post("/api/uploads/{file_id}/redacted-copy")
+def upload_redacted_copy(file_id: str) -> dict[str, Any]:
+    """Build a redacted copy of an uploaded text file (logs the choice)."""
+    from . import ecs_log, tier1
+    from . import rule_catalog as catalog_module
+    from .redact import redact as _redact
+
+    record = UPLOADS.load((file_id or "").strip())
+    if record is None:
+        raise _choice_error(
+            404, "shadowfenced_unknown_file", f"unknown file {file_id}"
+        )
+    if record.kind in ("image", "audio", "unknown"):
+        raise _choice_error(
+            409,
+            "shadowfenced_no_redacted_copy",
+            "redacted copies cover text files only",
+        )
+    if record.status == "unscannable" or not record.text.strip():
+        raise _choice_error(
+            409,
+            "shadowfenced_no_redacted_copy",
+            "file has no readable text",
+        )
+    spans = tier1.scan(record.text, get_policy(), get_registry())
+    proven = [span for span in spans if span.status == "proven"]
+    redacted, mapping = _redact(record.text, proven)
+    kinds = [kind for kind in (ecs_log.span_kind(s) for s in proven) if kind]
+    _log_card_choice(
+        record.file_id,
+        "redacted_copy",
+        proven,
+        catalog_module.rule_ids_for_kinds(kinds),
+        site="app",
+        source="file",
+    )
+    return {
+        "file_id": record.file_id,
+        "name": record.name,
+        "redacted_text": redacted,
+        "placeholders": sorted(mapping),
+    }
 
 
 @app.get("/api/keyguard")
