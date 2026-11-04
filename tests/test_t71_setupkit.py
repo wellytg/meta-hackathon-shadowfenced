@@ -9,9 +9,15 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import shutil
+import subprocess
+import textwrap
 import time
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP = ROOT / "setup"
@@ -328,3 +334,101 @@ def test_no_key_shapes_under_setup():
                 if pattern.search(line):
                     hits.append(f"{path.name}:{lineno} looks like {kind}")
     assert hits == [], f"key shapes under setup/: {hits}"
+
+
+# --- start scripts: an early server exit must fail loudly ----------------------
+
+START_PS1 = SETUP / "start.ps1"
+START_SH = SETUP / "start.sh"
+CRASH_SENTINEL = "stub-uvicorn-boom"
+CRASH_MARKER = "it did not start"
+
+
+def _stub_env(tmp_path, exit_code):
+    """Env where ``python -m uvicorn`` fails fast with a loud error."""
+    pkg = tmp_path / "stub" / "uvicorn"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "__main__.py").write_text(
+        textwrap.dedent(
+            f"""\
+            import sys
+            sys.stderr.write("{CRASH_SENTINEL}: failing on purpose\\n")
+            raise SystemExit({exit_code})
+            """
+        ),
+        encoding="utf-8",
+    )
+    env = dict(os.environ)
+    old = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(tmp_path / "stub") + (os.pathsep + old if old else "")
+    return env
+
+
+def _bash():
+    exe = shutil.which("bash")
+    if exe is None:  # pragma: no cover - depends on the box
+        pytest.skip("bash not available")
+    return exe
+
+
+def _powershell():
+    for name in ("pwsh", "powershell"):
+        exe = shutil.which(name)
+        if exe is not None:
+            return exe
+    pytest.skip("no PowerShell available")  # pragma: no cover - depends on box
+
+
+def test_start_sh_reports_early_crash(tmp_path):
+    proc = subprocess.run(
+        [_bash(), START_SH.as_posix(), "code"],
+        cwd=ROOT,
+        env=_stub_env(tmp_path, 3),
+        capture_output=True, text=True, timeout=120,
+    )
+    combined = proc.stdout + proc.stderr
+    assert "profile: code (your choice)" in combined
+    assert "Starting Shadowfenced on http://127.0.0.1:8765" in combined
+    assert CRASH_SENTINEL in combined  # the server's error output is shown
+    assert CRASH_MARKER in combined
+    assert proc.returncode == 3
+
+
+def test_start_sh_quick_clean_exit_is_still_failure(tmp_path):
+    proc = subprocess.run(
+        [_bash(), START_SH.as_posix(), "code"],
+        cwd=ROOT,
+        env=_stub_env(tmp_path, 0),
+        capture_output=True, text=True, timeout=120,
+    )
+    assert CRASH_MARKER in proc.stdout + proc.stderr
+    assert proc.returncode != 0
+
+
+def test_start_ps1_reports_early_crash(tmp_path):
+    proc = subprocess.run(
+        [_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass",
+         "-File", str(START_PS1), "-Profile", "code"],
+        cwd=ROOT,
+        env=_stub_env(tmp_path, 3),
+        capture_output=True, text=True, timeout=180,
+    )
+    combined = proc.stdout + proc.stderr
+    assert "profile: code (your choice)" in combined
+    assert "Starting Shadowfenced on http://127.0.0.1:8765" in combined
+    assert CRASH_SENTINEL in combined  # the server's error output is shown
+    assert CRASH_MARKER in combined
+    assert proc.returncode == 3
+
+
+def test_start_ps1_quick_clean_exit_is_still_failure(tmp_path):
+    proc = subprocess.run(
+        [_powershell(), "-NoProfile", "-ExecutionPolicy", "Bypass",
+         "-File", str(START_PS1), "-Profile", "code"],
+        cwd=ROOT,
+        env=_stub_env(tmp_path, 0),
+        capture_output=True, text=True, timeout=180,
+    )
+    assert CRASH_MARKER in proc.stdout + proc.stderr
+    assert proc.returncode != 0

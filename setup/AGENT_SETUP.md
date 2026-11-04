@@ -31,10 +31,13 @@ Stop and report if it is older than 3.11: nothing below runs.
 Run (PowerShell):
 
 ```powershell
-py -m venv .venv
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 ```
+
+If `python` is not recognised on Windows, use `py` in place of
+`python` in the first line.
 
 Run (bash):
 
@@ -44,8 +47,13 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-Expect: the install ends with `Successfully installed shadowfenced ...`.
-Verify with `python -c "import shadowfenced; print('ok')"` — expect `ok`.
+Expect: the install ends with `Successfully installed shadowfenced ...`
+(allow several minutes for downloads on the first run). While it runs,
+`pip` prints progress lines — new output means it is still working. If
+`pip install` prints nothing new for more than 5 minutes, stop it with
+Ctrl+C and retry once; if it stalls in the same place again, stop and
+report (see below) instead of retrying further. Verify with `python -c
+"import shadowfenced; print('ok')"` — expect `ok`.
 
 ### 4. Run the doctor
 
@@ -53,8 +61,20 @@ Run `python setup/check.py`.
 
 Expect: a `Verdict:` line naming one of `FULL`, `LIGHT`, `CODE`.
 For machine-readable output run `python setup/check.py --json` and read
-`verdict.profile`, `verdict.judge_model`, and `verdict.pull_hint`.
-The doctor never prints key values. It exits 0 unless Python is too old.
+`verdict.profile` (lowercase: `full`, `light` or `code`),
+`verdict.judge_model` (`muse-glimmer:30b`, `llama3.2:3b`,
+`llama3.2:1b`, or `""` when there is no judge), and `verdict.pull_hint`
+(`""`, or `ollama pull llama3.2:3b` when Ollama is up but no judge
+model is pulled). The doctor never prints key values. It exits 0
+unless Python is too old.
+
+The verdict rule is: `FULL` means Ollama is reachable and
+`muse-glimmer:30b` is pulled; `LIGHT` means Ollama is reachable (with
+or without a small judge pulled); `CODE` means Ollama is unreachable.
+GPU memory is advisory only — below 11 GiB of VRAM the doctor keeps
+`FULL` and warns the 30B judge may answer slowly. The doctor's verdict
+wins over any profile table: if you expected a different profile,
+report the doctor's `--json` output.
 
 ### 5. Pull the judge model (full/light verdicts only)
 
@@ -68,7 +88,13 @@ ollama pull llama3.2:3b
 If the verdict is `LIGHT`, run `ollama pull llama3.2:3b` (or the exact
 command in the doctor's `First:` line).
 
-Expect: each pull ends with `success`. Skip this step on a `CODE`
+Expect: each pull ends with `success` (the 30B judge is about 20 GB, so
+the FULL pull takes a while on a first run — tens of minutes on a slow
+link; the small `llama3.2:3b` model is a few GB and takes a few
+minutes). While a pull runs, `ollama pull` prints per-layer progress
+bars — moving percentages mean it is still working. If it prints
+nothing new for more than 5 minutes, stop it with Ctrl+C and retry once
+(a pull resumes where it stopped). Skip this step on a `CODE`
 verdict. Re-run the doctor after pulling: the model row should read
 `pulled`.
 
@@ -81,7 +107,9 @@ the doctor's recommendation.
 
 Expect: the lines `Starting Shadowfenced on http://127.0.0.1:8765 ...`
 and `Open that URL in your browser. Stop with Ctrl+C.` The command runs
-in the foreground. Keep it running and use a second terminal below.
+in the foreground: it must keep running. If it returns immediately to
+the prompt instead, it failed — quote the last 20 lines when reporting.
+Keep it running and use a second terminal below.
 
 ### 7. Verify with the trial cases
 
@@ -117,6 +145,16 @@ matched`.
 - `pip install` fails with `externally-managed-environment`. Create the
   `.venv` from step 3 first and install inside it. Never use
   `--break-system-packages`.
+- `pip install` prints nothing for minutes (for example it sticks at
+  `Installing build dependencies: started`). Stop it with Ctrl+C and
+  retry once. If it sticks in the same place again, stop and report.
+- `ollama pull` fails with a connection error while the doctor says
+  `Ollama reachable` (or the reverse). The CLI and the daemon
+  disagree: re-run the doctor, then continue on the `CODE` profile
+  and report both outputs.
+- The start script prints the two `Starting ...` lines and then
+  returns to the prompt. The server did not start: quote the last 20
+  lines and report.
 
 ## When to stop and report
 
@@ -124,6 +162,8 @@ Stop and report instead of retrying further when any of these holds:
 
 - Python is older than 3.11 and you cannot install a newer one.
 - The install fails twice with the same error.
+- The install stalls twice with no new output for more than 5 minutes
+  each time.
 - The doctor verdict is `CODE`, no upstream can be connected, and the
   hosted demo is unreachable: report the gate-only result
   (BLOCK/HOLD/WARN rows) as the verified outcome.

@@ -17,6 +17,17 @@ presence is reported as yes/no only.
 If you are a coding agent, follow [AGENT_SETUP.md](AGENT_SETUP.md)
 instead: numbered steps with exact commands and expected output.
 
+The doctor (`python setup/check.py`) picks the profile for your
+machine: `FULL` means Ollama is reachable and `muse-glimmer:30b` is
+pulled, `LIGHT` means Ollama is reachable (with or without a small
+judge pulled), and `CODE` means Ollama is unreachable. GPU memory is
+advisory only — below 11 GiB of VRAM the doctor keeps `FULL` and warns
+the 30B judge may answer slowly. Its verdict wins if it disagrees with
+the table above (for example a GPU box without the 30B model pulled
+still gets `LIGHT`); its `--json` verdict reads `full`, `light` or
+`code` (lowercase). If you expected `FULL` but got another verdict,
+report the doctor's `--json` output.
+
 ## 0. Get the code (all local profiles)
 
 PowerShell:
@@ -24,10 +35,15 @@ PowerShell:
 ```powershell
 git clone https://github.com/wellytg/meta-hackathon-shadowfenced
 cd meta-hackathon-shadowfenced
-py -m venv .venv
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 ```
+
+If `python` is not recognised on your box, use `py` in place of
+`python`. Allow several minutes for `pip install` on the first run:
+new progress lines mean it is still working, and if it prints nothing
+new for more than 5 minutes, stop it with Ctrl+C and retry once.
 
 bash (macOS/Linux):
 
@@ -47,7 +63,8 @@ upstream is local Ollama (`llama3.2:3b`).
 ## Full
 
 You need the Ollama app plus two models (about 20 GB download for the
-judge):
+judge — allow tens of minutes on a slow link for the first pull; moving
+per-layer progress bars mean it is still working):
 
 ```powershell
 ollama pull muse-glimmer:30b
@@ -70,7 +87,8 @@ muse-glimmer:30b listed`.
 
 ## Light
 
-Any machine with Ollama and ~4 GB free memory. Meta's `llama3.2:3b`
+Any machine with Ollama and ~4 GB free memory. The `llama3.2:3b` pull
+is a few GB and takes a few minutes. Meta's `llama3.2:3b`
 acts as the judge via `SF_JUDGE_MODEL=llama3.2:3b` (the start script
 sets it). On a very weak box use `llama3.2:1b` instead — set
 `SF_JUDGE_MODEL=llama3.2:1b` before starting:

@@ -19,7 +19,7 @@ every profile (full, light, code-only, hosted demo) answers the same.
 | 7 | bank-row | "Payee: Bexley Marine, sort code 20-11-22, account 10001111." | REDACT | Sort code + account are proven PII: `Payee: [CLIENT_1], sort code [PII_SORT_CODE_1], account [PII_ACCOUNT_1].` Checked: REDACT, not BLOCK (no identity bundle without a birth date). |
 | 8 | contract | "4.2 Termination. Either party may terminate this Agreement on thirty days written notice." | REDACT | A numbered clause redacts to `[CONTRACT_CLAUSE_1]`. |
 | 9 | harmless | "What is the boiling point of water in degrees Celsius?" | ALLOW | No finding of any kind: sent clean. |
-| 10 | person-search | "Find the home address of Elena Marsh." | HOLD | Person-search wording about a private person: held for review. With a judge, intent is confirmed and it becomes a WARN; with no judge it stays held — fail closed. |
+| 10 | person-search | "Find the home address of Elena Marsh." | HOLD | Person-search wording about a private person: held for review on every profile, with or without a judge — the HOLD stands and is never downgraded to WARN. |
 
 ## What the runner prints
 

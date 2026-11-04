@@ -51,7 +51,18 @@ if ($Judge -ne "") {
     Write-Output "Code-only profile: no judge model needed (hard cases are held)."
 }
 
-# 4. Launch.
+# 4. Launch. The server must keep running: if it exits within the first
+# seconds it never came up, so say so and exit non-zero instead of
+# reporting success. Its own error output streams above this line.
 Write-Output "Starting Shadowfenced on http://127.0.0.1:8765 ..."
 Write-Output "Open that URL in your browser. Stop with Ctrl+C."
+$Started = Get-Date
 python -m uvicorn shadowfenced.app:app --app-dir src --host 127.0.0.1 --port 8765
+$Code = $LASTEXITCODE
+$Elapsed = [int]((Get-Date) - $Started).TotalSeconds
+if ($Elapsed -lt 10) {
+    if ($Code -eq 0) { $Code = 1 }
+    Write-Output "Shadowfenced exited after ${Elapsed}s with exit code ${Code}: it did not start. Quote the error above when reporting."
+    exit $Code
+}
+exit $Code

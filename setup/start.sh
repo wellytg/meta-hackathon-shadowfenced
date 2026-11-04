@@ -44,7 +44,18 @@ else
     echo "SF_JUDGE_MODEL=$SF_JUDGE_MODEL"
 fi
 
-# 4. Launch.
+# 4. Launch. The server must keep running: if it exits within the first
+# seconds it never came up, so say so and exit non-zero instead of
+# reporting success. Its own error output streams above this line.
 echo "Starting Shadowfenced on http://127.0.0.1:8765 ..."
 echo "Open that URL in your browser. Stop with Ctrl+C."
-exec python3 -m uvicorn shadowfenced.app:app --app-dir src --host 127.0.0.1 --port 8765
+STARTED=$SECONDS
+python3 -m uvicorn shadowfenced.app:app --app-dir src --host 127.0.0.1 --port 8765
+CODE=$?
+ELAPSED=$((SECONDS - STARTED))
+if [ "$ELAPSED" -lt 10 ]; then
+    if [ "$CODE" -eq 0 ]; then CODE=1; fi
+    echo "Shadowfenced exited after ${ELAPSED}s with exit code $CODE: it did not start. Quote the error above when reporting."
+    exit "$CODE"
+fi
+exit "$CODE"
