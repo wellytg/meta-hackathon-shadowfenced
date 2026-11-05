@@ -17,8 +17,9 @@
 - Meta models at runtime: Muse Glimmer 30B (local, Tier 2 judge) · Muse Spark 1.3 (Meta Model API) · SAM 3.1 (opt-in screenshot masks, Meta Model API) · Muse Voice (dictation and audio uploads) · Llama 3.2 3B (light local option)
 - Built with: Muse Code (code and tests); Muse Image (video visuals)
 - Bonus prizes: Best Build on Meta Open Weight Models (Muse Glimmer 30B is the local judge on our own GPU) · Best Agentic Use-Case (a guard for coding agents, built by the Muse Code agent) · Best Creative Build (Muse Image drew the comic and video art)
-- 3-minute video: https://youtu.be/A5oB9gPYrfg · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run
+- 3-minute video: https://youtu.be/Mfkrv_I2y4s · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run
 - Quick start: `python setup/check.py`, then `setup/start.ps1` / `setup/start.sh`; keyless: `python setup/try_cases.py`
+- For judges: [`docs/JUDGES.md`](docs/JUDGES.md) checks all six catches in a few minutes · Security: [`SECURITY.md`](SECURITY.md) (hackathon build, use at your own risk) and [`docs/security/`](docs/security/) (threat model, red-team results, Nov 4 review) · Next: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 
 *Meta Global AI Developer Hackathon 2026 · Indie track · team Shadowfenced*
 
@@ -28,11 +29,12 @@ placeholders on the person's own PC before any AI sees it, and answers come back
 restored locally. It is for staff who use AI chats and coding agents, and the security teams who have
 to approve them.
 
-▶ [Demo video (2:57)](https://youtu.be/A5oB9gPYrfg) · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run (fictional data only; hosted mode, see below)
+▶ [Demo video (2:59)](https://youtu.be/Mfkrv_I2y4s) · Live demo: https://wellytg--shadowfenced-asgi.us-east.modal.run (fictional data only; hosted mode, see below)
 
 ## Try it in one minute
 
-- **No install:** open the live demo, or run the 10 quick cases against it: `python setup/try_cases.py`.
+- **No install:** open the live demo and press **Play the demo** (six real decisions, no typing), or run the 10
+  quick cases against it: `python setup/try_cases.py`.
 - **On your machine:** `python setup/check.py` tells you which profile your PC can run (Glimmer 30B, Llama 3.2 3B,
   or code only) and prints the start command; `setup/start.ps1` / `setup/start.sh` start it in one step.
 - **Coding agents, no install:** point any OpenAI-compatible client at the live demo's `/v1`. A harmless
@@ -46,11 +48,13 @@ to approve them.
   With the OpenAI SDK, set `base_url="https://wellytg--shadowfenced-asgi.us-east.modal.run/v1"`. Locally the
   same proxy runs at `http://127.0.0.1:8765/v1`. An agent setting up the app from a fresh clone can follow
   `setup/AGENT_SETUP.md`.
-- **Browser extension (ChatGPT and Gemini):** download `shadowfenced-chrome.zip` or `shadowfenced-firefox.zip`
+- **Browser extension (ChatGPT, Gemini, Claude, meta.ai):** download `shadowfenced-chrome.zip` or `shadowfenced-firefox.zip`
   from the [v1.0-hackathon release](https://github.com/wellytg/meta-hackathon-shadowfenced/releases/tag/v1.0-hackathon),
   unzip, and load it unpacked (Chrome: `chrome://extensions` → Developer mode → Load unpacked). It talks only to
   the local app, so start that first (`setup/start.ps1` / `setup/start.sh`), then paste the pairing token from the
-  app's setup card into the extension popup. Details: `extension/README.md`.
+  app's setup card into the extension popup, and allow each site under the extension's Site access. Tested live
+  on Nov 4: it blocked a key at send on ChatGPT, Gemini, Claude and meta.ai. Grok is added but does not yet
+  stop the send. If the local app cannot check, nothing is sent. Details: `extension/README.md`.
 - **Every number below:** mapped to its results file and the command that reproduces it in `setup/RESULTS.md`.
 
 ## What it does
@@ -60,7 +64,7 @@ to approve them.
 - Replaces personal and business data with typed, numbered placeholders (`[PII_EMAIL_1]`) and restores the real values in answers on the PC (`redact.rehydrate`).
 - Blocks a full identity bundle (name + date of birth + address + phone/email) in code, with no model call.
 - Asks first when a message looks like a search for a private person.
-- Browser extension that guards ChatGPT and Gemini (both tested live).
+- Browser extension that guards ChatGPT, Gemini, Claude and meta.ai (all blocked a key in live tests on Nov 4; Grok is in progress).
 - File guard: files are stopped before upload and scanned locally; bank statements, secrets and identity bundles cannot be uploaded as-is; a one-click redacted copy keeps CSV/JSON structure; an optional Glimmer deep check adds findings.
 - OpenAI-compatible proxy for CLI agents and SDKs (`POST /v1/chat/completions`): every message role is checked, and real keys are fingerprinted without being stored.
 - Screenshot redaction (opt-in, default `off`): Glimmer finds the sensitive regions on this PC and either `local` mode box-fills them here or `on` mode sends the screenshot to Meta's API for exact SAM 3.1 masks.
@@ -113,7 +117,7 @@ the leak. The judge runs on the user's own machine.
 |---|---|---|
 | Muse Glimmer 30B (open weights) | Tier 2 judge for the hard cases; finds image regions | Local via Ollama on an RTX 5070 12 GB; nothing leaves the PC |
 | Muse Spark | The answering model in the app; the judge in hosted mode | Meta Model API |
-| Muse Code | Wrote the product code and tests from the 87 brief files in `docs/muse-briefs/` (94 tasks; the video, made earlier, says 79) (briefs drafted with AI assistance, steered, checked and approved by a person) | Local agent |
+| Muse Code | Wrote the product code and tests from the 94 brief files in `docs/muse-briefs/` (briefs drafted with AI assistance, steered, checked and approved by a person) | Local agent |
 | Muse Voice | Dictation and audio-upload transcription | Meta Model API |
 | Muse Image | Storyboard panels and banner art (`docs/assets/generated/`) | Meta Model API |
 | SAM 3.1 | Exact masks for screenshot redaction (opt-in `on` mode; default `off`, `local` mode box-fills on this PC) | Meta Model API |
@@ -183,6 +187,12 @@ Llama 3.2 3B rather than Glimmer because a 30B model does not fit for training o
   the final set). Tighter name and address detectors are the next step.
 - The product uses no trained model: Glimmer 30B is the judge as released by Meta. One training
   experiment (a small 3B judge, below) was run on Nov 4 and is not wired into the app.
+- Security: a hackathon build, not audited. 52 red-team tests: 35 stopped, 3 partial, 14 known gaps
+  (`docs/security/REDTEAM_RESULTS.md`); fixes and open items from an independent review are in
+  `docs/security/REVIEW_NOV4.md`. Other browser extensions and built-in browser assistants can read what you type
+  on an AI site before Shadowfenced acts (`SECURITY.md`).
+- Extension: underlining while typing depends on each site's page structure and can break when a site
+  changes; the send-time check still runs. Grok is not yet protected.
 - Exact SAM masks need the cloud mode, which sends the screenshot to the Meta Model API;
   the local mode keeps it on the PC but uses rectangular boxes.
 
@@ -203,7 +213,7 @@ Blocked requests return 403 (`shadowfenced_block`); held requests return 409 (`s
 with a review URL.
 
 ```powershell
-python -m pytest -q -p no:cacheprovider   # 1,050+ tests, no network
+python -m pytest -q -p no:cacheprovider   # 1,200+ tests, no network
 python scripts/eval.py --corpus final --judge glimmer   # writes runs/eval_<date>_final_glimmer.json
 python scripts/make_files.py              # synthetic demo files in runs/files/
 ```
@@ -219,7 +229,7 @@ local product Spark only ever receives the redacted text. Docker and Modal: see
 
 ## How it was built
 
-Oct 27 – Nov 4, 2026. The 87 brief files in `docs/muse-briefs/` were planned with AI assistance
+Oct 27 – Nov 4, 2026. The 94 brief files in `docs/muse-briefs/` (the video, made earlier, says more than seventy) were planned with AI assistance
 (brainstorming and drafting) and steered, checked and approved by a person; Muse Code wrote the code
 and tests; each change was tested outside the agent, then merged through PRs with CI. Pre-existing:
 open-source libraries and Meta's models.
