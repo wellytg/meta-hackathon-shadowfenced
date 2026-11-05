@@ -29,7 +29,7 @@ WELCOME = STATIC / "welcome" / "index.html"
 REPO = "https://github.com/wellytg/meta-hackathon-shadowfenced"
 SECURITY_URL = REPO + "/blob/main/SECURITY.md"
 JUDGES_URL = REPO + "/blob/main/docs/JUDGES.md"
-VIDEO_URL = "https://youtu.be/A5oB9gPYrfg"
+VIDEO_URL = "https://youtu.be/Mfkrv_I2y4s"
 
 FOOTER_BITS = (
     "Hackathon build.",
