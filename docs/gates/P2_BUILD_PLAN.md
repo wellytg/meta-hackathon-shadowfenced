@@ -29,7 +29,7 @@ Delete: `agent.py tools.py remotes.py gate.py console.py watcher.py escalation.p
 
 ## Tasks (order; Sat T1-T6 slice, Sun T7-T12, Mon T13-T16, Tue T17 + freeze, Wed T18 + submit)
 - **T0 Model spike** — done (P3 notes): live 3B on CPU (`num_gpu` 0), Glimmer GPU+CPU, both resident.
-- **T1 Rename + cleanup + repo guard.** `git mv src/tripwire src/shadowfenced`; delete old modules/tests; rewrite
+- **T1 Rename + cleanup + repo guard.** `git mv` the old prototype package to `src/shadowfenced`; delete old modules/tests; rewrite
   pyproject, `.env.example`, `.gitignore` (+`runs/`), README header. `tests/test_repo_guard.py`: scan `git ls-files`
   for full-length provider key shapes (prefixes built at runtime) and for a tracked `.env`. Accept: `test_package_imports`,
   `test_no_provider_key_shapes_in_tracked_files`, `test_no_env_file_tracked`, pytest green.
